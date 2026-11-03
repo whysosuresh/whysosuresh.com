@@ -3,7 +3,8 @@
 // `wrangler deploy --dry-run --outdir dist` writes, with a real local D1 holding migrations/ and a real
 // local R2. Turnstile's verification is played here: a token of `pass` passes for the request's own host,
 // `wrong-host` passes for another host, `wrong-action` for another action, `unreachable` answers as a check
-// that is down, and anything else fails. Every other host the Worker tries is refused and recorded.
+// that is down, and anything else fails; under Cloudflare's test secret every token passes, as Cloudflare
+// answers it. Every other host the Worker tries is refused and recorded.
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -20,6 +21,8 @@ export const SITE = "https://whysosuresh.com";
 export const TURNSTILE_HOST = "challenges.cloudflare.com";
 /** The bot check's secret in the harness; the played Turnstile refuses any other. */
 export const SECRET = "turnstile-secret-for-the-harness";
+/** Cloudflare's public always-pass test secret, which `npm run dev` gives the Worker. */
+export const TEST_SECRET = "1x0000000000000000000000000000000AA";
 
 /**
  * The parts of the local D1 and R2 the tests use. Miniflare types its bindings against Cloudflare's runtime
@@ -91,6 +94,10 @@ export async function startHarness(options: { secret?: string } = {}): Promise<H
       const form = new URLSearchParams(await request.text());
       const token = form.get("response");
       if (token === "unreachable") return new RuntimeResponse("down", { status: 503 });
+      // Cloudflare's own test secret passes any token, for example.com and no action, as Cloudflare answers it.
+      if (form.get("secret") === TEST_SECRET) {
+        return new RuntimeResponse(JSON.stringify({ success: true, hostname: "example.com", metadata: { result_with_testing_key: true } }), { headers: { "content-type": "application/json" } });
+      }
       const known = form.get("secret") === SECRET && form.get("remoteip") !== null;
       const verdict = {
         success: known && ["pass", "wrong-host", "wrong-action"].includes(token ?? ""),

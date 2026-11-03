@@ -6,7 +6,7 @@
 // Worker reaches nothing but Turnstile.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { SITE, TURNSTILE_HOST, startHarness, type Harness } from "./harness.ts";
+import { SITE, TEST_SECRET, TURNSTILE_HOST, startHarness, type Harness } from "./harness.ts";
 
 /** The server's limits, stated here as the contract rather than imported from the Worker. */
 const MAX_AUDIO_BYTES = 4 * 1024 * 1024;
@@ -322,6 +322,26 @@ describe("with no bot-check secret", () => {
     expect((await (await bare.db()).prepare("SELECT COUNT(*) AS n FROM inputs").first<{ n: number }>())?.n).toBe(0);
     expect((await (await bare.bucket()).list()).objects).toEqual([]);
     expect(bare.outboundHosts.size).toBe(0);
+  });
+});
+
+describe("with Cloudflare's test secret, as `npm run dev` runs", () => {
+  let local: Harness;
+  beforeAll(async () => {
+    local = await startHarness({ secret: TEST_SECRET });
+  });
+  afterAll(async () => {
+    await local.dispose();
+  });
+
+  it("stores a send from localhost, though the test verdict names example.com and no action", async () => {
+    const { bytes, type } = await body({ fields: { token: "XXXX.DUMMY.TOKEN.XXXX" } });
+    const response = await local.fetch("http://localhost:8787/api/talk", {
+      method: "POST",
+      headers: { "Content-Type": type, Origin: "http://localhost:8787", "CF-Connecting-IP": "127.0.0.1" },
+      body: bytes,
+    });
+    expect(response.status).toBe(201);
   });
 });
 
