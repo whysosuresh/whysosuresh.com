@@ -1,0 +1,24 @@
+# The site's recordings in the Cloudflare account `whysosuresh` (../../vendors/cloudflare/README.md): the audio
+# people send, one object per recording, keyed by where it came from and its id (`talk/<id>`). The Worker reaches
+# it through the `AUDIO` binding in ../../../wrangler.jsonc, and nothing else does: no public access, no custom
+# domain, no CORS, no lock.
+#
+# R2 refuses to delete a bucket that holds objects, so retiring this file means emptying the bucket first.
+# R2 must be turned on in the account before the first apply (row 15 of README.md).
+#
+#   planton apply -f Infra.prod.CloudflareR2Bucket.whysosuresh-com-recordings.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareR2Bucket
+metadata:
+  name: whysosuresh-com-recordings # permanent
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  # Permanent, and named for what it holds rather than the one door it fills today; the key carries the source.
+  bucketName: whysosuresh-com-recordings
+  accountId: $var/cloudflare-whysosuresh-account-id
+  location: apac # a hint honoured only at creation, near where Suresh listens
+  jurisdiction: default
+  publicAccess: false # only the Worker reads or writes a recording

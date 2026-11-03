@@ -1,11 +1,25 @@
 # Cloudflare
 
-What the Cloudflare dashboard holds for whysosuresh.com that Planton cannot create: the account, the token Planton signs in with, and the token the repository's deploy job uses.
+What the Cloudflare dashboard holds for whysosuresh.com that Planton cannot create: the account, the products turned on in it, the token Planton signs in with, the token the repository's deploy job uses, and the one copy of the bot check's secret outside Planton.
 
 ## The account
 
 - Name `whysosuresh`, id `2f1cb3191775e02873cf13bb57e9e67f` (Account home, right column; recorded as `Config.Org.Variable.cloudflare-whysosuresh-account-id`). Free plan.
 - Held by the owner's own Cloudflare login. It already existed on 2026-11-03 and was empty then: no zones, no Workers, no Pages projects.
+
+## R2, turned on in the account
+
+R2 is off in a new account, and Planton can't create a bucket until it is on. It is turned on once, in the dashboard under R2 Object Storage (`../../planton/planton.ai/README.md` row 15). The site's one bucket, `whysosuresh-com-recordings`, is Planton's.
+
+## The bot check's secret
+
+The talk flow's Turnstile widget (`Infra.prod.CloudflareTurnstileWidget.whysosuresh-com-talk`) is Planton's, and so is its secret: Planton keeps it as the widget's sensitive output. The Worker isn't a Planton resource, so the secret has one more copy, carried by hand: `TURNSTILE_SECRET` in the GitHub environment `production` of `whysosuresh/whysosuresh.com`, beside the deploy key. On each deploy the job hands it to the Worker as a secret (`.github/workflows/site.yaml`); a deploy with it empty fails before uploading anything.
+
+**Custody.** Planton, the `production` environment, and the owner's password manager. Nowhere else: never in a file, a command line or a log.
+
+**Copy or re-mint.** On the widget's page in the dashboard (Turnstile, the widget `whysosuresh.com talk`), the owner copies the secret key; a one-line script pipes the clipboard into `gh secret set TURNSTILE_SECRET --env production --repo whysosuresh/whysosuresh.com`. To re-mint, rotate the secret key on that page first, then copy it the same way and re-run the latest `site` run on `main`. Until the deploy runs, the Worker keeps the old secret and refuses every send.
+
+The site key is public. It is the widget's identity, and sits in `site/talk-recorder.js`.
 
 ## The account API token `planton-whysosuresh`
 

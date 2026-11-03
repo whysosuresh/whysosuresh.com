@@ -11,7 +11,7 @@ O="--instance planton.ai --org why-so-suresh"
 
 ## Environments
 
-One, `prod` (`Environment.prod.yaml`), created 2026-11-03: the zone, its records, its redirect and its settings, and everything the site runs on. Everything there lives and dies together, so there is no separate environment for the zone. The Cloudflare connection is authorized for the whole organization, so it serves `prod` without a step.
+One, `prod` (`Environment.prod.yaml`), created 2026-11-03: the zone, its records, its redirect and its settings, the database, the recordings' bucket and the bot check, and everything the site runs on. Everything there lives and dies together, so there is no separate environment for the zone. The Cloudflare connection is authorized for the whole organization, so it serves `prod` without a step.
 
 ## Contents, in apply order
 
@@ -34,5 +34,11 @@ Each row is applied with `planton apply -f <file> $O` and followed by its proof.
 | 12 | `Infra.prod.CloudflareZoneSettings.whysosuresh-com.yaml` | Always Use HTTPS | `curl -sI http://whysosuresh.com` answers 301 to `https://whysosuresh.com/` |
 | 13 | **[owner]** At GoDaddy, the domain's nameservers set to the two from row 7 (`../../vendors/godaddy/README.md`), then "Check nameservers" pressed on the zone's overview in the `whysosuresh` account | Nothing in Planton | `dig +norec NS whysosuresh.com @a.gtld-servers.net` names the two; rows 8 and 9's after-reads hold |
 | 14 | **[owner]** Two days after row 13, whysosuresh.com deleted from the Cloudflare account it came from | Nothing in Planton | `dig NS whysosuresh.com` names only the two from row 7 |
+| 15 | **[owner]** R2 turned on in the account `whysosuresh` (R2 Object Storage in the dashboard; `../../vendors/cloudflare/README.md`) | Nothing in Planton | The dashboard's R2 overview lists buckets instead of offering to turn R2 on |
+| 16 | `Infra.prod.CloudflareD1Database.whysosuresh-com.yaml` | The site's database; its tables are the repository's migrations, applied by the deploy job | `planton diff -f <file> $O` exits 0; `status.outputs.database_id` is the id in `../../../wrangler.jsonc` |
+| 17 | `Infra.prod.CloudflareR2Bucket.whysosuresh-com-recordings.yaml` | The recordings' bucket, private | `planton diff -f <file> $O` exits 0 |
+| 18 | `Infra.prod.CloudflareTurnstileWidget.whysosuresh-com-talk.yaml` | The talk flow's invisible bot check, for `whysosuresh.com` only | `planton diff -f <file> $O` exits 0; `status.outputs.sitekey` is the key in `../../../site/talk-recorder.js` |
+| 19 | **[owner]** The deploy key `github-whysosuresh-com-deployer` gains Account / D1 / Edit (`../../vendors/cloudflare/README.md`) | Nothing in Planton | The deploy job's migration step succeeds |
+| 20 | **[owner]** Row 18's secret copied into the GitHub environment `production` as `TURNSTILE_SECRET` (`../../vendors/cloudflare/README.md`) | Nothing in Planton | The deploy job's secret step succeeds, and a send from the site is stored |
 
-The site's Worker isn't a Planton resource: Planton can't upload a repository's static files to a Worker yet, so it's deployed from the repository itself, as the root `AGENTS.md` says. Its one route is declared in `wrangler.jsonc`, never in the dashboard.
+The site's Worker isn't a Planton resource: Planton can't upload a repository's static files to a Worker yet, so it's deployed from the repository itself, as the root `AGENTS.md` says. Its one route and its bindings to rows 16 and 17 are declared in `wrangler.jsonc`, never in the dashboard.
