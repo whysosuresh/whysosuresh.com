@@ -1,0 +1,14 @@
+# Lets every environment of organization why-so-suresh use the Cloudflare connection, current and future. There is
+# one Cloudflare account and every environment deploys into it, so the authorization is organization-wide. A
+# connection that isn't authorized for an environment is refused before a job runs there, even when it is the default.
+#
+#   planton apply -f Connection.ProviderConnectionAuthorization.cloudflare-whysosuresh-account.yaml --instance planton.ai --org why-so-suresh
+apiVersion: connect.planton.ai/v1alpha1
+kind: ProviderConnectionAuthorization
+metadata:
+  name: cloudflare-whysosuresh-account
+  org: why-so-suresh
+spec:
+  provider: cloudflare
+  connection: cloudflare-whysosuresh-account
+  scope: organization # every current and future environment

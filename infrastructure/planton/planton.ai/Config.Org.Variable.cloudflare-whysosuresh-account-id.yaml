@@ -1,0 +1,17 @@
+# The id of the Cloudflare account `whysosuresh`, which holds the whysosuresh.com zone and the site's Worker.
+# Recorded so a resource that needs the account id references it (`$var/cloudflare-whysosuresh-account-id`)
+# instead of pasting it. Not secret.
+#
+#   planton apply -f Config.Org.Variable.cloudflare-whysosuresh-account-id.yaml --instance planton.ai --org why-so-suresh
+apiVersion: config-manager.planton.ai/v1alpha1
+kind: Variable
+metadata:
+  name: cloudflare-whysosuresh-account-id # the slug is the identity every $var/ reference uses, so name and slug are one
+  slug: cloudflare-whysosuresh-account-id
+  org: why-so-suresh
+spec:
+  scope: organization # one value for every environment
+  description: >-
+    The Cloudflare account id of the account `whysosuresh` (../../vendors/cloudflare/README.md, "The account").
+    Not secret.
+  value: 2f1cb3191775e02873cf13bb57e9e67f
