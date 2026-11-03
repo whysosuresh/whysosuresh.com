@@ -6,7 +6,7 @@ This directory is the declared record of everything whysosuresh.com runs on outs
 
 | Folder | Holds | Applied from |
 |---|---|---|
-| `planton/planton.ai/` | Every record applied to Planton (`planton.ai`), all of it in organization `why-so-suresh`: the organization, its configuration, its connections. Flat, named by the naming law below. Its [`README.md`](planton/planton.ai/README.md) is the apply order | Planton, with the `planton` CLI |
+| `planton/planton.ai/` | Every record applied to Planton (`planton.ai`), all of it in organization `why-so-suresh`: the organization, its configuration, its connections, its environment, and the zone with its records, redirect and settings. Flat, named by the naming law below. Its [`README.md`](planton/planton.ai/README.md) is the apply order | Planton, with the `planton` CLI |
 | `vendors/` | What a vendor's own dashboard holds that Planton cannot create, one folder per vendor: the account, every credential it minted, who holds it, how to mint it again | The vendor's dashboard, by the owner |
 
 The folder under `planton/` is named for the Planton its records are applied to, so the name answers "which Planton do I run these against".

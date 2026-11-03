@@ -1,0 +1,28 @@
+# The apex, whysosuresh.com, served only by Cloudflare: the Worker whysosuresh-com answers it through its
+# route `whysosuresh.com/*` (wrangler.jsonc at the repository root). A route needs a proxied record at the
+# name; `100::` is the reserved "discard" IPv6 prefix, so no request ever reaches an origin. Universal SSL
+# covers the apex, so the name gets its certificate with no step. Permanent: removing it takes the site
+# down.
+#
+#   planton apply -f Infra.prod.CloudflareDnsRecord.whysosuresh-com-apex.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareDnsRecord
+metadata:
+  name: whysosuresh-com-apex
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  zoneId:
+    valueFrom:
+      kind: CloudflareDnsZone
+      name: whysosuresh-com
+      fieldPath: status.outputs.zone_id
+  name: whysosuresh.com
+  type: AAAA
+  content:
+    value: '100::' # nowhere: Cloudflare's proxy answers, and the Worker serves
+  proxied: true
+  ttl: 1 # automatic, as every proxied record
+  comment: Apex; served by the Worker whysosuresh-com through its route

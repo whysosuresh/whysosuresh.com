@@ -1,0 +1,24 @@
+# The whysosuresh.com zone in the Cloudflare account `whysosuresh` (../../vendors/cloudflare/README.md). The
+# domain is registered at GoDaddy (../../vendors/godaddy/README.md), which delegates to the two nameservers
+# this zone is given (`status.outputs.nameservers`). Until GoDaddy names them, the zone is `pending`: its
+# records and rules can be written, but nothing resolves publicly.
+#
+# The zone only, and no records[]: every record is its own file beside this one
+# (Infra.prod.CloudflareDnsRecord.whysosuresh-com-*.yaml), so the Bluesky record has its own file and comment,
+# and renaming one record never replaces another.
+#
+#   planton apply -f Infra.prod.CloudflareDnsZone.whysosuresh-com.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareDnsZone
+metadata:
+  name: whysosuresh-com # permanent: every record, rule and setting below references it by this name
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  zoneName: whysosuresh.com
+  accountId: $var/cloudflare-whysosuresh-account-id
+  type: full # Cloudflare is the authoritative DNS host (GoDaddy delegates to it)
+  hold:
+    enabled: true # no other Cloudflare account can add whysosuresh.com as a zone; it does not freeze this zone's own records

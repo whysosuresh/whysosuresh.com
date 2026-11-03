@@ -1,0 +1,39 @@
+# The whysosuresh.com zone's redirect rules: Cloudflare keeps one ruleset per zone per phase, so every
+# redirect on the zone is a rule in this one file. Redirect rules run before the Worker, so a rule here
+# wins over the site.
+#
+# This form copies the rule the zone had in its previous Cloudflare account on 2026-11-03: every request
+# goes to the YouTube channel with a permanent 301, so moving the zone changes nothing a visitor sees.
+# The next change narrows it to www only, which puts the site live on the apex; applying this form again
+# is the way back.
+#
+#   planton apply -f Infra.prod.CloudflareRuleset.whysosuresh-com-redirects.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareRuleset
+metadata:
+  name: whysosuresh-com-redirects
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  zoneId:
+    valueFrom:
+      kind: CloudflareDnsZone
+      name: whysosuresh-com
+      fieldPath: status.outputs.zone_id
+  rulesetKind: zone
+  phase: http_request_dynamic_redirect
+  name: whysosuresh.com redirects
+  rules:
+    - ref: to-youtube-channel
+      description: Forward to Why So Suresh channel # the rule's name in the zone's previous account, kept so the copy is exact
+      expression: 'true'
+      action: redirect
+      enabled: true
+      actionParameters:
+        fromValue:
+          targetUrl:
+            value: https://www.youtube.com/@whysosuresh
+          statusCode: 301
+          preserveQueryString: false
