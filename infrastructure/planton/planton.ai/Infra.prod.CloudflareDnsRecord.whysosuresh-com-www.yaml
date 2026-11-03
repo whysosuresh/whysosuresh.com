@@ -17,6 +17,7 @@ spec:
   zoneId:
     valueFrom:
       kind: CloudflareDnsZone
+      env: prod # Planton stores the environment it resolved; writing it keeps `planton diff` exact
       name: whysosuresh-com
       fieldPath: status.outputs.zone_id
   name: www.whysosuresh.com
