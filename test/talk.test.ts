@@ -138,8 +138,24 @@ describe("the 3-minute cap", () => {
     expect((await send({ fields: { seconds: "180" } })).status).toBe(201);
   });
 
-  it("refuses a request whose declared length is over the cap, storing nothing", async () => {
-    const response = await send({ rawBody: new Uint8Array(MAX_REQUEST_BYTES + 1) });
+  it("refuses a request whose declared length is over the cap before reading its body", async () => {
+    // 1 KB of the declared length is sent and the rest never comes, so only a Worker that answers without
+    // reading the body can answer at all.
+    let hold: () => void = () => undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(1024));
+        hold = () => controller.close();
+      },
+    });
+    const init: RequestInit & { duplex: string } = {
+      method: "POST",
+      headers: { "Content-Type": "multipart/form-data; boundary=x", "Content-Length": String(MAX_REQUEST_BYTES + 1), Origin: SITE, "CF-Connecting-IP": "203.0.113.7" },
+      body,
+      duplex: "half",
+    };
+    const response = await harness.fetch(`${SITE}/api/talk`, init);
+    hold();
     expect(response.status).toBe(413);
     expect(await objectCount()).toBe(0);
   });
