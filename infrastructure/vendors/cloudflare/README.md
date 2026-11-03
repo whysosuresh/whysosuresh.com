@@ -26,11 +26,11 @@ The token can edit DNS. The zone's TXT records `_atproto` and `_dmarc` must neve
 
 ## The account API token `github-whysosuresh-com-deployer`
 
-The `deploy` job's key in `.github/workflows/site.yaml`: it uploads `site/` to the Worker `whysosuresh-com` and sets the Worker's one route. Planton can't upload a repository's static files to a Worker yet, so this one Worker is deployed from GitHub instead. Minted by the owner under Manage Account, Account API Tokens, as a custom token named `github-whysosuresh-com-deployer`. No expiry, all IP addresses allowed. Three rows and nothing else:
+The `deploy` job's key in `.github/workflows/site.yaml`: it uploads `site/` to the Worker `whysosuresh-com` and sets the Worker's one route. Planton can't upload a repository's static files to a Worker yet, so this one Worker is deployed from GitHub instead. Created on 2026-11-03 under Manage Account, Account API Tokens, Create Token, "Start from scratch", as `github-whysosuresh-com-deployer`. No expiry, all IP addresses allowed. Two policies and nothing else; Cloudflare's review summary read "Entire whysosuresh account: Workers Scripts Write" and "All zones in whysosuresh: Zone Read, Workers Routes Write":
 
-- **Account / Workers Scripts / Edit** (the group marked Legacy): creates the Worker on the first deploy and uploads each version.
-- **All zones in whysosuresh / Workers Routes / Edit:** sets the route `whysosuresh.com/*` from `wrangler.jsonc`.
-- **All zones in whysosuresh / Zone / Read:** wrangler finds the zone by its name (`zone_name` in `wrangler.jsonc`), within this account only.
+- **Entire account, Workers Scripts (Legacy), Edit:** creates the Worker on the first deploy and uploads each version.
+- **All Domains, Workers Routes, Edit:** sets the route `whysosuresh.com/*` from `wrangler.jsonc`.
+- **All Domains, Zone, Read:** wrangler finds the zone by its name (`zone_name` in `wrangler.jsonc`), within this account only.
 
 It has no DNS, Zone Edit or Zone Settings rights, so it can't change a record, including `_atproto` and `_dmarc`. The account holds no other zone and no other Worker, so the account-wide rows reach nothing else today; a second site in this account would need this key narrowed first.
 
