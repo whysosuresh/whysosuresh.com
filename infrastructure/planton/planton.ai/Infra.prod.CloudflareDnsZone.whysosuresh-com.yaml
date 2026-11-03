@@ -20,5 +20,6 @@ spec:
   zoneName: whysosuresh.com
   accountId: $var/cloudflare-whysosuresh-account-id
   type: full # Cloudflare is the authoritative DNS host (GoDaddy delegates to it)
-  hold:
-    enabled: true # no other Cloudflare account can add whysosuresh.com as a zone; it does not freeze this zone's own records
+  # No `hold`: Cloudflare refused it on 2026-11-03, "Zone holds are only available on Enterprise zones"
+  # (code 1005), and this zone is on the free plan. Another account adding whysosuresh.com as a zone
+  # would serve nothing, because only the nameservers set at GoDaddy answer for the domain.
