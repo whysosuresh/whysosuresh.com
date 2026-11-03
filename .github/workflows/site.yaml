@@ -1,0 +1,42 @@
+# The site's one workflow: `check` runs the type check, the site tests and wrangler's dry run on every
+# pull request and on main. It holds no key, and main's ruleset requires it. Nothing deploys from
+# here: the Worker is deployed by Planton.
+
+name: site
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          package-manager-cache: false
+          node-version-file: ".nvmrc"
+
+      - name: Install the check tools
+        run: npm ci --no-audit --no-fund
+
+      - name: Install wrangler
+        run: npm ci --no-audit --no-fund --prefix deploy
+
+      - name: Check
+        run: npm run check
+

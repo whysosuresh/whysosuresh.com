@@ -1,0 +1,22 @@
+{
+  "name": "whysosuresh-com",
+  "private": true,
+  "type": "module",
+  "description": "whysosuresh.com's checks: the type check, the site tests and wrangler's dry run. The site itself is the static folder site/, served by one Cloudflare Worker (wrangler.jsonc).",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.22.0 <23"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "dry-run": "deploy/node_modules/.bin/wrangler deploy --dry-run --config wrangler.jsonc",
+    "check": "npm run typecheck && npm test && npm run dry-run"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "html-validate": "11.16.4",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}

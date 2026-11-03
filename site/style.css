@@ -1,0 +1,229 @@
+/* whysosuresh.com: the one stylesheet for every page. Black and white in light and dark (following
+   the device's setting), on CapsJump's tokens and system type, so his two sites read as one person's;
+   one 920px column that narrows to a phone and keeps clear of the notch and the home bar. No web
+   font: every script, Telugu included, falls through to the device's own face. Every class selector
+   here is used by a served page (test/site.test.ts). */
+
+:root {
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --ink: #0a0a0a;
+  --muted: #5c5c5c;
+  --line: #e5e5e5;
+  --accent: #0a0a0a;
+  --accent-soft: #ededed;
+  --gutter-l: max(16px, env(safe-area-inset-left, 0px));
+  --gutter-r: max(16px, env(safe-area-inset-right, 0px));
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a0a0a;
+    --surface: #161616;
+    --ink: #f1f1f1;
+    --muted: #a3a3a3;
+    --line: #2a2a2a;
+    --accent: #f1f1f1;
+    --accent-soft: #262626;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 17px/1.6 var(--font);
+  -webkit-font-smoothing: antialiased;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+a { color: var(--accent); text-underline-offset: 0.18em; }
+a:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+img { max-width: 100%; height: auto; }
+
+/* The column: every band's inner wrapper carries the side gutter. */
+.bar, main, .foot {
+  max-width: 920px;
+  margin: 0 auto;
+  padding-left: var(--gutter-l);
+  padding-right: var(--gutter-r);
+}
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 20px;
+  padding-bottom: 20px;
+}
+.brand {
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 18px;
+  text-decoration: none;
+}
+.bar-link { color: var(--muted); text-decoration: none; font-weight: 500; }
+.bar-link:hover { color: var(--ink); }
+
+section { padding: 40px 0; }
+
+h1 {
+  margin: 0;
+  font-size: clamp(36px, 7vw, 64px);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+h2 { margin: 0 0 12px; font-size: 24px; line-height: 1.25; letter-spacing: -0.01em; text-wrap: balance; }
+h3 { margin: 0 0 6px; font-size: 18px; line-height: 1.3; }
+p { margin: 0; }
+
+.lede {
+  max-width: 640px;
+  color: var(--muted);
+  font-size: clamp(17px, 2.4vw, 20px);
+}
+.fine { color: var(--muted); font-size: 14px; line-height: 1.5; }
+
+/* The home page's opening: his photo large beside the greeting, read like a letter. */
+.letter {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  align-items: center;
+  gap: 40px;
+  padding-top: 24px;
+}
+.portrait {
+  width: 100%;
+  max-width: 100%;
+  aspect-ratio: 4 / 5;
+  object-fit: cover;
+  object-position: 50% 30%;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+}
+.letter-text { display: grid; gap: 22px; min-width: 0; }
+.letter h1 {
+  font-size: clamp(44px, 8vw, 80px);
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+.letter .lede { color: var(--ink); font-size: clamp(19px, 2.5vw, 22px); line-height: 1.5; }
+
+@media (max-width: 700px) {
+  .letter { grid-template-columns: 1fr; gap: 24px; }
+  .portrait { max-width: 200px; aspect-ratio: 1 / 1; border-radius: 18px; }
+}
+
+/* The row of ways to reach him. */
+.talk-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.ghost-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 48px;
+  padding: 10px 18px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: none;
+}
+.ghost-button:hover { border-color: var(--ink); }
+
+/* The videos: the channel's own player, sized to the column. */
+.videos-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.player {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #000;
+  border: 1px solid var(--line);
+}
+.player iframe { display: block; width: 100%; height: 100%; border: 0; }
+
+/* Things he makes: three plain entries, same edges and baselines. */
+.makes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.makes li { min-width: 0; }
+.makes a {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  height: 100%;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--ink);
+  text-decoration: none;
+}
+.makes a:hover { border-color: var(--ink); }
+.makes .where { color: var(--muted); font-family: var(--mono); font-size: 13px; }
+.makes p { color: var(--muted); font-size: 15px; line-height: 1.5; }
+
+.links { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0; padding: 0; list-style: none; }
+.links a { color: var(--ink); font-weight: 500; }
+
+.foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 20px;
+  padding-top: 28px;
+  padding-bottom: 40px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 14px;
+}
+.foot a { color: var(--muted); }
+
+/* The feedback page: the two kinds side by side, each with its example. */
+.prose { max-width: 640px; display: grid; gap: 14px; }
+.kinds { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.kind {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.kind .label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.say {
+  margin: 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--ink);
+  background: var(--accent-soft);
+  border-radius: 0 10px 10px 0;
+  font-weight: 600;
+}
