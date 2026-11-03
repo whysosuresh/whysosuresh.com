@@ -1,0 +1,19 @@
+# Planton's connection to the GitHub account `whysosuresh`, through Planton's own GitHub App ("Planton AI"), which
+# the owner installed on the account on 2026-11-03 with access to one repository only: whysosuresh/whysosuresh.com.
+# The connection carries no credential: the App's key is Planton's, and the installation's repository list on
+# GitHub (Settings, Applications, Planton AI, Repository access) is what decides what Planton can read. Widening it
+# is a change on GitHub, recorded here the same day.
+#
+#   planton apply -f Connection.GithubConnection.github-whysosuresh.yaml --instance planton.ai --org why-so-suresh
+#   planton connect github list-repos github-whysosuresh --instance planton.ai --org why-so-suresh
+apiVersion: connect.planton.ai/v1alpha1
+kind: GithubConnection
+metadata:
+  name: github-whysosuresh # named for the GitHub account it opens
+  org: why-so-suresh
+spec:
+  authMode: platform_app # Planton's App signs for the installation; nothing of the App lives on this connection
+  host:
+    value: https://github.com # github.com, not an Enterprise Server
+  appInstallInfo:
+    installationId: 178170335 # Planton AI on the whysosuresh account, installed 2026-11-03; account facts are filled by Planton from GitHub

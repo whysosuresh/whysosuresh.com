@@ -1,0 +1,13 @@
+# Organization `why-so-suresh` on Planton (planton.ai): the one organization whysosuresh.com's infrastructure
+# runs in. Created in the console on 2026-11-03 (org_01m6gj076entd2q31tgb9q72z6) and adopted here, so every
+# record beside it reads from one place. The slug is `why-so-suresh` because `whysosuresh` is the owner's
+# Planton username, and usernames and organization slugs share one namespace.
+#
+#   planton apply -f Organization.why-so-suresh.yaml --instance planton.ai
+apiVersion: tenancy.planton.ai/v1alpha1
+kind: Organization
+metadata:
+  name: whysosuresh
+  slug: why-so-suresh # permanent: every state key and connection record begins with it; renaming it is a migration
+spec:
+  description: whysosuresh.com -- Suresh's home page and what it runs on, declared in whysosuresh/whysosuresh.com under infrastructure/.

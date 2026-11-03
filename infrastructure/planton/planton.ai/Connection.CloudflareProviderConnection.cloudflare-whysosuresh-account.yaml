@@ -1,0 +1,21 @@
+# Planton's connection to the Cloudflare account `whysosuresh` (id in
+# Config.Org.Variable.cloudflare-whysosuresh-account-id.yaml): the whysosuresh.com zone, and what Planton deploys
+# there. Named for the account it opens, never for a domain: a zone can move, an account cannot. authMode inline
+# because Cloudflare has no keyless trust: the control plane resolves the secret reference below when a job runs.
+# The grant asks for everything Planton can deploy; the token is deliberately narrower, so Verify reports the
+# kinds it can't reach, and that is expected (../../vendors/cloudflare/README.md lists what it holds).
+#
+#   planton apply -f Connection.CloudflareProviderConnection.cloudflare-whysosuresh-account.yaml --instance planton.ai --org why-so-suresh
+#   planton connect cloudflare verify cloudflare-whysosuresh-account --instance planton.ai --org why-so-suresh
+apiVersion: connect.planton.ai/v1alpha1
+kind: CloudflareProviderConnection
+metadata:
+  name: cloudflare-whysosuresh-account # permanent: every Cloudflare resource's record names it
+  org: why-so-suresh
+spec:
+  authMode: inline # no keyless option for Cloudflare; the references below are resolved at execution time
+  authScheme: api_token # a scoped account token, never the account's global key
+  apiToken:
+    secret: cloudflare-whysosuresh-account-api-token
+  grant:
+    coverage: everything # what Planton may deploy here; what it can deploy is what the token allows, and Verify says which

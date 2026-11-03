@@ -1,0 +1,14 @@
+# The connection a Cloudflare resource of organization why-so-suresh uses when its manifest names none: the
+# account `whysosuresh`, organization-wide. Without a default the first Cloudflare resource is refused ("No provider
+# connection available"). The name is the one `planton connection default set` gives an organization default.
+#
+#   planton apply -f Connection.DefaultProviderConnection.cloudflare-default.yaml --instance planton.ai --org why-so-suresh
+apiVersion: connect.planton.ai/v1alpha1
+kind: DefaultProviderConnection
+metadata:
+  name: cloudflare-default
+  org: why-so-suresh
+spec:
+  provider: cloudflare
+  connection: cloudflare-whysosuresh-account
+  scope: organization
