@@ -1,7 +1,7 @@
 {
   "name": "whysosuresh-com-deploy",
   "private": true,
-  "description": "The one tool the deploy job installs: Cloudflare's wrangler, pinned and locked. The deploy job holds the Cloudflare key, so it never installs the check tools in the root package.json.",
+  "description": "Cloudflare's wrangler, pinned and locked apart from the check tools: `npm run check` runs its dry run and `wrangler dev` serves the site locally.",
   "devDependencies": {
     "wrangler": "4.151.2"
   }

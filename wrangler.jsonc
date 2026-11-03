@@ -1,13 +1,14 @@
 // whysosuresh.com: one Cloudflare Worker that serves the folder ./site and nothing else; no code of
-// its own runs. .github/workflows/site.yaml deploys it from main with a key that reaches this one
-// Worker, using the wrangler pinned in ./deploy.
+// its own runs. This file drives `wrangler dev` and the dry run in `npm run check`, with the wrangler
+// pinned in ./deploy. Nothing deploys from this repository's workflows: the Worker is deployed by
+// Planton, from the Cloudflare account named below.
 //
-// `routes` is the domain's whole truth: every deploy attaches exactly the domains named here and
-// detaches any other, so a domain added in Cloudflare's dashboard is dropped by the next deploy.
+// If wrangler ever deploys this Worker, `routes` is the domain's whole truth: a deploy attaches
+// exactly the domains named here and detaches any other.
 {
   "$schema": "./deploy/node_modules/wrangler/config-schema.json",
   "name": "whysosuresh-com",
-  "account_id": "@@ACCOUNT_ID@@",
+  "account_id": "2f1cb3191775e02873cf13bb57e9e67f",
   // The newest date the runtime inside the pinned wrangler supports, so `wrangler dev` runs it too.
   "compatibility_date": "2026-10-26",
   "assets": {
