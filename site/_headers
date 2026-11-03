@@ -1,0 +1,10 @@
+# The headers on every response. The site runs no code of its own, so this file covers all of them.
+# The CSP allows the site's own files and one frame, YouTube's privacy-mode player, and no script at
+# all; the referrer policy is never no-referrer, because that player refuses to play without one.
+# test/site.test.ts checks this file against the pages.
+/*
+  Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self'; frame-src https://www.youtube-nocookie.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Content-Type-Options: nosniff
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Strict-Transport-Security: max-age=31536000

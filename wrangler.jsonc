@@ -1,0 +1,26 @@
+// whysosuresh.com: one Cloudflare Worker that serves the folder ./site and nothing else; no code of
+// its own runs. This file drives `wrangler dev` and the dry run in `npm run check`, with the wrangler
+// pinned in ./deploy. Nothing deploys from this repository's workflows: the Worker is deployed by
+// Planton, from the Cloudflare account named below.
+//
+// If wrangler ever deploys this Worker, `routes` is the domain's whole truth: a deploy attaches
+// exactly the domains named here and detaches any other.
+{
+  "$schema": "./deploy/node_modules/wrangler/config-schema.json",
+  "name": "whysosuresh-com",
+  "account_id": "2f1cb3191775e02873cf13bb57e9e67f",
+  // The newest date the runtime inside the pinned wrangler supports, so `wrangler dev` runs it too.
+  "compatibility_date": "2026-10-26",
+  "assets": {
+    "directory": "./site",
+    // A path the site has no file for gets site/404.html, with a 404 status.
+    "not_found_handling": "404-page",
+    // /feedback serves feedback.html; /feedback.html and /index.html redirect to the clean address.
+    "html_handling": "auto-trailing-slash"
+  },
+  // The apex is the Worker's one address. www stays a redirect rule in the zone, because a Worker's
+  // custom domain answers only the exact name it is attached to.
+  "routes": [{ "pattern": "whysosuresh.com", "custom_domain": true }],
+  "workers_dev": false,
+  "preview_urls": false
+}
