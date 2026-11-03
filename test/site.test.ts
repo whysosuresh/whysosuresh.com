@@ -1,7 +1,7 @@
 // The site's checks: what is served, that every page is valid HTML with the head a shared link needs,
 // that every internal link reaches a file without a redirect, that nothing loads from elsewhere but
 // the one allowed player, that the headers match the pages, that the stylesheet carries no dead
-// rules, and that the Worker's config names the one domain. `wrangler deploy --dry-run` does not read
+// rules, and that the Worker's config routes the one domain. `wrangler deploy --dry-run` does not read
 // site/_headers, so this file parses it.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -244,8 +244,9 @@ describe("wrangler.jsonc", () => {
     expect(text).toMatch(/"account_id": "[0-9a-f]{32}"/);
   });
 
-  it("attaches the apex, and only the apex, as the Worker's custom domain", () => {
-    expect(text).toContain('"routes": [{ "pattern": "whysosuresh.com", "custom_domain": true }]');
+  it("routes the apex, and only the apex, to the Worker", () => {
+    expect(text).toContain('"routes": [{ "pattern": "whysosuresh.com/*", "zone_name": "whysosuresh.com" }]');
     expect(text.match(/"pattern"/g)).toHaveLength(1);
+    expect(text).not.toContain("custom_domain");
   });
 });
