@@ -1,0 +1,14 @@
+# The one environment whysosuresh.com runs in: the zone, its records, its redirect and its settings, and
+# whatever the site adds later. Everything here lives and dies together, so there is no separate environment
+# for the zone. Created 2026-11-03. The Cloudflare connection is authorized for every environment
+# (Connection.ProviderConnectionAuthorization.cloudflare-whysosuresh-account.yaml), so it serves this one.
+#
+#   planton apply -f Environment.prod.yaml --instance planton.ai --org why-so-suresh
+apiVersion: tenancy.planton.ai/v1alpha1
+kind: Environment
+metadata:
+  name: prod
+  slug: prod # permanent: state keys are {org}/{env}.{Kind}.{name}, so renaming it is a migration
+  org: why-so-suresh
+spec:
+  description: whysosuresh.com -- the zone, its records, its redirect and its settings, and everything the site runs on.

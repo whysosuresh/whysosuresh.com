@@ -1,0 +1,27 @@
+# The record that makes whysosuresh.com Suresh's Bluesky handle: Bluesky reads the TXT at _atproto and
+# expects exactly this DID. It must never change. If it does, the handle stops resolving and Bluesky shows
+# the account under its fallback name. Copied byte for byte from the zone's previous Cloudflare account
+# on 2026-11-03, and read back before and after every DNS change.
+#
+#   planton apply -f Infra.prod.CloudflareDnsRecord.whysosuresh-com-atproto.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareDnsRecord
+metadata:
+  name: whysosuresh-com-atproto
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  zoneId:
+    valueFrom:
+      kind: CloudflareDnsZone
+      env: prod # Planton stores the environment it resolved; writing it keeps `planton diff` exact
+      name: whysosuresh-com
+      fieldPath: status.outputs.zone_id
+  name: _atproto.whysosuresh.com
+  type: TXT
+  content:
+    value: 'did=did:plc:b2skyswdyxq73sryvjtquofy' # never change: the Bluesky handle stands on it
+  ttl: 1 # automatic, which Cloudflare answers as 300
+  comment: Bluesky handle whysosuresh.com; never change

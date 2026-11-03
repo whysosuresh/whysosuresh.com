@@ -1,0 +1,24 @@
+# The whysosuresh.com zone's serving settings, one managed: Always Use HTTPS, so every plain-http request to
+# a proxied name is answered with a 301 to https before the redirect rule or the Worker sees it.
+#
+# Every other setting is left unset, which this kind leaves unmanaged: nothing else on the zone moves.
+# Cloudflare has no delete for a zone setting, so removing this file stops managing it but keeps the last
+# value; to turn the redirect off, set false and apply before removing the file.
+#
+#   planton apply -f Infra.prod.CloudflareZoneSettings.whysosuresh-com.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareZoneSettings
+metadata:
+  name: whysosuresh-com
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  zoneId:
+    valueFrom:
+      kind: CloudflareDnsZone
+      env: prod # Planton stores the environment it resolved; writing it keeps `planton diff` exact
+      name: whysosuresh-com
+      fieldPath: status.outputs.zone_id
+  alwaysUseHttps: true

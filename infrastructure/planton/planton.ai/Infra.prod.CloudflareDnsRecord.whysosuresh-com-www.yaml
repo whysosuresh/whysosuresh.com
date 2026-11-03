@@ -1,0 +1,29 @@
+# www.whysosuresh.com, served only by Cloudflare: the zone's redirect rule
+# (Infra.prod.CloudflareRuleset.whysosuresh-com-redirects.yaml) answers every request to it with a 301, so
+# it needs a proxied record and never an origin. `100::` is the reserved "discard" IPv6 prefix. Universal
+# SSL covers one level under the apex, so www gets its certificate with no step. Permanent: removing it
+# breaks every www link.
+#
+#   planton apply -f Infra.prod.CloudflareDnsRecord.whysosuresh-com-www.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareDnsRecord
+metadata:
+  name: whysosuresh-com-www
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  zoneId:
+    valueFrom:
+      kind: CloudflareDnsZone
+      env: prod # Planton stores the environment it resolved; writing it keeps `planton diff` exact
+      name: whysosuresh-com
+      fieldPath: status.outputs.zone_id
+  name: www.whysosuresh.com
+  type: AAAA
+  content:
+    value: '100::' # nowhere: the redirect rule answers before any origin would
+  proxied: true
+  ttl: 1 # automatic, as every proxied record
+  comment: www; answered by the zone's redirect rule
