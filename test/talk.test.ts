@@ -233,8 +233,9 @@ describe("the daily limits", () => {
     expect((await send({ ip: "2001:db8:1:3::a" })).status).toBe(201);
   });
 
-  it("refuses a request with no address", async () => {
-    expect((await send({ ip: "" })).status).toBe(400);
+  // Cloudflare always sets the address, and Miniflare fills in an empty one, so a malformed one stands in.
+  it.each(["not-an-address", "300.1.1.1", "2001:db8::1::2"])("refuses a request from %j, which isn't an address", async (ip) => {
+    expect((await send({ ip })).status).toBe(400);
   });
 });
 

@@ -15,6 +15,8 @@
  *   execute(widget: string): void,
  *   reset(widget: string): void,
  * }} Turnstile
+ * @typedef {{ resolve(token: string): void, reject(error: Error): void }} Waiting
+ * @typedef {{ id: string, waiting: Waiting | null }} Widget
  */
 
 /** The production widget's public key; it works only on whysosuresh.com. */
@@ -71,7 +73,7 @@ function loadTurnstile() {
   return turnstileLoading;
 }
 
-/** @type {{ id: string, waiting: { resolve(token: string): void, reject(error: Error): void } | null } | null} */
+/** @type {Widget | null} */
 let widget = null;
 
 /**
@@ -83,7 +85,8 @@ async function token() {
   if (!widget) {
     const box = document.createElement('div');
     document.body.append(box);
-    const state = { id: '', waiting: /** @type {NonNullable<typeof widget>['waiting']} */ (null) };
+    /** @type {Widget} */
+    const state = { id: '', waiting: null };
     state.id = turnstile.render(box, {
       sitekey: siteKey(),
       action: 'talk',
