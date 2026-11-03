@@ -1,6 +1,6 @@
 # Cloudflare
 
-What the Cloudflare dashboard holds for whysosuresh.com that Planton cannot create: the account, and the token Planton signs in with.
+What the Cloudflare dashboard holds for whysosuresh.com that Planton cannot create: the account, the token Planton signs in with, and the token the repository's deploy job uses.
 
 ## The account
 
@@ -23,3 +23,17 @@ The token is deliberately narrower than everything Planton can deploy on Cloudfl
 **Re-mint.** In the dashboard, open the token's menu and choose Roll. That keeps its permissions and gives a new value. Copy the new value, then set it from the clipboard with the command in the secret's header, and run Verify. Revoking the token cuts Planton off at once.
 
 The token can edit DNS. The zone's TXT records `_atproto` and `_dmarc` must never change.
+
+## The account API token `github-whysosuresh-com-deployer`
+
+The `deploy` job's key in `.github/workflows/site.yaml`: it uploads `site/` to the Worker `whysosuresh-com` and sets the Worker's one route. Planton can't upload a repository's static files to a Worker yet, so this one Worker is deployed from GitHub instead. Created on 2026-11-03 under Manage Account, Account API Tokens, Create Token, "Start from scratch", as `github-whysosuresh-com-deployer`. No expiry, all IP addresses allowed. Two policies and nothing else; Cloudflare's review summary read "Entire whysosuresh account: Workers Scripts Write" and "All zones in whysosuresh: Zone Read, Workers Routes Write":
+
+- **Entire account, Workers Scripts (Legacy), Edit:** creates the Worker on the first deploy and uploads each version.
+- **All Domains, Workers Routes, Edit:** sets the route `whysosuresh.com/*` from `wrangler.jsonc`.
+- **All Domains, Zone, Read:** wrangler finds the zone by its name (`zone_name` in `wrangler.jsonc`), within this account only.
+
+It has no DNS, Zone Edit or Zone Settings rights, so it can't change a record, including `_atproto` and `_dmarc`. The account holds no other zone and no other Worker, so the account-wide rows reach nothing else today; a second site in this account would need this key narrowed first.
+
+**Custody.** Its value is the secret `CLOUDFLARE_API_TOKEN` in the GitHub environment `production` of `whysosuresh/whysosuresh.com`, which only `main` may use, and its copy for people is in the owner's password manager. Nowhere else, and never in Planton.
+
+**Re-mint.** In the dashboard, open the token's menu and choose Roll. Paste the new value into the `production` environment's `CLOUDFLARE_API_TOKEN` and the password manager, then re-run the latest `site` run on `main`; its `deploy` job is the proof. Revoking the token stops deploys and leaves the live site as it is.

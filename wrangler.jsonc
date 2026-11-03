@@ -1,10 +1,10 @@
 // whysosuresh.com: one Cloudflare Worker that serves the folder ./site and nothing else; no code of
-// its own runs. This file drives `wrangler dev` and the dry run in `npm run check`, with the wrangler
-// pinned in ./deploy. Nothing deploys from this repository's workflows: the Worker is deployed by
-// Planton, from the Cloudflare account named below.
+// its own runs. This file drives `wrangler dev`, the dry run in `npm run check`, and the deploy that
+// .github/workflows/site.yaml runs on every merge to main, all with the wrangler pinned in ./deploy.
 //
-// If wrangler ever deploys this Worker, `routes` is the domain's whole truth: a deploy attaches
-// exactly the domains named here and detaches any other.
+// The zone, its records, its redirect rule and its settings are Planton's (infrastructure/); only the
+// Worker and its route are declared here. Routes are declared only in this file, never in Cloudflare's
+// dashboard.
 {
   "$schema": "./deploy/node_modules/wrangler/config-schema.json",
   "name": "whysosuresh-com",
@@ -18,9 +18,10 @@
     // /feedback serves feedback.html; /feedback.html and /index.html redirect to the clean address.
     "html_handling": "auto-trailing-slash"
   },
-  // The apex is the Worker's one address. www stays a redirect rule in the zone, because a Worker's
-  // custom domain answers only the exact name it is attached to.
-  "routes": [{ "pattern": "whysosuresh.com", "custom_domain": true }],
+  // The apex is the Worker's one address, through a route on the zone, found by its name in the
+  // account above. The route needs a proxied record at the apex, which Planton holds; www is the
+  // zone's redirect rule, also Planton's.
+  "routes": [{ "pattern": "whysosuresh.com/*", "zone_name": "whysosuresh.com" }],
   "workers_dev": false,
   "preview_urls": false
 }

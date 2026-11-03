@@ -5,9 +5,10 @@ The source of [whysosuresh.com](https://whysosuresh.com), Suresh's home page: wh
 ## How it is built
 
 - `site/` is the whole site: plain HTML and one stylesheet, with no build step and no script. `site/_headers` sets the security headers on every response.
-- `wrangler.jsonc` describes the Cloudflare Worker `whysosuresh-com`, which serves `site/` and runs no code of its own. It drives `wrangler dev` and the dry run; the Worker itself is deployed by Planton.
+- `wrangler.jsonc` describes the Cloudflare Worker `whysosuresh-com`, which serves `site/` and runs no code of its own. Its one route sends `whysosuresh.com` to it.
 - `test/site.test.ts` checks the site: the files served, valid HTML, links, outside resources, the headers, and unused CSS.
-- `.github/workflows/site.yaml` runs the checks on every pull request and on `main`. Deploys are Planton's, not this workflow's.
+- `.github/workflows/site.yaml` runs the checks on every pull request and on `main`. On `main` it also deploys, with a key that can deploy Workers and nothing in DNS.
+- `infrastructure/` declares the rest: the zone, its records, the `www` redirect and the zone's settings, applied by Planton.
 
 ## Working on it
 
