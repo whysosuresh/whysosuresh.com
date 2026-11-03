@@ -1,5 +1,6 @@
-// The type check for everything written here: strict TypeScript, no emit. The site's browser scripts,
-// when they arrive, are plain JavaScript checked by the same rules through checkJs.
+// The type check for the tests and their config: strict TypeScript on Node, no emit. The site's browser
+// scripts and the Worker have their own (tsconfig.site.json, tsconfig.worker.json), each against its own
+// runtime's library; `npm run typecheck` runs all three.
 {
   "compilerOptions": {
     "target": "es2023",
@@ -15,8 +16,9 @@
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["test/**/*.ts"]
+  "include": ["test/**/*.ts", "vitest.config.ts"]
 }

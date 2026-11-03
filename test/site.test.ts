@@ -1,8 +1,9 @@
 // The site's checks: what is served, that every page is valid HTML with the head a shared link needs,
 // that every internal link reaches a file without a redirect, that nothing loads from elsewhere but
-// the one allowed player, that the headers match the pages, that the stylesheet carries no dead
-// rules, and that the Worker's config routes the one domain. `wrangler deploy --dry-run` does not read
-// site/_headers, so this file parses it.
+// the allowed player and the scripts' allowed resources, that the headers match the pages and the
+// scripts, that the stylesheet carries no dead rules, that nothing opens the talk flow yet, and that
+// the Worker's config routes the one domain to the code only under /api/. `wrangler deploy --dry-run`
+// does not read site/_headers, so this file parses it. The Worker itself is test/talk.test.ts's.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -25,10 +26,20 @@ const SERVED = [
   "index.html",
   "robots.txt",
   "style.css",
+  "talk-recorder.js",
+  "talk.js",
 ];
 
 /** The only resources a page may load from another origin. */
 const EXTERNAL_RESOURCES = ["https://www.youtube-nocookie.com/embed/videoseries?list=UUkdfCh9gN60s_h_nfTYEwyg"];
+
+/**
+ * The only addresses on another origin a site script names. A resource a script loads is invisible to
+ * the page checks, so it is allowed here instead. Turnstile's script also opens its own frame.
+ */
+const SCRIPT_RESOURCES = ["https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"];
+
+const originsOf = (urls: string[]): string => [...new Set(urls.map((url) => new URL(url).origin))].join(" ");
 
 /** The pages a link can be shared to, which carry a description and a preview picture. */
 const SHARED_PAGES = ["index.html", "feedback.html"];
@@ -38,16 +49,20 @@ const ORIGIN = "https://whysosuresh.com";
 const EXPECTED_HEADERS: Record<string, string> = {
   "Content-Security-Policy": [
     "default-src 'none'",
+    `script-src 'self' ${originsOf(SCRIPT_RESOURCES)}`,
     "style-src 'self'",
     "img-src 'self'",
-    `frame-src ${[...new Set(EXTERNAL_RESOURCES.map((url) => new URL(url).origin))].join(" ")}`,
+    // "Listen back" plays the recording from the page's own memory.
+    "media-src blob:",
+    "connect-src 'self'",
+    `frame-src ${originsOf([...EXTERNAL_RESOURCES, ...SCRIPT_RESOURCES])}`,
     "base-uri 'none'",
     "form-action 'none'",
     "frame-ancestors 'none'",
   ].join("; "),
   "Referrer-Policy": "strict-origin-when-cross-origin",
   "X-Content-Type-Options": "nosniff",
-  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+  "Permissions-Policy": "camera=(), microphone=(self), geolocation=()",
   "Strict-Transport-Security": "max-age=31536000",
 };
 
@@ -60,6 +75,7 @@ function listFiles(dir: string): string[] {
 
 const served = listFiles(siteDir).sort();
 const pages = served.filter((file) => file.endsWith(".html"));
+const scripts = served.filter((file) => file.endsWith(".js"));
 const read = (file: string): string => readFileSync(join(siteDir, file), "utf8");
 
 const validator = new HtmlValidate({
@@ -185,6 +201,40 @@ describe.each(pages)("%s", (page) => {
   });
 });
 
+describe.each(scripts)("%s", (script) => {
+  it("is type-checked and opens with its intent comment", () => {
+    expect(read(script)).toMatch(/^\/\/ @ts-check\n\/\/ \S/);
+  });
+
+  it("names no address on another origin but the allowlisted resources", () => {
+    const named = [...read(script).matchAll(/\b(?:https?:)?\/\/[^\s'"`)]+/g)].map((m) => m[0]);
+    expect(named.filter((url) => !SCRIPT_RESOURCES.includes(url))).toEqual([]);
+  });
+
+  it("imports only served files, and links only to clean root-absolute addresses", () => {
+    const text = read(script);
+    const imports = [...text.matchAll(/^import [^'"]*['"]([^'"]+)['"]/gm)].map((m) => m[1] ?? "");
+    expect(imports.filter((path) => !served.includes(new URL(path, `${ORIGIN}/${script}`).pathname.slice(1)))).toEqual([]);
+    const links = [...text.matchAll(/href="([^"$]+)"/g)].map((m) => m[1] ?? "");
+    expect(links.flatMap((ref) => { const result = resolveInternal(ref); return "error" in result ? [`${ref} ${result.error}`] : []; })).toEqual([]);
+  });
+});
+
+describe("the talk flow", () => {
+  it("is opened by no element yet: only /#talk reaches it until its inbox exists", async () => {
+    for (const page of pages) expect((await parse(page)).querySelectorAll("[data-talk]")).toEqual([]);
+  });
+
+  it("is loaded by the home page", async () => {
+    const loaded = (await parse("index.html")).querySelectorAll('script[type="module"]').map((el) => attr(el, "src"));
+    expect(loaded).toEqual(["/talk.js"]);
+  });
+
+  it("carries the production widget's site key", () => {
+    expect(read("talk-recorder.js")).toMatch(/^const SITE_KEY = '0x[0-9A-Za-z_-]{20,}';$/m);
+  });
+});
+
 describe.each(SHARED_PAGES)("%s, as a shared link", (page) => {
   it("carries a description, a canonical address and a preview picture that exists", async () => {
     const doc = await parse(page);
@@ -219,11 +269,17 @@ describe("style.css", () => {
   const css = read("style.css").replace(/\/\*[\s\S]*?\*\//g, "");
   const preludes = [...css.matchAll(/([^{}]+)\{/g)].map((m) => (m[1] ?? "").trim()).filter((p) => !p.startsWith("@"));
 
-  it("has no class selector that no served page uses", async () => {
+  it("has no class selector that no served page or script uses", async () => {
     const used = new Set<string>();
     for (const page of pages) {
       for (const el of (await parse(page)).querySelectorAll("[class]")) {
         for (const name of attr(el, "class").split(/\s+/)) used.add(name);
+      }
+    }
+    // The talk flow draws its sheet from a template in its script, and names the dialog's class there.
+    for (const script of scripts) {
+      for (const match of read(script).matchAll(/class(?:Name)?\s*=\s*["']([^"'$]+)["']/g)) {
+        for (const name of (match[1] ?? "").split(/\s+/)) used.add(name);
       }
     }
     const selected = new Set(preludes.flatMap((p) => [...p.matchAll(/\.(-?[_a-zA-Z][\w-]*)/g)].map((m) => m[1] ?? "")));
@@ -248,5 +304,20 @@ describe("wrangler.jsonc", () => {
     expect(text).toContain('"routes": [{ "pattern": "whysosuresh.com/*", "zone_name": "whysosuresh.com" }]');
     expect(text.match(/"pattern"/g)).toHaveLength(1);
     expect(text).not.toContain("custom_domain");
+  });
+
+  it("runs the code only under /api/, and every page comes straight from site/", () => {
+    expect(text).toContain('"run_worker_first": ["/api/*"]');
+    expect(text.match(/"run_worker_first"/g)).toHaveLength(1);
+  });
+
+  it("binds the database Planton created, by a real id", () => {
+    const id = /"database_id": "([0-9a-f-]+)"/.exec(text)?.[1] ?? "";
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(id).not.toMatch(/^[0-]+$/);
+  });
+
+  it("keeps Cloudflare's automatic request records off", () => {
+    expect(text).toContain('"observability": { "enabled": true, "logs": { "invocation_logs": false } }');
   });
 });

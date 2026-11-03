@@ -1,27 +1,51 @@
-// whysosuresh.com: one Cloudflare Worker that serves the folder ./site and nothing else; no code of
-// its own runs. This file drives `wrangler dev`, the dry run in `npm run check`, and the deploy that
-// .github/workflows/site.yaml runs on every merge to main, all with the wrangler pinned in ./deploy.
+// whysosuresh.com: one Cloudflare Worker that serves the folder ./site, and runs code only for /api/*:
+// the talk flow's one write (src/talk.ts), into the database and the recordings' bucket bound below. Every
+// page comes straight from ./site, with no code in its path. This file drives `wrangler dev`, the dry run
+// in `npm run check` (whose bundle the Worker tests run), and the deploy that .github/workflows/site.yaml
+// runs on every merge to main, all with the wrangler pinned in ./deploy.
 //
-// The zone, its records, its redirect rule and its settings are Planton's (infrastructure/); only the
-// Worker and its route are declared here. Routes are declared only in this file, never in Cloudflare's
-// dashboard.
+// The zone, its records, its redirect rule and its settings, the database, the bucket and the bot check
+// are Planton's (infrastructure/); only the Worker, its route and its bindings are declared here. Routes
+// are declared only in this file, never in Cloudflare's dashboard. The bot check's secret is not here: the
+// deploy hands it over from the GitHub environment `production`, and `npm run dev` uses Cloudflare's
+// public test secret.
 {
   "$schema": "./deploy/node_modules/wrangler/config-schema.json",
   "name": "whysosuresh-com",
   "account_id": "2f1cb3191775e02873cf13bb57e9e67f",
-  // The newest date the runtime inside the pinned wrangler supports, so `wrangler dev` runs it too.
+  "main": "src/worker.ts",
+  // The newest date the runtime inside the pinned wrangler supports, so `wrangler dev` and the tests'
+  // Miniflare (the same version wrangler uses) run it too.
   "compatibility_date": "2026-10-26",
   "assets": {
     "directory": "./site",
     // A path the site has no file for gets site/404.html, with a 404 status.
     "not_found_handling": "404-page",
     // /feedback serves feedback.html; /feedback.html and /index.html redirect to the clean address.
-    "html_handling": "auto-trailing-slash"
+    "html_handling": "auto-trailing-slash",
+    // Only these paths reach the code; everything else is a file from ./site.
+    "run_worker_first": ["/api/*"]
   },
   // The apex is the Worker's one address, through a route on the zone, found by its name in the
   // account above. The route needs a proxied record at the apex, which Planton holds; www is the
   // zone's redirect rule, also Planton's.
   "routes": [{ "pattern": "whysosuresh.com/*", "zone_name": "whysosuresh.com" }],
   "workers_dev": false,
-  "preview_urls": false
+  "preview_urls": false,
+  // The database Planton created (Infra.prod.CloudflareD1Database.whysosuresh-com), by its
+  // status.outputs.database_id. Its tables are ./migrations, which the deploy applies before the code.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "whysosuresh-com",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // The recordings' bucket Planton created (Infra.prod.CloudflareR2Bucket.whysosuresh-com-recordings).
+  "r2_buckets": [{ "binding": "AUDIO", "bucket_name": "whysosuresh-com-recordings" }],
+  // The Worker's own log lines (one per refused send: its status and reason, nothing personal) are kept;
+  // Cloudflare's automatic record of each request is off, because nothing says it leaves out the
+  // visitor's address.
+  "observability": { "enabled": true, "logs": { "invocation_logs": false } }
 }

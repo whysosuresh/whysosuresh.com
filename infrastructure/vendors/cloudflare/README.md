@@ -32,13 +32,14 @@ Planton has no record of this zone default (`CloudflareWebAnalyticsSite` creates
 
 ## The account API token `github-whysosuresh-com-deployer`
 
-The `deploy` job's key in `.github/workflows/site.yaml`: it uploads `site/` to the Worker `whysosuresh-com` and sets the Worker's one route. Planton can't upload a repository's static files to a Worker yet, so this one Worker is deployed from GitHub instead. Created on 2026-11-03 under Manage Account, Account API Tokens, Create Token, "Start from scratch", as `github-whysosuresh-com-deployer`. No expiry, all IP addresses allowed. Two policies and nothing else; Cloudflare's review summary read "Entire whysosuresh account: Workers Scripts Write" and "All zones in whysosuresh: Zone Read, Workers Routes Write":
+The `deploy` job's key in `.github/workflows/site.yaml`: it applies the database's migrations, uploads `site/` and the Worker's code to the Worker `whysosuresh-com`, and sets the Worker's one route. Planton can't upload a repository's static files to a Worker yet, so this one Worker is deployed from GitHub instead. Created on 2026-11-03 under Manage Account, Account API Tokens, Create Token, "Start from scratch", as `github-whysosuresh-com-deployer`. No expiry, all IP addresses allowed. Two policies and nothing else; Cloudflare's review summary read "Entire whysosuresh account: Workers Scripts Write" and "All zones in whysosuresh: Zone Read, Workers Routes Write":
 
 - **Entire account, Workers Scripts (Legacy), Edit:** creates the Worker on the first deploy and uploads each version.
 - **All Domains, Workers Routes, Edit:** sets the route `whysosuresh.com/*` from `wrangler.jsonc`.
 - **All Domains, Zone, Read:** wrangler finds the zone by its name (`zone_name` in `wrangler.jsonc`), within this account only.
+- **Entire account, D1, Edit:** applies `migrations/` to the database `whysosuresh-com` before each deploy (`../../planton/planton.ai/README.md` row 19). Added after the key was created; its value didn't change.
 
-It has no DNS, Zone Edit or Zone Settings rights, so it can't change a record, including `_atproto` and `_dmarc`. The account holds no other zone and no other Worker, so the account-wide rows reach nothing else today; a second site in this account would need this key narrowed first.
+It has no DNS, Zone Edit or Zone Settings rights, so it can't change a record, including `_atproto` and `_dmarc`. The account holds no other zone, Worker or database, so the account-wide rows reach nothing else today; a second site in this account would need this key narrowed first.
 
 **Custody.** Its value is the secret `CLOUDFLARE_API_TOKEN` in the GitHub environment `production` of `whysosuresh/whysosuresh.com`, which only `main` may use, and its copy for people is in the owner's password manager. Nowhere else, and never in Planton.
 

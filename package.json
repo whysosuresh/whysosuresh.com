@@ -2,20 +2,23 @@
   "name": "whysosuresh-com",
   "private": true,
   "type": "module",
-  "description": "whysosuresh.com's checks: the type check, the site tests and wrangler's dry run. The site itself is the static folder site/, served by one Cloudflare Worker (wrangler.jsonc).",
+  "description": "whysosuresh.com's checks: the type checks, the site tests, and the Worker tests on the bundle wrangler's dry run writes. The site is the static folder site/, served by one Cloudflare Worker (wrangler.jsonc) that runs code only for /api/* (src/).",
   "license": "MIT",
   "engines": {
     "node": ">=22.22.0 <23"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "dry-run": "deploy/node_modules/.bin/wrangler deploy --dry-run --config wrangler.jsonc",
-    "check": "npm run typecheck && npm test && npm run dry-run"
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.site.json && tsc -p tsconfig.worker.json && deploy/node_modules/.bin/wrangler types --check --config wrangler.jsonc",
+    "types": "deploy/node_modules/.bin/wrangler types --config wrangler.jsonc",
+    "dry-run": "deploy/node_modules/.bin/wrangler deploy --dry-run --config wrangler.jsonc --outdir dist",
+    "test": "npm run dry-run && vitest run",
+    "check": "npm run typecheck && npm test",
+    "dev": "deploy/node_modules/.bin/wrangler dev --config wrangler.jsonc --port 8787 --var TURNSTILE_SECRET:1x0000000000000000000000000000000AA"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
     "html-validate": "11.16.4",
+    "miniflare": "5.20261019.0-beta",
     "typescript": "5.9.3",
     "vitest": "4.1.12"
   }
