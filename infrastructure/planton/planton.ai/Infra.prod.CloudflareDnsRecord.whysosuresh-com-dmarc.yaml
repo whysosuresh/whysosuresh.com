@@ -1,0 +1,26 @@
+# The domain's DMARC policy: receivers quarantine mail that claims to be from whysosuresh.com and fails
+# SPF or DKIM, and send aggregate reports to the address below. The domain sends no mail, so this is what
+# stops others sending as it. It must never change. Copied byte for byte from the zone's previous
+# Cloudflare account on 2026-11-03, and read back before and after every DNS change.
+#
+#   planton apply -f Infra.prod.CloudflareDnsRecord.whysosuresh-com-dmarc.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareDnsRecord
+metadata:
+  name: whysosuresh-com-dmarc
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  zoneId:
+    valueFrom:
+      kind: CloudflareDnsZone
+      name: whysosuresh-com
+      fieldPath: status.outputs.zone_id
+  name: _dmarc.whysosuresh.com
+  type: TXT
+  content:
+    value: 'v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:dmarc_rua@onsecureserver.net;' # never change
+  ttl: 1 # automatic, which Cloudflare answers as 300
+  comment: DMARC policy; never change
