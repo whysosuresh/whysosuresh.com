@@ -24,6 +24,12 @@ The token is deliberately narrower than everything Planton can deploy on Cloudfl
 
 The token can edit DNS. The zone's TXT records `_atproto` and `_dmarc` must never change.
 
+## Set only in the dashboard: Real User Measurements off
+
+A new free zone comes with Cloudflare's Real User Measurements in its default state, which adds a `static.cloudflareinsights.com/beacon.min.js` script tag to every HTML page a browser fetches. The site's CSP blocked it, so it measured nothing, but every page logged a CSP error and no longer matched `site/`. On 2026-11-03 it was turned off under the zone's Speed, Real user monitoring, "Disable completely"; the page now reads "RUM is currently disabled for this zone".
+
+Planton has no record of this zone default (`CloudflareWebAnalyticsSite` creates a site; it doesn't hold the zone's automatic setup), so this note is its record. The proof: a browser-like request to `https://whysosuresh.com/` returns `site/index.html` byte for byte, with no `cloudflareinsights` in it. Turning it back on would need the CSP to allow the script.
+
 ## The account API token `github-whysosuresh-com-deployer`
 
 The `deploy` job's key in `.github/workflows/site.yaml`: it uploads `site/` to the Worker `whysosuresh-com` and sets the Worker's one route. Planton can't upload a repository's static files to a Worker yet, so this one Worker is deployed from GitHub instead. Created on 2026-11-03 under Manage Account, Account API Tokens, Create Token, "Start from scratch", as `github-whysosuresh-com-deployer`. No expiry, all IP addresses allowed. Two policies and nothing else; Cloudflare's review summary read "Entire whysosuresh account: Workers Scripts Write" and "All zones in whysosuresh: Zone Read, Workers Routes Write":
