@@ -93,6 +93,9 @@ describe("a good note", () => {
       name: "Asha",
       email: "asha@example.com",
       status: "received",
+      kind: null,
+      drop_reason: null,
+      reply_opened_at: null,
     });
     expect(String(row?.received_at) >= before).toBe(true);
   });

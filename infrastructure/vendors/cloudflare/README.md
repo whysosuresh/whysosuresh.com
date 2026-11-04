@@ -1,6 +1,6 @@
 # Cloudflare
 
-What the Cloudflare dashboard holds for whysosuresh.com that Planton cannot create: the account, the products turned on in it, the token Planton signs in with, the token the repository's deploy job uses, and the one copy of the bot check's secret outside Planton.
+What the Cloudflare dashboard holds for whysosuresh.com that Planton cannot create: the account, the products turned on in it, the token Planton signs in with, the token the repository's deploy job uses, and the one copy each of the bot check's secret and the inbox owner's address outside Planton.
 
 ## The account
 
@@ -10,6 +10,20 @@ What the Cloudflare dashboard holds for whysosuresh.com that Planton cannot crea
 ## R2
 
 R2 was turned on in the account on 2026-11-04 for the site's recordings (with a card, which stays on the account) and retired on 2026-11-04, when the site stopped taking voice; its one bucket is gone (`../../planton/planton.ai/README.md` rows 15 and 17).
+
+## Zero Trust
+
+Switched on by the owner on 2026-11-04, on the Free plan (up to 50 users, $0; the card from R2 is on file, and Cloudflare charges it only for use beyond the free limits). Onboarding asked for no team name and made the team `wild-violet-209f`; `Infra.prod.CloudflareZeroTrustOrganization.whysosuresh` renamed it at once, before anyone signed in, so the team domain is `whysosuresh.cloudflareaccess.com` (`../../planton/planton.ai/README.md` row 21).
+
+It is used for one thing: Access in front of `whysosuresh.com/inbox`. Everything in it is a Planton file (rows 21 to 26): the team's name, the sign-in by an emailed one-time code, the recorder sync's service token, the two policies and the application. Cloudflare's own dashboard sign-in, which the account listed as an identity provider before any of this, is left as it is; the inbox's application allows only the email code.
+
+The recorder sync's service token is Planton's, and so is its secret: Cloudflare shows it once, at creation, and Planton keeps it as the token's sensitive output. A script reads it from there for each use and never prints it; there is no other copy. Rotating it is one field (`clientSecretVersion`) in its file, re-applied.
+
+## The inbox owner's address
+
+The one email address the inbox admits is the Planton secret `inbox-owner-email` (row 22), read by the owner's Access policy. The Worker checks the same address again, so it has one more copy: `INBOX_OWNER_EMAIL` in the GitHub environment `production`, which the deploy hands to the Worker as a secret, as it does the bot check's. A deploy with it empty fails before uploading anything. The repository is public and names the address nowhere.
+
+**Copy.** As the bot check's secret below: a script reveals the one value with `planton secret get inbox-owner-email --reveal -o plain`, checks its shape, and pipes it into `gh secret set INBOX_OWNER_EMAIL --env production --repo whysosuresh/whysosuresh.com`; nothing prints it. Changing the address means setting the Planton secret, re-applying the owner's policy, copying it again and re-running the latest `site` run on `main`.
 
 ## The bot check's secret
 
@@ -25,7 +39,7 @@ The site key is public. It is the widget's identity, and sits in `site/talk-send
 
 Planton's sign-in to the account, stored as `Config.Org.Secret.cloudflare-whysosuresh-account-api-token` and used by `Connection.CloudflareProviderConnection.cloudflare-whysosuresh-account`. Minted by the owner on 2026-11-03 under Manage Account, Account API Tokens, as a custom token. No expiry, all IP addresses allowed. The summary Cloudflare showed before creating it:
 
-- **Entire whysosuresh account:** Workers Scripts Write, Account Settings Read, D1 Write, Workers R2 Storage Write, Turnstile Sites Write, Access: Service Tokens Write, Access: Organizations, Identity Providers, and Groups Write, Access: Apps and Policies Write.
+- **Entire whysosuresh account:** Workers Scripts Write, Account Settings Read, D1 Write, Workers R2 Storage Write, Turnstile Sites Write, Access: Service Tokens Write, Access: Organizations, Identity Providers, and Groups Write, Access: Apps and Policies Write. The three Access rights have been in use since 2026-11-04, for the inbox's Access (`../../planton/planton.ai/README.md` rows 21 and 23 to 26).
 - **All zones in whysosuresh:** DNS Write, Zone Write, Zone Settings Write, Workers Routes Write, SSL and Certificates Write, Dynamic URL Redirects Write.
 
 In the token editor, "Write" is the Edit box. Workers Scripts is the group marked Legacy (the newer "Workers" group's Editor role is a different grant); "Access: Apps and Policies" appears in the editor as a row named just "Access"; the redirect permission is labelled "Dynamic URL Redirects". Zone resources are the editor's "All Domains" scope, which Cloudflare's summary reads as "All zones in whysosuresh".

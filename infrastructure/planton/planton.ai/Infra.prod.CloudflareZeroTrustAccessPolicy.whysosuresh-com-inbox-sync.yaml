@@ -1,0 +1,26 @@
+# The recorder sync's way in: the one service token whysosuresh-com-inbox-sync, with no email and no code.
+# `non_identity` is the dashboard's "Service Auth" action: Access checks the token's headers instead of
+# sending anyone to the sign-in page.
+#
+#   planton apply -f Infra.prod.CloudflareZeroTrustAccessPolicy.whysosuresh-com-inbox-sync.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareZeroTrustAccessPolicy
+metadata:
+  name: whysosuresh-com-inbox-sync # permanent
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  accountId: $var/cloudflare-whysosuresh-account-id
+  name: whysosuresh.com inbox sync
+  decision: non_identity
+  sessionDuration: 24h # Cloudflare's default, which it stores; declared to keep the diff empty
+  include:
+    - serviceToken:
+        tokenId:
+          valueFrom:
+            kind: CloudflareZeroTrustAccessServiceToken
+            env: prod # Planton stores the environment it resolved; declared to keep the diff empty
+            name: whysosuresh-com-inbox-sync
+            fieldPath: status.outputs.service_token_id

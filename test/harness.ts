@@ -1,11 +1,14 @@
-// The Worker in Cloudflare's own runtime, for test/talk.test.ts: Miniflare (pinned to the version the pinned
+// The Worker in Cloudflare's own runtime, for test/talk.test.ts and test/inbox.test.ts: Miniflare (pinned to the version the pinned
 // wrangler itself runs, so the runtime and compatibility date are production's) runs the exact bundle
 // `wrangler deploy --dry-run --outdir dist` writes, with a real local D1 holding migrations/. Turnstile's
 // verification is played here: a token of `pass` passes for the request's own host, `wrong-host` passes for
 // another host, `wrong-action` for another action, `unreachable` answers as a check that is down, and
-// anything else fails; under Cloudflare's test secret every token passes, as Cloudflare answers it. Every
-// other host the Worker tries is refused and recorded.
+// anything else fails; under Cloudflare's test secret every token passes, as Cloudflare answers it. Cloudflare
+// Access is played too: the team's certs address (wrangler.jsonc's `ACCESS_TEAM_DOMAIN`) serves the harness's
+// own RSA keys, and `access.token` signs an application token with them as Access would. Every other host the
+// Worker tries is refused and recorded.
 
+import { createSign, generateKeyPairSync, type KeyObject } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,8 +16,21 @@ import { Miniflare, Response as RuntimeResponse, type Request as RuntimeRequest 
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
+const WRANGLER = readFileSync(join(root, "wrangler.jsonc"), "utf8");
 /** wrangler.jsonc's date, read rather than copied, so the tests can't drift from it. */
-const COMPATIBILITY_DATE = /"compatibility_date": "(\d{4}-\d{2}-\d{2})"/.exec(readFileSync(join(root, "wrangler.jsonc"), "utf8"))?.[1];
+const COMPATIBILITY_DATE = /"compatibility_date": "(\d{4}-\d{2}-\d{2})"/.exec(WRANGLER)?.[1];
+
+/** One of wrangler.jsonc's `vars`, read rather than copied, so the tests run the deployed settings. */
+function wranglerVar(name: string): string {
+  const value = new RegExp(`"${name}": "([^"]+)"`).exec(WRANGLER)?.[1];
+  if (value === undefined) throw new Error(`wrangler.jsonc names no ${name}`);
+  return value;
+}
+export const ACCESS_TEAM_DOMAIN = wranglerVar("ACCESS_TEAM_DOMAIN");
+export const ACCESS_AUD = wranglerVar("ACCESS_AUD");
+export const INBOX_SYNC_CLIENT_ID = wranglerVar("INBOX_SYNC_CLIENT_ID");
+/** The owner's address in the harness; production's comes from the deploy and is in no file. */
+export const OWNER = "owner@example.com";
 
 const WORKER = "whysosuresh-com";
 export const SITE = "https://whysosuresh.com";
@@ -39,6 +55,36 @@ export interface Database {
   batch(statements: Statement[]): Promise<unknown[]>;
 }
 
+/** The claims of an application token, as Cloudflare Access signs them; a key set to undefined is left out. */
+export type Claims = Record<string, unknown>;
+
+/** How a played token is made beyond its claims. */
+export interface TokenOptions {
+  /** The key id the header names; the served key's by default. */
+  kid?: string;
+  /** The header's algorithm; RS256 by default. */
+  alg?: string;
+  /** Signs with a key the certs address doesn't serve. */
+  foreignKey?: boolean;
+  /** Spoils the signature after signing. */
+  badSignature?: boolean;
+}
+
+/** Cloudflare Access, as the harness plays it. */
+export interface PlayedAccess {
+  /** A signed application token: the owner's by default; `claims` change or (as undefined) remove claims. */
+  token(claims?: Claims, options?: TokenOptions): string;
+  /** The owner's claims and the sync's claims, to build on. */
+  ownerClaims(): Claims;
+  syncClaims(): Claims;
+  /** How many times the Worker fetched the certs. */
+  readonly fetches: number;
+  /** Serves a second key as well, as Cloudflare does while it rotates; returns its key id. */
+  rotate(): string;
+  /** Makes the certs address answer 503. */
+  setDown(down: boolean): void;
+}
+
 export interface Harness {
   /** Sends a request to the Worker as the edge would hand it over. */
   fetch(url: string, init?: RequestInit): Promise<Response>;
@@ -46,6 +92,8 @@ export interface Harness {
   db(): Promise<Database>;
   /** Every host the Worker tried to reach. */
   outboundHosts: Set<string>;
+  /** Cloudflare Access, played. */
+  access: PlayedAccess;
   /** Empties every table, between tests. */
   reset(): Promise<void>;
   dispose(): Promise<void>;
@@ -68,15 +116,82 @@ function migrations(): string[] {
     );
 }
 
-export async function startHarness(options: { secret?: string } = {}): Promise<Harness> {
+const base64Url = (bytes: Buffer): string => bytes.toString("base64url");
+
+interface ServedKey {
+  kid: string;
+  privateKey: KeyObject;
+  jwk: Record<string, unknown>;
+}
+
+function newKey(kid: string): ServedKey {
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  return { kid, privateKey, jwk: { ...publicKey.export({ format: "jwk" }), kid, alg: "RS256", use: "sig" } };
+}
+
+function playAccess(): PlayedAccess & { serve(request: RuntimeRequest): RuntimeResponse } {
+  const keys = [newKey("harness-key-1")];
+  const foreign = newKey("harness-key-1");
+  let fetches = 0;
+  let down = false;
+
+  const now = (): number => Math.floor(Date.now() / 1000);
+  const common = (): Claims => ({
+    aud: [ACCESS_AUD],
+    iss: `https://${ACCESS_TEAM_DOMAIN}`,
+    iat: now(),
+    nbf: now(),
+    exp: now() + 3600,
+    type: "app",
+  });
+
+  return {
+    ownerClaims: () => ({ ...common(), email: OWNER, sub: "7335d417-61da-459d-899c-0a01c76a2f94", identity_nonce: "nonce", country: "IN" }),
+    // A service token's claims carry no email or identity, only the token's client id (Cloudflare's
+    // application-token page); the owner's are removed so `token()` doesn't merge them in.
+    syncClaims: () => ({ ...common(), common_name: INBOX_SYNC_CLIENT_ID, sub: "", email: undefined, identity_nonce: undefined, country: undefined }),
+    token(claims = {}, options = {}) {
+      const signer = options.foreignKey ? foreign : (keys[keys.length - 1] ?? foreign);
+      const merged: Claims = { ...this.ownerClaims(), ...claims };
+      for (const [key, value] of Object.entries(merged)) if (value === undefined) delete merged[key];
+      const header = base64Url(Buffer.from(JSON.stringify({ alg: options.alg ?? "RS256", kid: options.kid ?? signer.kid, typ: "JWT" })));
+      const payload = base64Url(Buffer.from(JSON.stringify(merged)));
+      const signature = createSign("RSA-SHA256").update(`${header}.${payload}`).sign(signer.privateKey);
+      if (options.badSignature) signature[10] = (signature[10] ?? 0) ^ 0xff;
+      return `${header}.${payload}.${base64Url(signature)}`;
+    },
+    get fetches() {
+      return fetches;
+    },
+    rotate() {
+      const key = newKey(`harness-key-${keys.length + 1}`);
+      keys.push(key);
+      return key.kid;
+    },
+    setDown(value) {
+      down = value;
+    },
+    serve() {
+      fetches += 1;
+      if (down) return new RuntimeResponse("down", { status: 503 });
+      return new RuntimeResponse(JSON.stringify({ keys: keys.map((key) => key.jwk) }), { headers: { "content-type": "application/json" } });
+    },
+  };
+}
+
+export async function startHarness(options: { secret?: string; owner?: string } = {}): Promise<Harness> {
   const bundlePath = join(root, "dist", "worker.js");
   if (!existsSync(bundlePath)) throw new Error("dist/worker.js is missing: run `npm run dry-run` first (`npm test` does)");
   if (!COMPATIBILITY_DATE) throw new Error("wrangler.jsonc names no compatibility_date");
   const outboundHosts = new Set<string>();
+  const access = playAccess();
 
   async function outbound(request: RuntimeRequest): Promise<RuntimeResponse> {
     const url = new URL(request.url);
     outboundHosts.add(url.host);
+    if (url.host === ACCESS_TEAM_DOMAIN && url.pathname === "/cdn-cgi/access/certs" && request.method === "GET") {
+      return access.serve(request);
+    }
     if (url.host === TURNSTILE_HOST && url.pathname === "/turnstile/v0/siteverify" && request.method === "POST") {
       const form = new URLSearchParams(await request.text());
       const token = form.get("response");
@@ -97,6 +212,7 @@ export async function startHarness(options: { secret?: string } = {}): Promise<H
   }
 
   const secret = options.secret ?? SECRET;
+  const owner = options.owner ?? OWNER;
   const mf = new Miniflare({
     host: "127.0.0.1",
     port: 0,
@@ -109,6 +225,10 @@ export async function startHarness(options: { secret?: string } = {}): Promise<H
           env: {
             DB: { type: "d1", id: "whysosuresh-com" },
             ...(secret === "" ? {} : { TURNSTILE_SECRET: { type: "text" as const, value: secret } }),
+            ...(owner === "" ? {} : { INBOX_OWNER_EMAIL: { type: "text" as const, value: owner } }),
+            ACCESS_TEAM_DOMAIN: { type: "text" as const, value: ACCESS_TEAM_DOMAIN },
+            ACCESS_AUD: { type: "text" as const, value: ACCESS_AUD },
+            INBOX_SYNC_CLIENT_ID: { type: "text" as const, value: INBOX_SYNC_CLIENT_ID },
           },
         },
         dev: { outboundService: { type: "fetcher", handler: outbound } },
@@ -127,6 +247,7 @@ export async function startHarness(options: { secret?: string } = {}): Promise<H
     },
     db,
     outboundHosts,
+    access,
     async reset() {
       const database = await db();
       await database.batch(["inbox", "talk_days", "talk_senders"].map((table) => database.prepare(`DELETE FROM ${table}`)));

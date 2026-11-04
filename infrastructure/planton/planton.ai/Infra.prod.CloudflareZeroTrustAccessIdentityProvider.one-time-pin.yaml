@@ -1,0 +1,20 @@
+# The inbox's sign-in method: Cloudflare emails a one-time code to the address typed on the sign-in page, and
+# only an address the inbox's policy names is sent one. It needs no app at Google or anywhere else.
+#
+# A one-time PIN provider is one per account: Cloudflare refuses a second with 409. The account had none when
+# this was first applied (2026-11-04; its only provider was Cloudflare's own dashboard sign-in), so this
+# created it; if it is ever recreated by hand, adopt it instead of applying a second.
+#
+#   planton apply -f Infra.prod.CloudflareZeroTrustAccessIdentityProvider.one-time-pin.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareZeroTrustAccessIdentityProvider
+metadata:
+  name: one-time-pin # permanent
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  accountId: $var/cloudflare-whysosuresh-account-id
+  name: Email code
+  type: onetimepin # immutable at Cloudflare: changing it replaces the provider
