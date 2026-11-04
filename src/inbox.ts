@@ -5,9 +5,10 @@
 //   POST /inbox/api/items/<id>   {"action": ...}                        owner only
 //
 // A list answers one tab, newest first, 50 at a time, with a cursor for the rest and every tab's count, so a
-// page stays the same size however many notes arrive. A change names one move the inbox allows, and the
-// server holds the rules: each is one UPDATE that matches only the statuses the move starts from, so two
-// open tabs can't both win, and a refused move says 409 rather than guess. Nothing personal is logged: a
+// page stays the same size however many notes arrive. A change names one move the inbox allows (`act`,
+// `discuss`, `unsort`, `done`, `drop`, `reopen`, `topic`, `reply-opened`), and the server holds the rules:
+// each is one UPDATE that matches only the statuses the move starts from, so two open tabs can't both win,
+// and a refused move says 409 rather than guess. Every move the page can undo has a move that reverses it. Nothing personal is logged: a
 // refusal's line holds its status and reason only.
 
 import { isTopic } from "../site/talk-topics.js";
@@ -156,12 +157,17 @@ function readMove(value: unknown, now: string): Move | null {
     }
     case "reopen":
       if (keys !== "action") return null;
-      // Done goes back to where its kind puts it; Dropped goes back to To look at, without its reason.
+      // A closed note goes back to where its kind puts it (To act on, To discuss), or to To look at when it
+      // was never sorted; a dropped one loses its reason. This is also how the page undoes Done and Drop.
       return {
         from: ["done", "dropped"],
-        set: "status = CASE WHEN status = 'dropped' OR kind IS NULL THEN 'received' WHEN kind = 'feedback' THEN 'act' ELSE 'discuss' END, drop_reason = NULL",
+        set: "status = CASE WHEN kind = 'feedback' THEN 'act' WHEN kind = 'idea' THEN 'discuss' ELSE 'received' END, drop_reason = NULL",
         values: [],
       };
+    case "unsort":
+      if (keys !== "action") return null;
+      // Back to To look at, unsorted: how the page undoes Act on it and Talk it through.
+      return { from: ["act", "discuss"], set: "status = 'received', kind = NULL", values: [] };
     case "topic":
       if (keys !== "action,topic" || typeof change.topic !== "string" || !isTopic(change.topic)) return null;
       return { from: [...open, "done", "dropped"], set: "topic = ?2", values: [change.topic] };
