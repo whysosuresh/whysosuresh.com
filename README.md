@@ -9,7 +9,7 @@ The source of [whysosuresh.com](https://whysosuresh.com), Suresh's home page: wh
 - `wrangler.jsonc` describes the Cloudflare Worker `whysosuresh-com`: its files, its code, its one route (`whysosuresh.com`) and its binding to the database.
 - `test/site.test.ts` checks the site: the files served, valid HTML, links, outside resources, the headers, and unused CSS. `test/talk.test.ts` runs the Worker's bundle in Cloudflare's runtime, through Miniflare, with a local database.
 - `.github/workflows/site.yaml` runs the checks on every pull request and on `main`. On `main` it also applies new migrations and deploys, with a key that can deploy Workers and edit the database, and nothing in DNS.
-- `infrastructure/` declares the rest: the zone, its records, the `www` redirect, the zone's settings, the database, the recordings' bucket and the bot check, applied by Planton.
+- `infrastructure/` declares the rest: the zone, its records, the `www` redirect, the zone's settings, the database and the bot check, applied by Planton.
 
 ## Working on it
 

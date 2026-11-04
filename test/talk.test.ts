@@ -3,8 +3,8 @@
 // the note's bounds (4,000 code units, Telugu at the byte bound, no blank note, no control character, no
 // lone surrogate); the wire's shape (JSON only, exactly five string keys, 16 KiB); the bot check; both daily
 // limits, under concurrency and for IPv6 networks; the refusals for no length, no secret, another origin
-// and other routes; that no address is kept and old days are dropped; that the recordings' old rows are
-// left alone; and that the Worker reaches nothing but Turnstile.
+// and other routes; that no address is kept and old days are dropped; and that the Worker reaches nothing
+// but Turnstile.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SITE, TEST_SECRET, TURNSTILE_HOST, startHarness, type Harness } from "./harness.ts";
@@ -292,7 +292,7 @@ describe("privacy", () => {
     const tables = (
       await database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'").all<{ name: string }>()
     ).results.map((t) => t.name);
-    expect(tables.sort()).toEqual(["inbox", "inputs", "talk_days", "talk_senders"]);
+    expect(tables.sort()).toEqual(["inbox", "talk_days", "talk_senders"]);
     const everything = JSON.stringify(await Promise.all(tables.map((table) => rows(table))));
     for (const needle of ["203.0.113.77", "2001:db8:aa:bb", "2001:0db8:00aa:00bb"]) expect(everything).not.toContain(needle);
   });
@@ -306,21 +306,6 @@ describe("privacy", () => {
     expect((await send()).status).toBe(201);
     expect((await rows("talk_days")).map((r) => r.day)).toEqual([new Date().toISOString().slice(0, 10)]);
     expect((await rows("talk_senders")).map((r) => r.sender)).not.toContain("old");
-  });
-});
-
-describe("the recordings' old rows", () => {
-  it("are left as they were by a new note", async () => {
-    const database = await harness.db();
-    await database
-      .prepare(
-        "INSERT INTO inputs (id, received_at, source, name, email, audio_key, audio_type, audio_bytes, duration_s, status) VALUES ('old', '2026-11-04T00:00:00.000Z', 'talk', NULL, NULL, 'talk/old', 'audio/webm', 2048, 3, 'received')",
-      )
-      .run();
-    expect((await send()).status).toBe(201);
-    expect(await rows("inputs")).toEqual([
-      expect.objectContaining({ id: "old", audio_key: "talk/old", audio_bytes: 2048, duration_s: 3 }),
-    ]);
   });
 });
 
