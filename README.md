@@ -29,7 +29,7 @@ deploy/node_modules/.bin/wrangler d1 migrations apply whysosuresh-com --local --
 npm run dev
 ```
 
-Then open `http://localhost:8787/#talk`, or `#talk/stigmer` for one topic. No button opens the note flow yet; it appears once the inbox is live. Locally, `/inbox/` loads but every call it makes is refused: nothing signs for Access there, and the Worker admits no request Access didn't sign. The inbox's tests are where its calls run.
+Then press "Send a note" on `http://localhost:8787/`, or open `#talk/stigmer` for one topic. Locally, `/inbox/` loads but every call it makes is refused: nothing signs for Access there, and the Worker admits no request Access didn't sign. The inbox's tests are where its calls run.
 
 `AGENTS.md` lists the rules for changes.
 
