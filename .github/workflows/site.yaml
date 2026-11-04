@@ -5,7 +5,7 @@
 # `production`, which only main may use. The key can deploy Workers and their routes, read zones and
 # edit the account's D1 databases, and nothing in DNS. The deploy job checks out only what the deploy
 # reads and installs only the wrangler pinned in deploy/, so none of the check tools runs beside the key.
-# The zone, its records, its redirect, the database, the bucket and the bot check are Planton's
+# The zone, its records, its redirect, the database and the bot check are Planton's
 # (infrastructure/), not this workflow's.
 
 name: site

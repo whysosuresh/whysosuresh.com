@@ -7,9 +7,9 @@ What the Cloudflare dashboard holds for whysosuresh.com that Planton cannot crea
 - Name `whysosuresh`, id `2f1cb3191775e02873cf13bb57e9e67f` (Account home, right column; recorded as `Config.Org.Variable.cloudflare-whysosuresh-account-id`). Free plan.
 - Held by the owner's own Cloudflare login. It already existed on 2026-11-03 and was empty then: no zones, no Workers, no Pages projects.
 
-## R2, turned on in the account
+## R2
 
-R2 is off in a new account, and Planton can't create a bucket until it is on. It is turned on once, in the dashboard under R2 Object Storage (`../../planton/planton.ai/README.md` row 15). The site's one bucket, `whysosuresh-com-recordings`, is Planton's.
+R2 was turned on in the account on 2026-11-04 for the site's recordings (with a card, which stays on the account) and retired on 2026-11-04, when the site stopped taking voice; its one bucket is gone (`../../planton/planton.ai/README.md` rows 15 and 17).
 
 ## The bot check's secret
 

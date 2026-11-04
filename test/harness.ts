@@ -129,7 +129,7 @@ export async function startHarness(options: { secret?: string } = {}): Promise<H
     outboundHosts,
     async reset() {
       const database = await db();
-      await database.batch(["inbox", "inputs", "talk_days", "talk_senders"].map((table) => database.prepare(`DELETE FROM ${table}`)));
+      await database.batch(["inbox", "talk_days", "talk_senders"].map((table) => database.prepare(`DELETE FROM ${table}`)));
       outboundHosts.clear();
     },
     dispose: () => mf.dispose(),
