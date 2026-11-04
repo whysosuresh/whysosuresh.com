@@ -7,6 +7,11 @@
 // shows at once and is saved behind it; one the server refuses is put back, and the page says so. Reply drafts
 // an email inside the note and opens it in Gmail, as the address he signed in with, for him to send.
 //
+// Beside the site's notes it shows what the recorder sync adds: things told to him in person ("told to you by
+// <name>"), his own work and ideas ("yours", as "You"), each with a title, and items moved from a GitHub issue
+// with a link back to it. A note the sync filed as an issue sits in Done as Filed, with a link to the issue;
+// Done closes it once the issue is, and Reply then opens for its sender as for any feedback.
+//
 // Laptop: three columns (queues, list, note), every move on a key (`?` lists them). Phone: one note fills the
 // screen with the moves under the thumb and the queues along the bottom. The data sits behind inbox-store.js.
 
@@ -39,6 +44,15 @@ const REASONS = [
 /** Gmail's compose window; the link names the signed-in account so no other account sends. */
 const GMAIL = 'https://mail.google.com/mail/';
 
+/** Where filed issues and moved items live; a link to one is built from this, so it names no other site. */
+const GITHUB = 'https://github.com/';
+
+/** A moved item's origin, `github:<owner>/<repo>#<n>`. */
+const GITHUB_REF = /^github:([\w.-]+\/[\w.-]+)#(\d+)$/;
+
+/** A filed item's issue address, as the server checks it. */
+const ISSUE = /^https:\/\/github\.com\/[\w.-]+\/([\w.-]+)\/issues\/(\d+)$/;
+
 /** The booking page an idea's reply offers. */
 const BOOKING = 'https://cal.com/whysosuresh';
 
@@ -57,7 +71,7 @@ const PHONE = window.matchMedia('(max-width: 899px)');
 /** @param {Status} status @returns {Tab} */
 function tabOf(status) {
   if (status === 'received') return 'look';
-  if (status === 'dropped') return 'done';
+  if (status === 'dropped' || status === 'filed') return 'done';
   return status;
 }
 
@@ -123,12 +137,80 @@ function topicLabel(slug) {
 
 /** @param {Item} item */
 function who(item) {
+  if (item.source === 'self') return 'You';
   return item.name?.trim() || 'Someone';
 }
 
 /** @param {Item} item */
 function initial(item) {
-  return (item.name?.trim().charAt(0) || '?').toUpperCase();
+  return (who(item) === 'Someone' ? '?' : who(item).charAt(0)).toUpperCase();
+}
+
+/**
+ * The round initial beside a name; his own items show it filled, so "You" stands apart from other people.
+ * @param {Item} item
+ * @param {boolean} large
+ */
+function avatar(item, large) {
+  const mine = item.source === 'self';
+  const classes = large ? (mine ? { class: 'avatar avatar-large avatar-self' } : { class: 'avatar avatar-large' }) : mine ? { class: 'avatar avatar-self' } : { class: 'avatar' };
+  return el('span', { ...classes, 'aria-hidden': 'true' }, [initial(item)]);
+}
+
+/** Where an item came from, as the note's header says it. @param {Item} item */
+function sourceLabel(item) {
+  if (item.source === 'self') return 'yours';
+  if (item.source === 'told') return `told to you by ${item.name?.trim() || 'someone'}`;
+  return 'from the site';
+}
+
+/** The line under the name: how to reach them, or why there's no reply. @param {Item} item */
+function contact(item) {
+  if (item.source === 'self') return item.kind === 'idea' ? 'Your own idea' : 'Your own work';
+  if (item.source === 'told') return 'Told to you in person, so no reply here';
+  return item.email || 'No email left, so no reply';
+}
+
+/** The row's badge beside the topic. @param {Item} item */
+function badge(item) {
+  if (item.status === 'filed') return 'filed';
+  if (item.source === 'told') return 'told to you';
+  if (item.source === 'self') return 'yours';
+  return 'site';
+}
+
+/** What a kind is called: his own items are things to do, not feedback. @param {Item} item */
+function kindWord(item) {
+  if (item.kind === 'idea') return 'idea';
+  return item.source === 'self' ? 'to do' : 'feedback';
+}
+
+/**
+ * A GitHub issue as a link and its short name (`<repo>#<n>`), or null when the address isn't one.
+ * @param {string | null} address
+ * @returns {{ href: string, name: string } | null}
+ */
+function issueOf(address) {
+  const match = address === null ? null : ISSUE.exec(address);
+  return match ? { href: `${GITHUB}${address?.slice(GITHUB.length)}`, name: `${match[1]}#${match[2]}` } : null;
+}
+
+/** The issue a moved item came from, or null. @param {Item} item */
+function fromOf(item) {
+  const match = item.ref === null ? null : GITHUB_REF.exec(item.ref);
+  if (!match) return null;
+  return issueOf(`${GITHUB}${match[1]}/issues/${match[2]}`);
+}
+
+/**
+ * A link to an issue that opens in a new tab: a quiet text link under a title, or a button among the moves.
+ * @param {{ href: string, name: string }} issue
+ * @param {string} label
+ * @param {boolean} asButton
+ */
+function outLink(issue, label, asButton) {
+  const look = asButton ? { class: 'act-button' } : { class: 'note-link' };
+  return el('a', { ...look, href: issue.href, target: '_blank', rel: 'noopener' }, [label, ' ↗']);
 }
 
 /** @param {string} text */
@@ -195,7 +277,7 @@ function predict(item, action) {
     case 'drop':
       return { ...item, status: 'dropped', dropReason: action.reason === '' ? null : action.reason };
     case 'reopen':
-      return { ...item, status: item.kind === 'feedback' ? 'act' : item.kind === 'idea' ? 'discuss' : 'received', dropReason: null };
+      return { ...item, status: item.filedLink ? 'filed' : item.kind === 'feedback' ? 'act' : item.kind === 'idea' ? 'discuss' : 'received', dropReason: null };
     case 'topic':
       return { ...item, topic: action.topic };
     case 'reply-opened':
@@ -232,11 +314,13 @@ function inverse(before, action) {
 function stateLabel(item) {
   switch (item.status) {
     case 'act':
-      return 'Feedback';
+      return item.source === 'self' ? 'To do' : 'Feedback';
     case 'discuss':
       return 'Idea';
+    case 'filed':
+      return 'Filed';
     case 'done':
-      return item.kind === 'idea' ? 'Done · idea' : 'Done · feedback';
+      return `Done · ${item.filedLink ? 'filed' : kindWord(item)}`;
     case 'dropped':
       return item.dropReason ? `Dropped: ${item.dropReason}` : 'Dropped';
     default:
@@ -549,7 +633,7 @@ class Inbox {
         if (open) this.setMode('drop');
       },
       e: () => {
-        if (status === 'act' || status === 'discuss') void this.move({ action: 'done' }, 'Done');
+        if (status === 'act' || status === 'discuss' || status === 'filed') void this.move({ action: 'done' }, 'Done');
       },
       r: () => {
         if (item && canReply(item)) this.setMode('reply');
@@ -608,10 +692,10 @@ class Inbox {
     this.rows.replaceChildren(
       ...this.items.map((item) => {
         const row = el('button', { type: 'button', class: 'row' }, [
-          el('span', { class: 'avatar', 'aria-hidden': 'true' }, [initial(item)]),
+          avatar(item, false),
           el('span', { class: 'row-who' }, [who(item)]),
           el('span', { class: 'row-time' }, [when(item.receivedAt)]),
-          el('span', { class: 'row-preview' }, [el('span', { class: 'row-topic' }, [topicLabel(item.topic)]), ' · ', item.body]),
+          el('span', { class: 'row-preview' }, [el('span', { class: 'row-topic' }, [`${topicLabel(item.topic)} · ${badge(item)}`]), ' · ', item.title ?? item.body]),
         ]);
         if (item.status === 'received') row.dataset.unread = '';
         if (item.id === this.sel) row.setAttribute('aria-current', 'true');
@@ -647,15 +731,19 @@ class Inbox {
 
     const head = el('header', { class: 'note-head' }, [
       el('div', { class: 'note-who' }, [
-        el('span', { class: 'avatar avatar-large', 'aria-hidden': 'true' }, [initial(item)]),
-        el('div', {}, [el('p', { class: 'note-name' }, [who(item)]), el('p', { class: 'fine' }, [item.email || 'No email left, so no reply'])]),
+        avatar(item, true),
+        el('div', {}, [el('p', { class: 'note-name' }, [who(item)]), el('p', { class: 'fine' }, [contact(item)])]),
       ]),
-      el('div', { class: 'note-meta' }, [el('p', { class: 'fine' }, [`${when(item.receivedAt)} · ${item.source === 'talk' ? 'from the site' : 'told to you'}`]), tags]),
+      el('div', { class: 'note-meta' }, [el('p', { class: 'fine' }, [`${when(item.receivedAt)} · ${sourceLabel(item)}`]), tags]),
     ]);
 
     const text = el('p', { class: 'note-text', dir: 'auto' }, [item.body]);
     if (TELUGU.test(item.body)) text.setAttribute('lang', 'te');
-    const body = el('div', { class: 'note-body' }, [text]);
+    const body = el('div', { class: 'note-body' });
+    if (item.title) body.append(el('h2', { class: 'note-title', dir: 'auto' }, [item.title]));
+    const from = fromOf(item);
+    if (from) body.append(el('p', { class: 'note-from' }, [outLink(from, `From ${from.name}`, false)]));
+    body.append(text);
     if (this.mode === 'reply' && canReply(item)) body.append(this.reply(item));
 
     const parts = [back, head];
@@ -719,10 +807,16 @@ class Inbox {
       const switchTo = el('button', { type: 'button', class: 'act-button act-quiet' }, [status === 'act' ? "It's an idea" : 'It needs action']);
       switchTo.addEventListener('click', () => void this.move({ action: other }, `Moved to ${TAB_NAMES[other]}`));
       row.append(switchTo);
+    } else if (status === 'filed') {
+      row.append(keyed('Done', 'E', 'act-button act-primary', () => void this.move({ action: 'done' }, 'Done')));
+      const issue = issueOf(item.filedLink);
+      if (issue) row.append(outLink(issue, `Open ${issue.name}`, true));
+      bar.append(el('p', { class: 'fine note-hint' }, ['Filed as an issue. When it closes, the sync offers to mark it Done, and Reply opens for them.']));
     } else {
       if (canReply(item)) row.append(keyed('Reply', 'R', 'act-button act-primary', () => this.setMode('reply')));
       row.append(keyed('Reopen', 'U', 'act-button', () => void this.move({ action: 'reopen' }, 'Reopened')));
-      bar.append(el('p', { class: 'fine note-hint' }, [item.kind ? 'Reopen puts it back where it was.' : 'Reopen puts it back in To look at.']));
+      const hint = item.filedLink && item.status === 'done' ? 'Reopen puts it back as Filed.' : item.kind ? 'Reopen puts it back where it was.' : 'Reopen puts it back in To look at.';
+      bar.append(el('p', { class: 'fine note-hint' }, [hint]));
     }
     return bar;
   }
