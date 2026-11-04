@@ -2,7 +2,7 @@
 <!-- whysosuresh.com's home page: his photo large beside a short greeting and the ways to reach him,
      then his latest videos, the things he makes and where else to find him. System type and
      black-and-white greys, so it matches capsjump.com and loads no web font. Its one script is the
-     note flow, which opens at /#talk or /#talk/<topic>; no button opens it yet. -->
+     note flow, opened by "Send a note" and at /#talk or /#talk/<topic>. -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -38,8 +38,11 @@
       <div class="letter-text">
         <h1 id="hello">Hi, I'm Suresh.</h1>
         <p class="lede">Building Stigmer, the open-source backend for the agents in your product. Made CapsJump because I kept opening the wrong Chrome account.</p>
-        <!-- "Send a note" joins these doors once its inbox exists; until then /#talk is the way in. -->
         <ul class="doors">
+          <li>
+            <button type="button" class="talk-button" data-talk>Send a note</button>
+            <p class="fine">Type what's on your mind. I read every one, and write back if you leave your email.</p>
+          </li>
           <li>
             <a class="ghost-button" href="https://cal.com/whysosuresh">Book a call</a>
             <p class="fine">30 minutes, live. Best for talking something through.</p>

@@ -1,11 +1,11 @@
-// The site's checks: what is served, that every page is valid HTML with the head a shared link needs,
-// that every internal link reaches a file without a redirect, that nothing loads from elsewhere but
-// the allowed player and the scripts' allowed resources, that the headers match the pages and the
-// scripts, that the stylesheet carries no dead rules, that nothing opens the note flow yet, that the
-// topic list the Worker shares is plain data and reads page addresses right, that the private inbox's
-// page is never indexed or shared, that no file names the owner's email address, and that the Worker's
-// config routes the one domain to the code only under /api/ and /inbox/api/. `wrangler deploy --dry-run`
-// does not read site/_headers, so this file parses it. The Worker itself is test/talk.test.ts's and
+// The site's checks: what is served, that every page is valid HTML with the head a shared link needs, that
+// every internal link reaches a file without a redirect, that nothing loads from elsewhere but the allowed
+// player and the scripts' allowed resources, that the headers match the pages and the scripts, that the
+// stylesheet carries no dead rules, that the "Send a note" doors open the note flow, that the topic list
+// the Worker shares is plain data and reads page addresses right, that the private inbox's page is never
+// indexed or shared, that no file names the owner's email address, and that the Worker's config routes the
+// one domain to the code only under /api/ and /inbox/api/. `wrangler deploy --dry-run` does not read
+// site/_headers, so this file parses it. The Worker itself is test/talk.test.ts's and
 // test/inbox.test.ts's.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -236,8 +236,19 @@ describe.each(scripts)("%s", (script) => {
 });
 
 describe("the note flow", () => {
-  it("is opened by no element yet: only /#talk reaches it until its inbox exists", async () => {
-    for (const page of pages) expect((await parse(page)).querySelectorAll("[data-talk]")).toEqual([]);
+  it.each(["index.html", "feedback.html"])("is opened by the \"Send a note\" door on %s, first among its doors", async (page) => {
+    const doc = await parse(page);
+    const doors = doc.querySelectorAll(".doors > li > :first-child");
+    expect(doors[0]?.hasAttribute("data-talk")).toBe(true);
+    expect(doors[0]?.tagName.toLowerCase()).toBe("button");
+    expect(doors[0]?.textContent.trim()).toBe("Send a note");
+    expect(doc.querySelectorAll("[data-talk]")).toHaveLength(1);
+  });
+
+  it("is opened by no other page", async () => {
+    for (const page of pages.filter((p) => !["index.html", "feedback.html"].includes(p))) {
+      expect((await parse(page)).querySelectorAll("[data-talk]")).toEqual([]);
+    }
   });
 
   it.each(["index.html", "feedback.html"])("is loaded by %s", async (page) => {
