@@ -135,7 +135,7 @@ describe("move", () => {
     [["drop"], { action: "drop", reason: "" }],
     [["drop", "--reason", "not for now"], { action: "drop", reason: "not for now" }],
     [["topic", "--topic", "videos"], { action: "topic", topic: "videos" }],
-    [["file", "--link", "https://github.com/stigmer/stigmer-cloud/issues/1"], { action: "file", link: "https://github.com/stigmer/stigmer-cloud/issues/1" }],
+    [["file", "--link", "https://github.com/example/notes/issues/1"], { action: "file", link: "https://github.com/example/notes/issues/1" }],
   ])("%j sends %j and prints the item", async (args, change) => {
     const { io, sent, out } = client([{ status: 200, body: { item: ITEM } }]);
     expect(await run(["move", ITEM.id, ...args], io)).toBe(0);

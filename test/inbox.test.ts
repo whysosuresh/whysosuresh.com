@@ -136,7 +136,7 @@ describe("a list", () => {
     const discuss = await seed({ status: "discuss", kind: "idea" });
     const done = await seed({ status: "done", kind: "feedback" });
     const dropped = await seed({ status: "dropped", drop_reason: "junk" });
-    const filed = await seed({ status: "filed", kind: "feedback", filed_link: "https://github.com/stigmer/stigmer-cloud/issues/1" });
+    const filed = await seed({ status: "filed", kind: "feedback", filed_link: "https://github.com/example/notes/issues/1" });
 
     const expected: Record<string, string[]> = {
       look: [look[1]?.id ?? "", look[0]?.id ?? ""],
@@ -511,7 +511,7 @@ describe("a move", () => {
 
 describe("a move by the sync", () => {
   const sync = (): Claims => harness.access.syncClaims();
-  const link = "https://github.com/stigmer/stigmer-cloud/issues/1539";
+  const link = "https://github.com/example/notes/issues/42";
 
   it.each(["received", "act", "discuss"])("file from %s makes it Filed, with its link, as something to act on", async (status) => {
     const row = await seed({ status, kind: status === "discuss" ? "idea" : status === "act" ? "feedback" : null });
@@ -556,10 +556,10 @@ describe("a move by the sync", () => {
 
   it.each([
     ["no link", { action: "file" }],
-    ["a link that isn't text", { action: "file", link: 1539 }],
-    ["a link to another site", { action: "file", link: "https://example.com/stigmer/stigmer-cloud/issues/1" }],
-    ["a link to a pull request", { action: "file", link: "https://github.com/stigmer/stigmer-cloud/pull/1" }],
-    ["a link over http", { action: "file", link: "http://github.com/stigmer/stigmer-cloud/issues/1" }],
+    ["a link that isn't text", { action: "file", link: 42 }],
+    ["a link to another site", { action: "file", link: "https://example.com/example/notes/issues/1" }],
+    ["a link to a pull request", { action: "file", link: "https://github.com/example/notes/pull/1" }],
+    ["a link over http", { action: "file", link: "http://github.com/example/notes/issues/1" }],
     ["a link with more after it", { action: "file", link: `${link}#issuecomment-1` }],
     ["an extra key", { action: "file", link, reason: "x" }],
   ])("file with %s is refused with 400", async (_, body) => {
@@ -598,8 +598,8 @@ describe("the stamp", () => {
 
 describe("an add", () => {
   const sync = (): Claims => harness.access.syncClaims();
-  const self = { ref: "chat:2026-11-04-an-idea", source: "self", title: "A Stigmer plugin for coding agents", body: "Install once, every agent gets it.", topic: "stigmer", status: "discuss" };
-  const told = { ref: "recorder:260104_0001:2", source: "told", title: "Try these thumbnail sites", body: "He said they cost less.", topic: "videos", name: "Ishad", status: "received" };
+  const self = { ref: "chat:2026-11-04-a-plugin", source: "self", title: "A plugin for coding agents", body: "Install once, every agent gets it.", topic: "stigmer", status: "discuss" };
+  const told = { ref: "recorder:260104_0001:2", source: "told", title: "Try these thumbnail sites", body: "He said they cost less.", topic: "videos", name: "Dev", status: "received" };
 
   async function addItem(body: unknown, ask: Post = {}): Promise<Response> {
     const headers: Record<string, string> = { "Content-Type": ask.contentType ?? "application/json", ...assertion({ claims: sync(), ...ask }, harness) };
@@ -640,7 +640,7 @@ describe("an add", () => {
 
   it("keeps a thing told to him with the teller's name, and no topic when it has none", async () => {
     expect((await addItem({ ...told, topic: null })).status).toBe(201);
-    expect(await byRef(told.ref)).toMatchObject([{ source: "told", name: "Ishad", topic: null, status: "received", kind: null, email: null }]);
+    expect(await byRef(told.ref)).toMatchObject([{ source: "told", name: "Dev", topic: null, status: "received", kind: null, email: null }]);
     expect((await addItem({ ...told, ref: "recorder:260104_0001:3", status: "act" })).status).toBe(201);
     expect(await byRef("recorder:260104_0001:3")).toMatchObject([{ status: "act", kind: "feedback" }]);
   });
@@ -676,7 +676,7 @@ describe("an add", () => {
     ["a missing key", { ...self, topic: undefined }, "keys"],
     ["a name on his own item", { ...self, name: "Suresh" }, "keys"],
     ["a told item with no name", { ...told, name: undefined }, "keys"],
-    ["a ref with no kind", { ...self, ref: "1539" }, "ref"],
+    ["a ref with no kind", { ...self, ref: "42" }, "ref"],
     ["a ref with a space", { ...self, ref: "chat:an idea" }, "ref"],
     ["a ref over 200", { ...self, ref: `chat:${"x".repeat(191)}` }, "ref"],
     ["an empty title", { ...self, title: "  " }, "title"],
