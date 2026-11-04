@@ -20,7 +20,7 @@
  */
 
 /** The production widget's public key; it works only on whysosuresh.com. */
-const SITE_KEY = '';
+const SITE_KEY = '0x4AAAAAAFy5WgjeTVHRB3R9';
 
 /** Cloudflare's public test key for an invisible widget that always passes, for runs on this machine. */
 const TEST_SITE_KEY = '1x00000000000000000000BB';
