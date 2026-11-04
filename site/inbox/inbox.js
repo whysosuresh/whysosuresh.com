@@ -1,11 +1,14 @@
 // @ts-check
-// The inbox: the notes people sent Suresh, newest first, in four tabs (To look at, To act on, To discuss,
-// Done). A card shows who wrote (if they said), when, the topic they picked (correctable in one click) and
-// what they typed. A new note is sorted by his one click: Act on it (feedback, something he made should
-// change) or Talk it through (an idea, a conversation rather than a to-do); Drop is for junk, with an
-// optional reason. Done closes a note, and Reopen undoes Done or Drop. Reply opens a drafted email in Gmail's
-// compose window, as the address he signed in with, for him to edit and send: an idea's reply is offered at
-// once, a feedback reply once the note is done. The data sits behind inbox-store.js.
+// The inbox: the notes people sent Suresh, in four queues (To look at, To act on, To discuss, Done). It is
+// built for sorting, one note at a time: the newest note is open when the page loads, one key or tap sorts it
+// (Act on it: feedback, something he made should change; Talk it through: an idea, a conversation; Drop, with
+// a reason picked by one more key), and the next note opens by itself until "All sorted". No move asks "are
+// you sure": each one shows a toast for a few seconds with Undo, which sends the move that reverses it. A move
+// shows at once and is saved behind it; one the server refuses is put back, and the page says so. Reply drafts
+// an email inside the note and opens it in Gmail, as the address he signed in with, for him to send.
+//
+// Laptop: three columns (queues, list, note), every move on a key (`?` lists them). Phone: one note fills the
+// screen with the moves under the thumb and the queues along the bottom. The data sits behind inbox-store.js.
 
 import { TOPICS } from '../talk-topics.js';
 import { Failed, SignedOut, change, list } from './inbox-store.js';
@@ -16,10 +19,22 @@ import { Failed, SignedOut, change, list } from './inbox-store.js';
  * @typedef {import('./inbox-store.js').Status} Status
  * @typedef {import('./inbox-store.js').Action} Action
  * @typedef {{ to: string, subject: string, body: string }} Draft
+ * @typedef {{ tab: Tab, items: Item[], counts: Record<Tab, number>, sel: string | null }} Snapshot
  */
+
+/** @type {readonly Tab[]} */
+const TABS = ['look', 'act', 'discuss', 'done'];
 
 /** @type {Record<Tab, string>} */
 const TAB_NAMES = { look: 'To look at', act: 'To act on', discuss: 'To discuss', done: 'Done' };
+
+/** The reasons Drop offers, in the order their keys (1 to 4) pick them. */
+const REASONS = [
+  { label: 'Junk', reason: 'Junk' },
+  { label: 'A test', reason: 'A test' },
+  { label: 'Said twice', reason: 'Said twice' },
+  { label: 'No reason', reason: '' },
+];
 
 /** Gmail's compose window; the link names the signed-in account so no other account sends. */
 const GMAIL = 'https://mail.google.com/mail/';
@@ -29,6 +44,15 @@ const BOOKING = 'https://cal.com/whysosuresh';
 
 /** How much of a note a reply quotes. */
 const QUOTE = 400;
+
+/** How long a toast, and so its Undo, stays. */
+const TOAST_MS = 6000;
+
+/** Telugu script, so a note in it gets the taller line its letters need. */
+const TELUGU = /[ఀ-౿]/;
+
+/** Below this width the page is the phone layout: one pane at a time. */
+const PHONE = window.matchMedia('(max-width: 899px)');
 
 /** @param {Status} status @returns {Tab} */
 function tabOf(status) {
@@ -63,6 +87,19 @@ function el(tag, attrs = {}, children = []) {
   return node;
 }
 
+/**
+ * A button with its shortcut shown beside the label.
+ * @param {string} label
+ * @param {string} key
+ * @param {string} className
+ * @param {() => void} run
+ */
+function keyed(label, key, className, run) {
+  const button = el('button', { type: 'button', class: className }, [label, ' ', el('kbd', {}, [key])]);
+  button.addEventListener('click', run);
+  return button;
+}
+
 /** @param {string} iso */
 function when(iso) {
   const date = new Date(iso);
@@ -74,6 +111,7 @@ function when(iso) {
   const days = Math.round((today.getTime() - day.getTime()) / 86400000);
   if (days === 0) return `Today ${time}`;
   if (days === 1) return `Yesterday ${time}`;
+  if (days < 7) return date.toLocaleDateString([], { weekday: 'short' });
   const sameYear = date.getFullYear() === today.getFullYear();
   return date.toLocaleDateString([], sameYear ? { day: 'numeric', month: 'short' } : { day: 'numeric', month: 'short', year: 'numeric' });
 }
@@ -83,10 +121,27 @@ function topicLabel(slug) {
   return TOPICS.find((topic) => topic.slug === slug)?.label ?? 'No topic';
 }
 
+/** @param {Item} item */
+function who(item) {
+  return item.name?.trim() || 'Someone';
+}
+
+/** @param {Item} item */
+function initial(item) {
+  return (item.name?.trim().charAt(0) || '?').toUpperCase();
+}
+
 /** @param {string} text */
 function quoted(text) {
   const cut = text.length > QUOTE ? `${text.slice(0, QUOTE).trimEnd()}…` : text;
   return cut.split('\n').map((line) => `> ${line}`).join('\n');
+}
+
+/** @param {Item} item */
+function canReply(item) {
+  if (!item.email) return false;
+  if (item.kind === 'idea') return item.status !== 'dropped';
+  return item.kind === 'feedback' && item.status === 'done';
 }
 
 /**
@@ -97,10 +152,11 @@ function quoted(text) {
 function draftReply(item) {
   const first = (item.name ?? '').trim().split(/\s+/)[0] || 'there';
   if (item.kind === 'idea') {
+    const about = item.topic === null || item.topic === 'other' ? '' : ` about ${topicLabel(item.topic)}`;
     return {
       to: item.email ?? '',
       subject: 'Your note',
-      body: `Hi ${first},\n\nThanks for your note about ${topicLabel(item.topic)}:\n\n${quoted(item.body)}\n\nI'd like to talk it through. Book a time that suits you: ${BOOKING}\n\nSuresh`,
+      body: `Hi ${first},\n\nThanks for your note${about}:\n\n${quoted(item.body)}\n\nI'd like to talk it through. Book a time that suits you: ${BOOKING}\n\nSuresh`,
     };
   }
   return {
@@ -120,6 +176,74 @@ function gmailLink(draft, account) {
   return `${GMAIL}?${query.toString()}`;
 }
 
+/**
+ * The note as a move will leave it, shown before the server answers.
+ * @param {Item} item
+ * @param {Action} action
+ * @returns {Item}
+ */
+function predict(item, action) {
+  switch (action.action) {
+    case 'act':
+      return { ...item, status: 'act', kind: 'feedback' };
+    case 'discuss':
+      return { ...item, status: 'discuss', kind: 'idea' };
+    case 'unsort':
+      return { ...item, status: 'received', kind: null };
+    case 'done':
+      return { ...item, status: 'done' };
+    case 'drop':
+      return { ...item, status: 'dropped', dropReason: action.reason === '' ? null : action.reason };
+    case 'reopen':
+      return { ...item, status: item.kind === 'feedback' ? 'act' : item.kind === 'idea' ? 'discuss' : 'received', dropReason: null };
+    case 'topic':
+      return { ...item, topic: action.topic };
+    case 'reply-opened':
+      return { ...item, replyOpenedAt: new Date().toISOString() };
+  }
+}
+
+/**
+ * The move that puts a note back as it was before `action`, or null when there is none.
+ * @param {Item} before
+ * @param {Action} action
+ * @returns {Action | null}
+ */
+function inverse(before, action) {
+  switch (action.action) {
+    case 'act':
+    case 'discuss':
+    case 'unsort':
+      if (before.status === 'received') return { action: 'unsort' };
+      return before.status === 'act' ? { action: 'act' } : { action: 'discuss' };
+    case 'done':
+    case 'drop':
+      return { action: 'reopen' };
+    case 'reopen':
+      return before.status === 'dropped' ? { action: 'drop', reason: before.dropReason ?? '' } : { action: 'done' };
+    case 'topic':
+      return before.topic !== null && TOPICS.some((topic) => topic.slug === before.topic) ? { action: 'topic', topic: before.topic } : null;
+    case 'reply-opened':
+      return null;
+  }
+}
+
+/** @param {Item} item */
+function stateLabel(item) {
+  switch (item.status) {
+    case 'act':
+      return 'Feedback';
+    case 'discuss':
+      return 'Idea';
+    case 'done':
+      return item.kind === 'idea' ? 'Done · idea' : 'Done · feedback';
+    case 'dropped':
+      return item.dropReason ? `Dropped: ${item.dropReason}` : 'Dropped';
+    default:
+      return '';
+  }
+}
+
 class Inbox {
   /** @param {HTMLElement} root */
   constructor(root) {
@@ -134,52 +258,64 @@ class Inbox {
     this.counts = { look: 0, act: 0, discuss: 0, done: 0 };
     /** The signed-in address, which Gmail's link names. */
     this.me = '';
-    /** Bumped on every tab load, so an answer for a tab no longer shown is dropped. */
+    /** @type {string | null} */
+    this.sel = null;
+    /** @type {'read' | 'drop' | 'reply' | 'topic'} */
+    this.mode = 'read';
+    this.loaded = false;
+    /** Bumped on every queue load, so an answer for a queue no longer shown is dropped. */
     this.loading = 0;
+    /** @type {{ undo: (() => Promise<void>) | null } | null} */
+    this.toastState = null;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    this.toastTimer = undefined;
+
     this.tabs = /** @type {HTMLButtonElement[]} */ ([...root.querySelectorAll('[role="tab"]')]);
-    this.panel = find(root, '[role="tabpanel"]', HTMLElement);
-    this.cards = find(root, '[data-cards]', HTMLElement);
+    this.listPane = find(root, '[role="tabpanel"]', HTMLElement);
+    this.listTitle = find(root, '[data-list-title]', HTMLElement);
+    this.listHint = find(root, '[data-list-hint]', HTMLElement);
+    this.rows = find(root, '[data-rows]', HTMLElement);
     this.older = find(root, '[data-older]', HTMLButtonElement);
-    this.problem = find(root, '[data-problem]', HTMLElement);
-    this.live = find(root, '[data-live]', HTMLElement);
-    this.replyDialog = find(document, '[data-reply]', HTMLDialogElement);
-    /** @type {Item | null} */
-    this.replyingTo = null;
+    this.notePane = find(root, '[data-note]', HTMLElement);
+    this.problem = find(document, '[data-problem]', HTMLElement);
+    this.toast = find(document, '[data-toast]', HTMLElement);
+    this.toastText = find(document, '[data-toast-text]', HTMLElement);
+    this.undoButton = find(document, '[data-undo]', HTMLButtonElement);
+    this.keys = find(document, '[data-keys]', HTMLDialogElement);
 
     for (const tab of this.tabs) {
-      tab.addEventListener('click', () => void this.select(/** @type {Tab} */ (tab.dataset.tab), false));
-      tab.addEventListener('keydown', (event) => this.onTabKey(event));
+      tab.addEventListener('click', () => void this.select(/** @type {Tab} */ (tab.dataset.tab)));
     }
     this.older.addEventListener('click', () => void this.loadOlder());
-    this.wireReply();
+    this.undoButton.addEventListener('click', () => void this.undo());
+    find(document, '[data-keys-open]', HTMLButtonElement).addEventListener('click', () => this.keys.showModal());
+    find(document, '[data-keys-close]', HTMLButtonElement).addEventListener('click', () => this.keys.close());
+    document.addEventListener('keydown', (event) => this.onKey(event));
+    PHONE.addEventListener('change', () => this.render());
   }
 
-  /** @param {KeyboardEvent} event */
-  onTabKey(event) {
-    const at = this.tabs.findIndex((tab) => tab.dataset.tab === this.tab);
-    const last = this.tabs.length - 1;
-    /** @type {Record<string, number>} */
-    const moves = { ArrowRight: at === last ? 0 : at + 1, ArrowLeft: at === 0 ? last : at - 1, Home: 0, End: last };
-    const to = moves[event.key];
-    if (to === undefined) return;
-    event.preventDefault();
-    void this.select(/** @type {Tab} */ (this.tabs[to]?.dataset.tab), true);
+  current() {
+    return this.items.find((item) => item.id === this.sel) ?? null;
   }
 
-  /** @param {Tab} tab @param {boolean} focusTab */
-  async select(tab, focusTab) {
+  /** @param {Tab} tab */
+  async select(tab) {
+    if (tab === this.tab && this.loaded) {
+      if (PHONE.matches && tab !== 'look') this.show('list');
+      return;
+    }
     this.tab = tab;
     this.items = [];
     this.next = null;
-    this.cards.setAttribute('aria-busy', 'true');
+    this.sel = null;
+    this.mode = 'read';
+    this.loaded = false;
     this.render();
-    if (focusTab) this.tabs.find((t) => t.dataset.tab === tab)?.focus();
     await this.load();
   }
 
   async load() {
     const ticket = ++this.loading;
-    this.cards.setAttribute('aria-busy', 'true');
     try {
       const page = await list(this.tab, null);
       if (ticket !== this.loading) return;
@@ -187,12 +323,13 @@ class Inbox {
       this.next = page.next;
       this.counts = page.counts;
       this.me = page.me ?? '';
-      this.say('');
+      this.sel = this.items[0]?.id ?? null;
+      this.loaded = true;
+      this.clearProblem();
+      if (PHONE.matches) this.root.dataset.view = this.tab === 'look' ? 'note' : 'list';
       this.render();
     } catch (error) {
       if (ticket === this.loading) this.fail(error, "The inbox didn't load.");
-    } finally {
-      if (ticket === this.loading) this.cards.removeAttribute('aria-busy');
     }
   }
 
@@ -215,6 +352,27 @@ class Inbox {
     }
   }
 
+  /** @param {'list' | 'note'} view */
+  show(view) {
+    this.root.dataset.view = view;
+    if (view === 'note') this.notePane.focus({ preventScroll: true });
+  }
+
+  /** @param {string} id */
+  open(id) {
+    this.sel = id;
+    this.mode = 'read';
+    this.render();
+    if (PHONE.matches) this.show('note');
+  }
+
+  /** @param {number} by */
+  step(by) {
+    const at = this.items.findIndex((item) => item.id === this.sel);
+    const next = this.items[Math.max(0, Math.min(this.items.length - 1, at + by))];
+    if (next) this.open(next.id);
+  }
+
   /**
    * Shows why something failed: an ended sign-in gets a way back in.
    * @param {unknown} error
@@ -222,8 +380,7 @@ class Inbox {
    */
   fail(error, what) {
     if (error instanceof SignedOut) {
-      const again = el('a', { href: '/inbox/' }, ['Sign in again']);
-      this.problem.replaceChildren('Your sign-in ended. ', again);
+      this.problem.replaceChildren('Your sign-in ended. ', el('a', { href: '/inbox/' }, ['Sign in again']));
     } else {
       this.problem.replaceChildren(`${what} Check your connection and try again.`);
       if (!(error instanceof Failed)) console.error(error);
@@ -231,217 +388,379 @@ class Inbox {
     this.problem.hidden = false;
   }
 
-  /** @param {string} text */
-  say(text) {
+  clearProblem() {
     this.problem.hidden = true;
-    this.live.textContent = text;
+  }
+
+  /**
+   * @param {string} text
+   * @param {(() => Promise<void>) | null} undo
+   */
+  say(text, undo) {
+    clearTimeout(this.toastTimer);
+    this.toastState = { undo };
+    this.toastText.textContent = text;
+    this.undoButton.hidden = undo === null;
+    this.toast.hidden = false;
+    this.toastTimer = setTimeout(() => {
+      this.toast.hidden = true;
+      this.toastState = null;
+    }, TOAST_MS);
+  }
+
+  async undo() {
+    const undo = this.toastState?.undo;
+    if (!undo) return;
+    clearTimeout(this.toastTimer);
+    this.toast.hidden = true;
+    this.toastState = null;
+    await undo();
+  }
+
+  /** @returns {Snapshot} */
+  snapshot() {
+    return { tab: this.tab, items: this.items, counts: { ...this.counts }, sel: this.sel };
+  }
+
+  /** @param {Snapshot} snap */
+  restore(snap) {
+    this.items = snap.items;
+    this.counts = snap.counts;
+    this.sel = snap.sel;
+    this.mode = 'read';
+    this.render();
+  }
+
+  /**
+   * Puts `item` as it now is into the list: in place while it stays in this queue, out of it (opening the next
+   * note) when it leaves.
+   * @param {Item} before
+   * @param {Item} after
+   */
+  place(before, after) {
+    const from = tabOf(before.status);
+    const to = tabOf(after.status);
+    if (from !== to) {
+      this.counts[from] = Math.max(0, this.counts[from] - 1);
+      this.counts[to] += 1;
+    }
+    const at = this.items.findIndex((item) => item.id === before.id);
+    if (to === this.tab) {
+      this.items = this.items.map((item) => (item.id === before.id ? after : item));
+      return;
+    }
+    this.items = this.items.filter((item) => item.id !== before.id);
+    if (this.sel === before.id) this.sel = this.items[Math.min(Math.max(at, 0), this.items.length - 1)]?.id ?? null;
+  }
+
+  /**
+   * Makes one move: shown at once, saved behind it, put back if the server refuses, undoable from the toast.
+   * @param {Action} action
+   * @param {string} said
+   */
+  async move(action, said) {
+    const item = this.current();
+    if (!item) return;
+    const snap = this.snapshot();
+    this.mode = 'read';
+    this.place(item, predict(item, action));
+    this.render();
+    /** @type {Item} */
+    let saved;
+    try {
+      saved = await change(item.id, action);
+    } catch (error) {
+      if (this.tab === snap.tab) this.restore(snap);
+      this.fail(error, "That didn't save, so the note is back where it was.");
+      return;
+    }
+    if (tabOf(saved.status) === this.tab) this.items = this.items.map((entry) => (entry.id === saved.id ? saved : entry));
+    this.clearProblem();
+    this.render();
+    const back = inverse(item, action);
+    this.say(said, back === null ? null : () => this.revert(saved, back, snap));
+  }
+
+  /**
+   * Sends the move that undoes the last one, then shows the queue as it was before it.
+   * @param {Item} moved
+   * @param {Action} back
+   * @param {Snapshot} snap
+   */
+  async revert(moved, back, snap) {
+    try {
+      const restored = await change(moved.id, back);
+      if (this.tab === snap.tab) {
+        this.restore({ ...snap, items: snap.items.map((item) => (item.id === restored.id ? restored : item)) });
+        if (PHONE.matches && this.tab === 'look') this.show('note');
+      } else {
+        await this.load();
+      }
+      this.say('Undone', null);
+    } catch (error) {
+      this.fail(error, "The undo didn't save.");
+    }
+  }
+
+  /** @param {KeyboardEvent} event */
+  onKey(event) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (this.keys.open) return;
+    const target = event.target;
+    const typing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+    if (event.key === 'Escape') {
+      if (this.mode !== 'read') {
+        this.mode = 'read';
+        this.render();
+        event.preventDefault();
+      }
+      return;
+    }
+    if (typing) return;
+    const item = this.current();
+    const status = item?.status;
+    const open = status === 'received' || status === 'act' || status === 'discuss';
+    const key = event.key.toLowerCase();
+    if (this.mode === 'drop' && ['1', '2', '3', '4'].includes(key)) {
+      const pick = REASONS[Number(key) - 1];
+      if (pick) void this.move({ action: 'drop', reason: pick.reason }, 'Dropped');
+      event.preventDefault();
+      return;
+    }
+    /** @type {Record<string, () => void>} */
+    const keys = {
+      j: () => this.step(1),
+      arrowdown: () => this.step(1),
+      k: () => this.step(-1),
+      arrowup: () => this.step(-1),
+      1: () => void this.select('look'),
+      2: () => void this.select('act'),
+      3: () => void this.select('discuss'),
+      4: () => void this.select('done'),
+      '?': () => this.keys.showModal(),
+      z: () => void this.undo(),
+      a: () => {
+        if (status === 'received') void this.move({ action: 'act' }, 'Moved to To act on');
+      },
+      t: () => {
+        if (status === 'received') void this.move({ action: 'discuss' }, 'Moved to To discuss');
+      },
+      d: () => {
+        if (open) this.setMode('drop');
+      },
+      e: () => {
+        if (status === 'act' || status === 'discuss') void this.move({ action: 'done' }, 'Done');
+      },
+      r: () => {
+        if (item && canReply(item)) this.setMode('reply');
+      },
+      u: () => {
+        if (status === 'done' || status === 'dropped') void this.move({ action: 'reopen' }, 'Reopened');
+      },
+      c: () => {
+        if (item) this.setMode(this.mode === 'topic' ? 'read' : 'topic');
+      },
+    };
+    const run = keys[key];
+    if (run) {
+      run();
+      event.preventDefault();
+    }
+  }
+
+  /** @param {'read' | 'drop' | 'reply' | 'topic'} mode */
+  setMode(mode) {
+    this.mode = mode;
+    this.render();
+    if (mode === 'reply') {
+      const body = this.notePane.querySelector('#reply-body');
+      if (body instanceof HTMLTextAreaElement) {
+        body.focus();
+        body.setSelectionRange(0, 0);
+      }
+    } else if (mode === 'drop' || mode === 'topic') {
+      this.notePane.querySelector('.note-actions button, .topic-choices button')?.closest('button')?.focus();
+    }
   }
 
   render() {
+    this.renderQueues();
+    this.renderList();
+    this.renderNote();
+  }
+
+  renderQueues() {
     for (const tab of this.tabs) {
       const name = /** @type {Tab} */ (tab.dataset.tab);
       const selected = name === this.tab;
       tab.setAttribute('aria-selected', String(selected));
       tab.tabIndex = selected ? 0 : -1;
-      find(tab, '.tab-count', HTMLElement).textContent = String(this.counts[name]);
-      if (selected) this.panel.setAttribute('aria-labelledby', tab.id);
+      find(tab, '.queue-count', HTMLElement).textContent = String(this.counts[name]);
+      if (selected) this.listPane.setAttribute('aria-labelledby', tab.id);
     }
-    const shown = this.items.filter((item) => tabOf(item.status) === this.tab);
-    this.cards.replaceChildren(...shown.map((item) => this.card(item)));
-    if (!shown.length && !this.cards.hasAttribute('aria-busy')) {
-      this.cards.append(el('li', { class: 'empty' }, [`Nothing in ${TAB_NAMES[this.tab]}.`]));
-    }
+  }
+
+  renderList() {
+    this.listTitle.textContent = TAB_NAMES[this.tab];
+    const total = this.counts[this.tab];
+    this.listHint.textContent = !this.loaded ? '' : this.tab === 'look' ? (total ? `${total} new` : '') : `${total} ${total === 1 ? 'note' : 'notes'}`;
+    this.rows.setAttribute('aria-busy', String(!this.loaded));
+    this.rows.replaceChildren(
+      ...this.items.map((item) => {
+        const row = el('button', { type: 'button', class: 'row' }, [
+          el('span', { class: 'avatar', 'aria-hidden': 'true' }, [initial(item)]),
+          el('span', { class: 'row-who' }, [who(item)]),
+          el('span', { class: 'row-time' }, [when(item.receivedAt)]),
+          el('span', { class: 'row-preview' }, [el('span', { class: 'row-topic' }, [topicLabel(item.topic)]), ' · ', item.body]),
+        ]);
+        if (item.status === 'received') row.dataset.unread = '';
+        if (item.id === this.sel) row.setAttribute('aria-current', 'true');
+        row.addEventListener('click', () => this.open(item.id));
+        return el('li', {}, [row]);
+      }),
+    );
+    if (this.loaded && this.items.length === 0) this.rows.append(el('li', { class: 'rows-empty' }, [`Nothing in ${TAB_NAMES[this.tab]}.`]));
     this.older.hidden = this.next === null;
-    for (const note of this.cards.querySelectorAll('.note')) {
-      const toggle = note.nextElementSibling;
-      if (toggle instanceof HTMLElement && note instanceof HTMLElement) toggle.hidden = note.scrollHeight <= note.clientHeight + 2;
+    this.rows.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
+  }
+
+  renderNote() {
+    const item = this.current();
+    if (!this.loaded) {
+      this.notePane.replaceChildren();
+      return;
     }
+    if (!item) {
+      this.notePane.replaceChildren(this.tab === 'look' ? this.allSorted() : el('p', { class: 'note-empty' }, [`Nothing in ${TAB_NAMES[this.tab]}.`]));
+      return;
+    }
+    const back = el('button', { type: 'button', class: 'back-button' }, ['‹ ', TAB_NAMES[this.tab]]);
+    back.addEventListener('click', () => this.show('list'));
+
+    const topic = el('button', { type: 'button', class: 'topic-pill', 'aria-expanded': String(this.mode === 'topic') }, [topicLabel(item.topic), ' ', el('kbd', {}, ['C'])]);
+    topic.addEventListener('click', () => this.setMode(this.mode === 'topic' ? 'read' : 'topic'));
+    const tags = el('div', { class: 'note-tags' });
+    const state = stateLabel(item);
+    if (state) tags.append(el('span', { class: 'state-tag' }, [state]));
+    if (item.replyOpenedAt) tags.append(el('span', { class: 'state-tag' }, ['Reply opened']));
+    tags.append(topic);
+
+    const head = el('header', { class: 'note-head' }, [
+      el('div', { class: 'note-who' }, [
+        el('span', { class: 'avatar avatar-large', 'aria-hidden': 'true' }, [initial(item)]),
+        el('div', {}, [el('p', { class: 'note-name' }, [who(item)]), el('p', { class: 'fine' }, [item.email || 'No email left, so no reply'])]),
+      ]),
+      el('div', { class: 'note-meta' }, [el('p', { class: 'fine' }, [`${when(item.receivedAt)} · ${item.source === 'talk' ? 'from the site' : 'told to you'}`]), tags]),
+    ]);
+
+    const text = el('p', { class: 'note-text', dir: 'auto' }, [item.body]);
+    if (TELUGU.test(item.body)) text.setAttribute('lang', 'te');
+    const body = el('div', { class: 'note-body' }, [text]);
+    if (this.mode === 'reply' && canReply(item)) body.append(this.reply(item));
+
+    const parts = [back, head];
+    if (this.mode === 'topic') parts.push(this.topics(item));
+    parts.push(body, this.actions(item));
+    this.notePane.replaceChildren(...parts);
+  }
+
+  allSorted() {
+    const act = keyed('To act on', '2', 'act-button', () => void this.select('act'));
+    const discuss = keyed('To discuss', '3', 'act-button', () => void this.select('discuss'));
+    return el('div', { class: 'all-sorted' }, [
+      el('span', { class: 'all-sorted-mark', 'aria-hidden': 'true' }, ['✓']),
+      el('h2', {}, ['All sorted.']),
+      el('p', { class: 'fine' }, [`${this.counts.act} to act on · ${this.counts.discuss} to discuss`]),
+      el('div', { class: 'note-actions-row' }, [act, discuss]),
+    ]);
   }
 
   /** @param {Item} item */
-  card(item) {
-    const name = item.name ?? '';
-    const who = el('div', { class: 'who' }, [name || 'Someone']);
-    if (item.email) who.append(' ', el('span', { class: 'email' }, [item.email]));
-    const where = item.source === 'talk' ? 'From the site' : 'Told to Suresh';
-    const top = el('div', { class: 'card-top' }, [who, el('span', { class: 'when' }, [`${where} · ${when(item.receivedAt)}`])]);
-
-    const chips = el('div', { class: 'chips' }, [this.topicSelect(item)]);
-    if (item.kind) chips.append(el('span', { class: 'tag' }, [item.kind === 'feedback' ? 'Feedback' : 'Idea']));
-    if (item.status === 'dropped') chips.append(el('span', { class: 'tag' }, [item.dropReason ? `Dropped: ${item.dropReason}` : 'Dropped']));
-    if (item.replyOpenedAt) chips.append(el('span', { class: 'tag' }, ['Reply opened']));
-
-    const card = el('article', { class: 'card', 'aria-label': `${name || 'Someone'}, ${topicLabel(item.topic)}` }, [top, chips]);
-    const note = el('p', { class: 'note', dir: 'auto' }, [item.body]);
-    const more = el('button', { type: 'button', class: 'text-button', 'aria-expanded': 'false' }, ['Show all of it']);
-    more.addEventListener('click', () => {
-      const open = !note.hasAttribute('data-open');
-      note.toggleAttribute('data-open', open);
-      more.setAttribute('aria-expanded', String(open));
-      more.textContent = open ? 'Fold it' : 'Show all of it';
-    });
-    card.append(note, more, this.actions(item));
-    return el('li', { 'data-id': item.id }, [card]);
-  }
-
-  /** @param {Item} item */
-  topicSelect(item) {
-    const select = /** @type {HTMLSelectElement} */ (el('select', { class: 'chip-select', 'aria-label': 'Topic' }));
-    if (item.topic === null || !TOPICS.some((topic) => topic.slug === item.topic)) {
-      const none = /** @type {HTMLOptionElement} */ (el('option', { value: '' }, ['No topic']));
-      none.disabled = true;
-      none.selected = true;
-      select.append(none);
-    }
+  topics(item) {
+    const group = el('div', { class: 'topic-choices', role: 'group', 'aria-label': 'Change the topic' });
     for (const topic of TOPICS) {
-      const option = /** @type {HTMLOptionElement} */ (el('option', { value: topic.slug }, [topic.label]));
-      option.selected = topic.slug === item.topic;
-      select.append(option);
+      const pressed = topic.slug === item.topic;
+      const choice = el('button', { type: 'button', class: 'topic-pill', 'aria-pressed': String(pressed) }, [topic.label]);
+      choice.addEventListener('click', () => {
+        if (pressed) this.setMode('read');
+        else void this.move({ action: 'topic', topic: topic.slug }, `Topic set to ${topic.label}`);
+      });
+      group.append(choice);
     }
-    select.addEventListener('change', () => void this.update(item, { action: 'topic', topic: select.value }, `Topic set to ${topicLabel(select.value)}.`));
-    return select;
+    return group;
   }
 
   /** @param {Item} item */
   actions(item) {
-    const row = el('div', { class: 'actions' });
-    /** @param {string} label @param {() => void} run @param {boolean} [primary] */
-    const button = (label, run, primary = false) => {
-      const b = primary ? el('button', { type: 'button', class: 'primary' }, [label]) : el('button', { type: 'button' }, [label]);
-      b.addEventListener('click', run);
-      row.append(b);
-    };
-    const open = item.status === 'received' || item.status === 'act' || item.status === 'discuss';
-    const canReply = Boolean(item.email) && (item.kind === 'idea' ? item.status !== 'dropped' : item.kind === 'feedback' && item.status === 'done');
-
-    if (item.status === 'received') {
-      button('Act on it', () => void this.update(item, { action: 'act' }, 'Moved to To act on.'), true);
-      button('Talk it through', () => void this.update(item, { action: 'discuss' }, 'Moved to To discuss.'), true);
+    const bar = el('footer', { class: 'note-actions' });
+    const row = el('div', { class: 'note-actions-row' });
+    bar.append(row);
+    const status = item.status;
+    if (this.mode === 'drop') {
+      row.append(el('span', { class: 'note-ask' }, ['Why drop it?']));
+      REASONS.forEach((pick, i) => {
+        row.append(keyed(pick.label, String(i + 1), 'act-button', () => void this.move({ action: 'drop', reason: pick.reason }, 'Dropped')));
+      });
+      row.append(keyed('Keep it', 'Esc', 'act-button act-quiet', () => this.setMode('read')));
+      return bar;
     }
-    if (item.status === 'act' || item.status === 'discuss') {
-      button('Done', () => void this.update(item, { action: 'done' }, 'Moved to Done.'), true);
-    }
-    if (canReply) button('Reply', () => this.openReply(item));
-    if (open) button('Drop', () => this.askDrop(item, row));
-    if (item.status === 'done' || item.status === 'dropped') {
-      button('Reopen', () => void this.update(item, { action: 'reopen' }, 'Reopened.'));
-    }
-    return row;
-  }
-
-  /** @param {Item} item @param {HTMLElement} row */
-  askDrop(item, row) {
-    const id = `drop-${item.id}`;
-    const input = el('input', { id, type: 'text', name: 'reason', maxlength: '120', placeholder: 'Junk, a test, said twice', autocomplete: 'off' });
-    const form = el('form', { class: 'drop-form', novalidate: '' }, [
-      el('div', { class: 'field' }, [el('label', { for: id }, ['Why drop it? ', el('span', { class: 'hint' }, ['(optional)'])]), input]),
-    ]);
-    const buttons = el('div', { class: 'actions' });
-    buttons.append(el('button', { type: 'submit', class: 'primary' }, ['Drop it']));
-    const keep = el('button', { type: 'button' }, ['Keep it']);
-    buttons.append(keep);
-    form.append(buttons);
-    // The site's CSP allows no form to submit anywhere; this one never does, its script sends the move.
-    form.addEventListener('submit', (event) => {
-      event.preventDefault();
-      const reason = input instanceof HTMLInputElement ? input.value.trim() : '';
-      void this.update(item, { action: 'drop', reason }, 'Dropped.');
-    });
-    keep.addEventListener('click', () => this.render());
-    row.replaceWith(form);
-    input.focus();
-  }
-
-  /**
-   * Makes one move, then shows the note where it now belongs. A failed move leaves the card as it was.
-   * @param {Item} item
-   * @param {Action} action
-   * @param {string} said
-   */
-  async update(item, action, said) {
-    /** @type {Item} */
-    let updated;
-    try {
-      updated = await change(item.id, action);
-    } catch (error) {
-      this.render();
-      this.fail(error, "That didn't save, so the note is where it was.");
-      return;
-    }
-    const from = tabOf(item.status);
-    const to = tabOf(updated.status);
-    if (from !== to) {
-      this.counts[from] = Math.max(0, this.counts[from] - 1);
-      this.counts[to] += 1;
-    }
-    const at = this.items.findIndex((entry) => entry.id === item.id);
-    this.items = this.items.map((entry) => (entry.id === item.id ? updated : entry));
-    this.render();
-    this.say(said);
-    if (to !== this.tab) {
-      const next = this.cards.children[Math.min(Math.max(at, 0), this.cards.children.length - 1)];
-      const target = next?.querySelector('button, select') ?? this.tabs.find((tab) => tab.dataset.tab === this.tab);
-      if (target instanceof HTMLElement) target.focus();
-    }
-    if (this.replyingTo?.id === item.id) this.replyingTo = updated;
-  }
-
-  wireReply() {
-    const dialog = this.replyDialog;
-    const to = find(dialog, '#reply-to', HTMLInputElement);
-    const subject = find(dialog, '#reply-subject', HTMLInputElement);
-    const body = find(dialog, '#reply-body', HTMLTextAreaElement);
-    const open = find(dialog, '[data-open-gmail]', HTMLAnchorElement);
-    const copied = find(dialog, '[data-copied]', HTMLElement);
-
-    const refresh = () => {
-      open.href = gmailLink({ to: to.value, subject: subject.value, body: body.value }, this.me);
-    };
-    subject.addEventListener('input', refresh);
-    body.addEventListener('input', refresh);
-    open.addEventListener('click', () => {
-      const item = this.replyingTo;
-      if (item) void this.update(item, { action: 'reply-opened' }, 'Reply opened in Gmail.');
-    });
-    find(dialog, '[data-copy]', HTMLButtonElement).addEventListener('click', () => {
-      const text = `To: ${to.value}\nSubject: ${subject.value}\n\n${body.value}`;
-      navigator.clipboard.writeText(text).then(
-        () => {
-          copied.textContent = 'Copied.';
-        },
-        () => {
-          body.select();
-          copied.textContent = 'Copy was refused here; the email is selected, so press Cmd+C.';
-        },
+    if (status === 'received') {
+      row.append(
+        keyed('Act on it', 'A', 'act-button act-primary', () => void this.move({ action: 'act' }, 'Moved to To act on')),
+        keyed('Talk it through', 'T', 'act-button act-primary', () => void this.move({ action: 'discuss' }, 'Moved to To discuss')),
+        keyed('Drop', 'D', 'act-button', () => this.setMode('drop')),
       );
-    });
-    find(dialog, '[data-close-reply]', HTMLButtonElement).addEventListener('click', () => dialog.close());
-    dialog.addEventListener('close', () => {
-      this.replyingTo = null;
-      copied.textContent = '';
-    });
-    /** @param {Draft} draft */
-    this.fillReply = (draft) => {
-      to.value = draft.to;
-      subject.value = draft.subject;
-      body.value = draft.body;
-      refresh();
-    };
+      bar.append(el('p', { class: 'fine note-hint' }, ['Act on it: something you made should change. Talk it through: their idea, a conversation.']));
+    } else if (status === 'act' || status === 'discuss') {
+      row.append(keyed('Done', 'E', 'act-button act-primary', () => void this.move({ action: 'done' }, 'Done')));
+      if (canReply(item)) row.append(keyed('Reply', 'R', 'act-button', () => this.setMode('reply')));
+      row.append(keyed('Drop', 'D', 'act-button', () => this.setMode('drop')));
+      const other = status === 'act' ? 'discuss' : 'act';
+      const switchTo = el('button', { type: 'button', class: 'act-button act-quiet' }, [status === 'act' ? "It's an idea" : 'It needs action']);
+      switchTo.addEventListener('click', () => void this.move({ action: other }, `Moved to ${TAB_NAMES[other]}`));
+      row.append(switchTo);
+    } else {
+      if (canReply(item)) row.append(keyed('Reply', 'R', 'act-button act-primary', () => this.setMode('reply')));
+      row.append(keyed('Reopen', 'U', 'act-button', () => void this.move({ action: 'reopen' }, 'Reopened')));
+      bar.append(el('p', { class: 'fine note-hint' }, [item.kind ? 'Reopen puts it back where it was.' : 'Reopen puts it back in To look at.']));
+    }
+    return bar;
   }
 
   /** @param {Item} item */
-  openReply(item) {
-    this.replyingTo = item;
-    this.fillReply?.(draftReply(item));
-    this.replyDialog.showModal();
-    const body = find(this.replyDialog, '#reply-body', HTMLTextAreaElement);
-    body.focus();
-    body.setSelectionRange(0, 0);
-    body.scrollTop = 0;
+  reply(item) {
+    const draft = draftReply(item);
+    const to = el('input', { id: 'reply-to', type: 'email', readonly: '', value: draft.to });
+    const subject = /** @type {HTMLInputElement} */ (el('input', { id: 'reply-subject', type: 'text', value: draft.subject }));
+    const body = /** @type {HTMLTextAreaElement} */ (el('textarea', { id: 'reply-body' }, [draft.body]));
+    const open = /** @type {HTMLAnchorElement} */ (el('a', { class: 'act-button act-primary', target: '_blank', rel: 'noopener' }, ['Open in Gmail ↗']));
+    const refresh = () => {
+      open.href = gmailLink({ to: draft.to, subject: subject.value, body: body.value }, this.me);
+    };
+    refresh();
+    subject.addEventListener('input', refresh);
+    body.addEventListener('input', refresh);
+    open.addEventListener('click', () => void this.move({ action: 'reply-opened' }, 'Opened in Gmail, as you. Send it there.'));
+    const copy = el('button', { type: 'button', class: 'act-button' }, ['Copy']);
+    copy.addEventListener('click', () => {
+      navigator.clipboard.writeText(`To: ${draft.to}\nSubject: ${subject.value}\n\n${body.value}`).then(
+        () => this.say('Copied the email', null),
+        () => {
+          body.select();
+          this.say('Copy was refused here; the email is selected, so press Cmd+C', null);
+        },
+      );
+    });
+    const close = keyed('Not now', 'Esc', 'act-button act-quiet', () => this.setMode('read'));
+    return el('section', { class: 'reply', 'aria-label': 'Reply' }, [
+      el('div', { class: 'reply-top' }, [el('h2', {}, ['Reply, drafted for you']), el('span', { class: 'fine' }, ['Nothing is sent from here'])]),
+      el('div', { class: 'field' }, [el('label', { for: 'reply-to' }, ['To']), to]),
+      el('div', { class: 'field' }, [el('label', { for: 'reply-subject' }, ['Subject']), subject]),
+      el('div', { class: 'field' }, [el('label', { for: 'reply-body' }, ['Email']), body]),
+      el('div', { class: 'note-actions-row' }, [open, copy, close]),
+      el('p', { class: 'fine' }, ['Gmail opens as the address you signed in with, with this written. You edit it there and press Send yourself.']),
+    ]);
   }
-
-  /** @type {((draft: Draft) => void) | undefined} */
-  fillReply;
 }
 
 const root = document.querySelector('[data-inbox]');

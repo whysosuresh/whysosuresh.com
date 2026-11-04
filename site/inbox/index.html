@@ -1,8 +1,9 @@
 <!DOCTYPE html>
 <!-- whysosuresh.com/inbox: Suresh's private inbox of the notes people send him, behind Cloudflare Access (only
-     his email gets in). One list in four tabs; inbox.js draws the cards and their actions from the inbox's own
-     calls under /inbox/api/, and fills the reply panel below with a drafted email he sends from his own mail.
-     The page holds no data itself. Every link and file is root-absolute. -->
+     his email gets in). On a laptop, three columns: the four queues, the list and the open note; on a phone, one
+     note at a time with the queues along the bottom. The newest note opens by itself, one key or tap sorts it,
+     and the next one opens; every move can be undone from the toast. inbox.js draws the list and the note from
+     the inbox's own calls under /inbox/api/; the page holds no data itself. Every link and file is root-absolute. -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -17,56 +18,62 @@
   <script type="module" src="/inbox/inbox.js"></script>
 </head>
 <body>
-  <header class="bar">
-    <a class="brand" href="/">whysosuresh.com</a>
-    <a class="bar-link" href="/feedback">Talk to me</a>
-  </header>
+  <div class="inbox" data-inbox data-view="note">
+    <nav class="queues" aria-label="Queues">
+      <div class="queues-head">
+        <span class="queues-title">Inbox</span>
+        <a class="queues-site" href="/">whysosuresh.com</a>
+      </div>
+      <div class="queue-list" role="tablist" aria-label="Queues" aria-orientation="vertical">
+        <button type="button" class="queue" role="tab" id="tab-look" data-tab="look" aria-controls="inbox-list" aria-selected="true"><span class="queue-name">To look at</span><span class="queue-count">0</span><kbd>1</kbd></button>
+        <button type="button" class="queue" role="tab" id="tab-act" data-tab="act" aria-controls="inbox-list" aria-selected="false" tabindex="-1"><span class="queue-name">To act on</span><span class="queue-count">0</span><kbd>2</kbd></button>
+        <button type="button" class="queue" role="tab" id="tab-discuss" data-tab="discuss" aria-controls="inbox-list" aria-selected="false" tabindex="-1"><span class="queue-name">To discuss</span><span class="queue-count">0</span><kbd>3</kbd></button>
+        <button type="button" class="queue" role="tab" id="tab-done" data-tab="done" aria-controls="inbox-list" aria-selected="false" tabindex="-1"><span class="queue-name">Done</span><span class="queue-count">0</span><kbd>4</kbd></button>
+      </div>
+      <div class="queues-foot">
+        <button type="button" class="act-button" data-keys-open>Shortcuts <kbd>?</kbd></button>
+        <p class="fine">Signed in with an email code. A week until it asks again.</p>
+      </div>
+    </nav>
 
-  <main data-inbox>
-    <div class="inbox-head">
-      <h1>Inbox</h1>
-      <p class="fine">What people told you, newest first.</p>
-    </div>
+    <section class="list-pane" id="inbox-list" role="tabpanel" aria-labelledby="tab-look">
+      <header class="pane-head">
+        <h1 data-list-title>To look at</h1>
+        <span class="fine" data-list-hint></span>
+      </header>
+      <ul class="rows" data-rows aria-label="Notes"></ul>
+      <button type="button" class="text-button older" data-older hidden>Show older</button>
+    </section>
 
-    <div class="tabs" role="tablist" aria-label="Inbox">
-      <button type="button" role="tab" id="tab-look" data-tab="look" aria-controls="inbox-panel" aria-selected="true">To look at <span class="tab-count">0</span></button>
-      <button type="button" role="tab" id="tab-act" data-tab="act" aria-controls="inbox-panel" aria-selected="false" tabindex="-1">To act on <span class="tab-count">0</span></button>
-      <button type="button" role="tab" id="tab-discuss" data-tab="discuss" aria-controls="inbox-panel" aria-selected="false" tabindex="-1">To discuss <span class="tab-count">0</span></button>
-      <button type="button" role="tab" id="tab-done" data-tab="done" aria-controls="inbox-panel" aria-selected="false" tabindex="-1">Done <span class="tab-count">0</span></button>
-    </div>
+    <main class="note-pane" data-note aria-label="Note" tabindex="-1"></main>
+  </div>
 
-    <p class="notice" data-problem hidden></p>
-    <div role="tabpanel" id="inbox-panel" aria-labelledby="tab-look">
-      <ul class="cards" data-cards></ul>
-      <button type="button" class="text-button" data-older hidden>Show older</button>
-    </div>
-    <p class="visually-hidden" aria-live="polite" data-live></p>
-  </main>
+  <p class="problem" role="alert" data-problem hidden></p>
 
-  <dialog class="talk-dialog reply-dialog" data-reply aria-labelledby="reply-title">
-    <div class="talk-sheet">
+  <div class="toast" role="status" data-toast hidden>
+    <span data-toast-text></span>
+    <button type="button" class="toast-undo" data-undo>Undo <kbd>Z</kbd></button>
+  </div>
+
+  <dialog class="keys-dialog" data-keys aria-labelledby="keys-title">
+    <div class="keys-sheet">
       <div class="sheet-top">
-        <h2 id="reply-title">Reply</h2>
-        <button type="button" class="close-button" data-close-reply aria-label="Close">&times;</button>
+        <h2 id="keys-title">Shortcuts</h2>
+        <button type="button" class="close-button" data-keys-close aria-label="Close">&times;</button>
       </div>
-      <div class="field">
-        <label for="reply-to">To</label>
-        <input id="reply-to" type="email" readonly>
-      </div>
-      <div class="field">
-        <label for="reply-subject">Subject</label>
-        <input id="reply-subject" type="text">
-      </div>
-      <div class="field">
-        <label for="reply-body">Email</label>
-        <textarea id="reply-body"></textarea>
-      </div>
-      <div class="actions">
-        <a class="primary" href="https://mail.google.com/mail/" target="_blank" rel="noopener" data-open-gmail>Open in Gmail</a>
-        <button type="button" data-copy>Copy</button>
-      </div>
-      <p class="fine" aria-live="polite" data-copied></p>
-      <p class="fine">Gmail opens as the address you signed in with, with this written. You edit it there and press Send yourself.</p>
+      <dl class="key-list">
+        <div><dt>Next note, previous note</dt><dd><kbd>J</kbd> <kbd>K</kbd></dd></div>
+        <div><dt>Act on it: something you made should change</dt><dd><kbd>A</kbd></dd></div>
+        <div><dt>Talk it through: their idea, a conversation</dt><dd><kbd>T</kbd></dd></div>
+        <div><dt>Drop, then 1 to 4 for the reason</dt><dd><kbd>D</kbd></dd></div>
+        <div><dt>Done</dt><dd><kbd>E</kbd></dd></div>
+        <div><dt>Reply</dt><dd><kbd>R</kbd></dd></div>
+        <div><dt>Reopen</dt><dd><kbd>U</kbd></dd></div>
+        <div><dt>Undo the last move</dt><dd><kbd>Z</kbd></dd></div>
+        <div><dt>Change the topic</dt><dd><kbd>C</kbd></dd></div>
+        <div><dt>Queues</dt><dd><kbd>1</kbd> to <kbd>4</kbd></dd></div>
+        <div><dt>Close what's open</dt><dd><kbd>Esc</kbd></dd></div>
+      </dl>
     </div>
   </dialog>
 </body>

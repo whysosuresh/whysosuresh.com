@@ -345,6 +345,8 @@ describe("a move", () => {
     ["done", "discuss", "idea", { status: "done", kind: "idea" }],
     ["reopen", "done", "feedback", { status: "act", kind: "feedback" }],
     ["reopen", "done", "idea", { status: "discuss", kind: "idea" }],
+    ["unsort", "act", "feedback", { status: "received", kind: null }],
+    ["unsort", "discuss", "idea", { status: "received", kind: null }],
   ])("%s from %s (kind %s) leaves the row as %j", async (action, status, kind, after) => {
     const row = await seed({ status, kind });
     const response = await post(row.id, { body: { action } });
@@ -364,10 +366,36 @@ describe("a move", () => {
     expect(await rowOf(other.id)).toEqual({ ...other, status: "dropped", drop_reason: null });
   });
 
-  it("reopen from Dropped goes back to To look at without its reason", async () => {
-    const row = await seed({ status: "dropped", kind: "idea", drop_reason: "junk" });
+  it.each([
+    [null, "received"],
+    ["feedback", "act"],
+    ["idea", "discuss"],
+  ])("reopen from Dropped (kind %s) goes back to %s without its reason, which undoes the drop", async (kind, status) => {
+    const row = await seed({ status: "dropped", kind, drop_reason: "junk" });
     expect((await post(row.id, { body: { action: "reopen" } })).status).toBe(200);
-    expect(await rowOf(row.id)).toEqual({ ...row, status: "received", drop_reason: null });
+    expect(await rowOf(row.id)).toEqual({ ...row, status, drop_reason: null });
+  });
+
+  it.each([
+    ["act", "received"],
+    ["discuss", "received"],
+    ["done", "act"],
+    ["drop", "discuss"],
+    ["reopen", "done"],
+    ["reopen", "dropped"],
+    ["topic", "dropped"],
+  ])("each move the page can undo comes back exactly: %s from %s", async (action, status) => {
+    const kinds: Record<string, string | null> = { received: null, act: "feedback", discuss: "idea", done: "feedback", dropped: "idea" };
+    const row = await seed({ status, kind: kinds[status] ?? null, drop_reason: status === "dropped" ? "junk" : null });
+    const there = action === "drop" ? { action, reason: "" } : action === "topic" ? { action, topic: "videos" } : { action };
+    expect((await post(row.id, { body: there })).status).toBe(200);
+    const back =
+      action === "act" || action === "discuss" ? { action: "unsort" }
+      : action === "done" || action === "drop" ? { action: "reopen" }
+      : action === "reopen" ? (status === "dropped" ? { action: "drop", reason: "junk" } : { action: "done" })
+      : { action: "topic", topic: row.topic };
+    expect((await post(row.id, { body: back })).status).toBe(200);
+    expect(await rowOf(row.id)).toEqual(row);
   });
 
   it.each(["received", "act", "done", "dropped"])("topic changes the topic from %s and nothing else", async (status) => {
@@ -393,6 +421,9 @@ describe("a move", () => {
     ["drop", "dropped"],
     ["reopen", "received"],
     ["reopen", "act"],
+    ["unsort", "received"],
+    ["unsort", "done"],
+    ["unsort", "dropped"],
   ])("%s from %s is refused with 409, and the row stays as it was", async (action, status) => {
     const row = await seed({ status, kind: status === "received" ? null : "feedback" });
     const body = action === "drop" ? { action, reason: "" } : { action };

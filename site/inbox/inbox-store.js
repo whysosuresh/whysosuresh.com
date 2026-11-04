@@ -14,7 +14,7 @@
  *   dropReason: string | null, replyOpenedAt: string | null
  * }} Item
  * @typedef {{ items: Item[], counts: Record<Tab, number>, next: string | null, me: string | null }} Page
- * @typedef {{ action: 'act' | 'discuss' | 'done' | 'reopen' | 'reply-opened' }
+ * @typedef {{ action: 'act' | 'discuss' | 'unsort' | 'done' | 'reopen' | 'reply-opened' }
  *   | { action: 'drop', reason: string }
  *   | { action: 'topic', topic: string }} Action
  */
