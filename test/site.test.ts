@@ -47,7 +47,7 @@ const EXTERNAL_RESOURCES = ["https://www.youtube-nocookie.com/embed/videoseries?
 const SCRIPT_RESOURCES = ["https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"];
 
 /** The only addresses on another origin a site script links to. A link loads nothing, so the CSP leaves it out. */
-const SCRIPT_LINKS = ["https://cal.com/whysosuresh", "https://mail.google.com/mail/"];
+const SCRIPT_LINKS = ["https://cal.com/whysosuresh", "https://mail.google.com/mail/", "https://github.com/"];
 
 const originsOf = (urls: string[]): string => [...new Set(urls.map((url) => new URL(url).origin))].join(" ");
 

@@ -445,6 +445,7 @@ p { margin: 0; }
   font-weight: 700;
 }
 .avatar-large { width: 48px; height: 48px; font-size: 18px; }
+.avatar-self { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
 .row-who { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .row[data-unread] .row-who { font-weight: 800; }
 .row-time { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -476,6 +477,10 @@ p { margin: 0; }
 .note-who { display: flex; align-items: center; gap: 14px; }
 .note-who .fine { overflow-wrap: anywhere; }
 .note-name { font-size: 20px; font-weight: 800; }
+.note-title { max-width: 40ch; margin: 0 0 18px; font-size: 26px; line-height: 1.25; letter-spacing: -0.015em; text-wrap: balance; }
+.note-from { margin: -6px 0 22px; }
+.note-link { color: var(--muted); font-size: 13px; font-weight: 650; text-underline-offset: 3px; }
+.note-link:hover { color: var(--ink); }
 .note-meta { display: grid; justify-items: end; gap: 8px; }
 .note-tags { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
 .state-tag { padding: 3px 10px; border-radius: 999px; background: var(--accent-soft); font-size: 12px; font-weight: 700; }
@@ -609,6 +614,7 @@ p { margin: 0; }
   .topic-choices { padding: 12px var(--gutter-r) 0 var(--gutter-l); }
   .note-body { padding: 20px var(--gutter-r) 20px var(--gutter-l); }
   .note-text { font-size: 19px; }
+  .note-title { font-size: 22px; }
   .note-actions { bottom: 0; padding: 12px var(--gutter-r) 12px var(--gutter-l); }
   .inbox kbd, .toast kbd, .note-hint { display: none; }
   .note-actions-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }

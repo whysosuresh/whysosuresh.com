@@ -1,17 +1,19 @@
 // @ts-check
 // The inbox's data: the two calls the page makes to the inbox's own routes under /inbox/api/ (src/inbox.ts),
-// behind Cloudflare Access. `list` reads one tab, 50 notes at a time; `change` makes one move on one note.
+// behind Cloudflare Access. `list` reads one tab, 50 notes at a time; `change` makes one move on one note. The
+// recorder sync adds items and files them as issues through the same routes; the page only shows those.
 // Every call refuses to follow a redirect: when the sign-in has run out, Access answers with a redirect to its
 // sign-in page on another origin, which a followed fetch would report as a network error. A redirect, a 401
 // or a 403 is SignedOut, which the page answers with "Your sign-in ended"; anything else that fails is Failed.
 
 /**
  * @typedef {'look' | 'act' | 'discuss' | 'done'} Tab
- * @typedef {'received' | 'act' | 'discuss' | 'done' | 'dropped'} Status
+ * @typedef {'received' | 'act' | 'discuss' | 'done' | 'dropped' | 'filed'} Status
  * @typedef {{
- *   id: string, receivedAt: string, source: string, topic: string | null, body: string,
- *   name: string | null, email: string | null, status: Status, kind: 'feedback' | 'idea' | null,
- *   dropReason: string | null, replyOpenedAt: string | null
+ *   id: string, receivedAt: string, source: 'talk' | 'told' | 'self' | string, topic: string | null,
+ *   title: string | null, body: string, name: string | null, email: string | null, status: Status,
+ *   kind: 'feedback' | 'idea' | null, dropReason: string | null, replyOpenedAt: string | null,
+ *   ref: string | null, filedLink: string | null, movedAt: string | null
  * }} Item
  * @typedef {{ items: Item[], counts: Record<Tab, number>, next: string | null, me: string | null }} Page
  * @typedef {{ action: 'act' | 'discuss' | 'unsort' | 'done' | 'reopen' | 'reply-opened' }
