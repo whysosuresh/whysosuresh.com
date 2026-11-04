@@ -39,6 +39,6 @@ Each row is applied with `planton apply -f <file> $O` and followed by its proof.
 | 17 | `Infra.prod.CloudflareR2Bucket.whysosuresh-com-recordings.yaml` | The recordings' bucket, private | `planton diff -f <file> $O` exits 0 |
 | 18 | `Infra.prod.CloudflareTurnstileWidget.whysosuresh-com-talk.yaml` | The talk flow's invisible bot check, for `whysosuresh.com` only | `planton diff -f <file> $O` exits 0; `status.outputs.sitekey` is the key in `../../../site/talk-recorder.js` |
 | 19 | **[owner]** The deploy key `github-whysosuresh-com-deployer` gains Account / D1 / Edit (`../../vendors/cloudflare/README.md`) | Nothing in Planton | The deploy job's migration step succeeds |
-| 20 | **[owner]** Row 18's secret copied into the GitHub environment `production` as `TURNSTILE_SECRET` (`../../vendors/cloudflare/README.md`) | Nothing in Planton | The deploy job's secret step succeeds, and a send from the site is stored |
+| 20 | Row 18's secret copied from Planton into the GitHub environment `production` as `TURNSTILE_SECRET`, by the script in `../../vendors/cloudflare/README.md` | Nothing in Planton | The deploy job's secret step succeeds, and a send from the site is stored |
 
 The site's Worker isn't a Planton resource: Planton can't upload a repository's static files to a Worker yet, so it's deployed from the repository itself, as the root `AGENTS.md` says. Its one route and its bindings to rows 16 and 17 are declared in `wrangler.jsonc`, never in the dashboard.
