@@ -13,13 +13,13 @@ R2 is off in a new account, and Planton can't create a bucket until it is on. It
 
 ## The bot check's secret
 
-The talk flow's Turnstile widget (`Infra.prod.CloudflareTurnstileWidget.whysosuresh-com-talk`) is Planton's, and so is its secret: Planton keeps it as the widget's sensitive output. The Worker isn't a Planton resource, so the secret has one more copy, carried by hand: `TURNSTILE_SECRET` in the GitHub environment `production` of `whysosuresh/whysosuresh.com`, beside the deploy key. On each deploy the job hands it to the Worker as a secret (`.github/workflows/site.yaml`); a deploy with it empty fails before uploading anything.
+The note flow's Turnstile widget (`Infra.prod.CloudflareTurnstileWidget.whysosuresh-com-talk`) is Planton's, and so is its secret: Planton keeps it as the widget's sensitive output. The Worker isn't a Planton resource, so the secret has one more copy, carried by hand: `TURNSTILE_SECRET` in the GitHub environment `production` of `whysosuresh/whysosuresh.com`, beside the deploy key. On each deploy the job hands it to the Worker as a secret (`.github/workflows/site.yaml`); a deploy with it empty fails before uploading anything.
 
 **Custody.** Planton and the `production` environment. Nowhere else: never in a file, a command line or a log.
 
 **Copy or re-mint.** The copy is taken from Planton, never by hand: a script reads the widget's `status.outputs.secret` reference with `planton get`, reveals that one value with `planton secret get --reveal --key … -o plain` (recorded in the secret's read-audit trail), checks its shape, and pipes it into `gh secret set TURNSTILE_SECRET --env production --repo whysosuresh/whysosuresh.com`; nothing prints it. To re-mint, rotate the secret key on the widget's page in the dashboard, re-apply the widget's file so Planton holds the new value (Cloudflare returns the secret on every read), copy it the same way, and re-run the latest `site` run on `main`. Until the deploy runs, the Worker keeps the old secret and refuses every send.
 
-The site key is public. It is the widget's identity, and sits in `site/talk-recorder.js`.
+The site key is public. It is the widget's identity, and sits in `site/talk-send.js`.
 
 ## The account API token `planton-whysosuresh`
 

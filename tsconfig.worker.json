@@ -1,13 +1,17 @@
 // The type check for the Worker (src/), against the runtime and bindings `wrangler types` writes to
 // worker-configuration.d.ts from wrangler.jsonc. That file is generated and committed; `npm run typecheck`
-// fails when it no longer matches the config.
+// fails when it no longer matches the config. The Worker also imports the site's topic list
+// (site/talk-topics.js), which is checked here too, with no browser library, so it can never reach for a
+// page. es2024.string gives `isWellFormed`, which the note's checks use.
 {
   "compilerOptions": {
     "target": "es2023",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "lib": ["es2023"],
+    "lib": ["es2023", "es2024.string"],
     "types": [],
+    "allowJs": true,
+    "checkJs": true,
     "allowImportingTsExtensions": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
@@ -20,5 +24,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "worker-configuration.d.ts"]
+  "include": ["src/**/*.ts", "site/talk-topics.js", "worker-configuration.d.ts"]
 }

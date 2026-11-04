@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<!-- whysosuresh.com's home page: his photo large beside a short greeting, then his latest videos,
-     the things he makes and where else to find him. System type and black-and-white greys, so it
-     matches capsjump.com and loads no web font. Its one script is the talk flow, which opens at
-     /#talk; no button opens it yet. -->
+<!-- whysosuresh.com's home page: his photo large beside a short greeting and the ways to reach him,
+     then his latest videos, the things he makes and where else to find him. System type and
+     black-and-white greys, so it matches capsjump.com and loads no web font. Its one script is the
+     note flow, which opens at /#talk or /#talk/<topic>; no button opens it yet. -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -29,7 +29,7 @@
 <body>
   <header class="bar">
     <a class="brand" href="/">whysosuresh.com</a>
-    <a class="bar-link" href="/feedback">Feedback and ideas</a>
+    <a class="bar-link" href="/feedback">Talk to me</a>
   </header>
 
   <main>
@@ -38,10 +38,13 @@
       <div class="letter-text">
         <h1 id="hello">Hi, I'm Suresh.</h1>
         <p class="lede">Building Stigmer, the open-source backend for the agents in your product. Made CapsJump because I kept opening the wrong Chrome account.</p>
-        <!-- The talk button joins this row once its inbox exists; until then /#talk is the way in. -->
-        <div class="talk-row">
-          <a class="ghost-button" href="https://cal.com/whysosuresh">Book a call</a>
-        </div>
+        <!-- "Send a note" joins these doors once its inbox exists; until then /#talk is the way in. -->
+        <ul class="doors">
+          <li>
+            <a class="ghost-button" href="https://cal.com/whysosuresh">Book a call</a>
+            <p class="fine">30 minutes, live. Best for talking something through.</p>
+          </li>
+        </ul>
       </div>
     </section>
 
@@ -96,7 +99,7 @@
 
   <footer class="foot">
     <span>Suresh</span>
-    <a href="/feedback">How to give me feedback</a>
+    <a href="/feedback">Talk to me</a>
   </footer>
 </body>
 </html>

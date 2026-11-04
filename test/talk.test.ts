@@ -1,61 +1,49 @@
-// The talk flow's send, run as production runs it: the Worker's bundle in workerd (test/harness.ts), with a
-// local D1 and R2 and a played Turnstile. What it holds: a good recording is stored with a row that agrees
-// with its object; the 3-minute cap as the server enforces it (seconds and bytes); the content check; the
-// bot check; both daily limits, under concurrency and for IPv6 networks; the refusals for no length, no
-// secret, another origin and other routes; that no address is kept and old days are dropped; and that the
-// Worker reaches nothing but Turnstile.
+// The note flow's send, run as production runs it: the Worker's bundle in workerd (test/harness.ts), with a
+// local D1 and a played Turnstile. What it holds: a good note is stored as one inbox row, for every topic;
+// the note's bounds (4,000 code units, Telugu at the byte bound, no blank note, no control character, no
+// lone surrogate); the wire's shape (JSON only, exactly five string keys, 16 KiB); the bot check; both daily
+// limits, under concurrency and for IPv6 networks; the refusals for no length, no secret, another origin
+// and other routes; that no address is kept and old days are dropped; that the recordings' old rows are
+// left alone; and that the Worker reaches nothing but Turnstile.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SITE, TEST_SECRET, TURNSTILE_HOST, startHarness, type Harness } from "./harness.ts";
 
 /** The server's limits, stated here as the contract rather than imported from the Worker. */
-const MAX_AUDIO_BYTES = 4 * 1024 * 1024;
-const MAX_REQUEST_BYTES = MAX_AUDIO_BYTES + 16 * 1024;
+const MAX_BODY = 4000;
+const MAX_REQUEST_BYTES = 16 * 1024;
 
-const WEBM = "audio/webm;codecs=opus";
+/** The topics a note may name, stated here as the contract rather than imported from the site. */
+const TOPICS = ["stigmer", "videos", "capsjump", "other"];
 
-/** Bytes that begin as a container does, padded to a length. */
-function audioBytes(kind: "webm" | "mp4" | "ogg" | "wav", length = 2048): Uint8Array {
-  const bytes = new Uint8Array(length);
-  const head: Record<typeof kind, number[]> = {
-    webm: [0x1a, 0x45, 0xdf, 0xa3],
-    mp4: [0x00, 0x00, 0x00, 0x18, ...[..."ftypmp42"].map((c) => c.charCodeAt(0))],
-    ogg: [..."OggS"].map((c) => c.charCodeAt(0)),
-    wav: [..."RIFF"].map((c) => c.charCodeAt(0)),
-  };
-  bytes.set(head[kind]);
-  return bytes;
-}
+const NOTE = { topic: "stigmer", body: "I got lost at the install.", name: "Asha", email: "asha@example.com", token: "pass" };
 
 interface Send {
   ip?: string;
-  audio?: Uint8Array;
-  type?: string;
-  fields?: Record<string, string>;
+  /** Keys to change in the note; a key set to undefined is left out. */
+  note?: Record<string, unknown>;
+  contentType?: string;
   origin?: string | null;
   fetchSite?: string;
   /** Sends the body as a stream, so no Content-Length is declared. */
   noLength?: boolean;
-  /** Sends these bytes as the body instead of a form. */
+  /** Sends these bytes as the body instead of the note. */
   rawBody?: Uint8Array;
-}
-
-async function body(options: Send): Promise<{ bytes: Uint8Array; type: string }> {
-  const form = new FormData();
-  const audio = options.audio ?? audioBytes("webm");
-  form.append("audio", new Blob([audio], { type: options.type ?? WEBM }), "recording");
-  const fields = { seconds: "12", name: "Asha", email: "asha@example.com", token: "pass", ...options.fields };
-  for (const [name, value] of Object.entries(fields)) form.append(name, value);
-  const encoded = new Response(form);
-  return { bytes: new Uint8Array(await encoded.arrayBuffer()), type: encoded.headers.get("content-type") ?? "" };
 }
 
 let harness: Harness;
 
-async function send(options: Send = {}): Promise<Response> {
-  const { bytes, type } = options.rawBody ? { bytes: options.rawBody, type: "multipart/form-data; boundary=x" } : await body(options);
-  const headers: Record<string, string> = { "Content-Type": type, "CF-Connecting-IP": options.ip ?? "203.0.113.7" };
-  if (options.origin !== null) headers.Origin = options.origin ?? SITE;
+function noteBytes(options: Send): Uint8Array {
+  return options.rawBody ?? new TextEncoder().encode(JSON.stringify({ ...NOTE, ...options.note }));
+}
+
+async function send(options: Send = {}, target: Harness = harness, url = `${SITE}/api/talk`): Promise<Response> {
+  const bytes = noteBytes(options);
+  const headers: Record<string, string> = {
+    "Content-Type": options.contentType ?? "application/json",
+    "CF-Connecting-IP": options.ip ?? "203.0.113.7",
+  };
+  if (options.origin !== null) headers.Origin = options.origin ?? new URL(url).origin;
   if (options.fetchSite) headers["Sec-Fetch-Site"] = options.fetchSite;
   const init: RequestInit & { duplex?: string } = { method: "POST", headers };
   if (options.noLength) {
@@ -69,15 +57,11 @@ async function send(options: Send = {}): Promise<Response> {
   } else {
     init.body = bytes;
   }
-  return harness.fetch(`${SITE}/api/talk`, init);
+  return target.fetch(url, init);
 }
 
-async function rows(table: string): Promise<Record<string, unknown>[]> {
-  return (await (await harness.db()).prepare(`SELECT * FROM ${table}`).all<Record<string, unknown>>()).results;
-}
-
-async function objectCount(): Promise<number> {
-  return (await (await harness.bucket()).list()).objects.length;
+async function rows(table: string, target: Harness = harness): Promise<Record<string, unknown>[]> {
+  return (await (await target.db()).prepare(`SELECT * FROM ${table}`).all<Record<string, unknown>>()).results;
 }
 
 beforeAll(async () => {
@@ -90,55 +74,144 @@ beforeEach(async () => {
   await harness.reset();
 });
 
-describe("a good recording", () => {
-  it.each([
-    ["WebM", "webm" as const, WEBM],
-    ["MP4", "mp4" as const, "audio/mp4"],
-  ])("is stored from %s, its row and its object agreeing", async (_label, kind, type) => {
-    const audio = audioBytes(kind, 5000);
-    const response = await send({ audio, type });
+describe("a good note", () => {
+  it("is stored as one inbox row that says what was sent", async () => {
+    const before = new Date().toISOString();
+    const response = await send();
     expect(response.status).toBe(201);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     const { id } = (await response.json()) as { id: string };
-    const [row, ...others] = await rows("inputs");
+    const [row, ...others] = await rows("inbox");
     expect(others).toEqual([]);
-    expect(row).toMatchObject({
+    expect(row).toEqual({
       id,
+      received_at: expect.any(String),
       source: "talk",
-      status: "received",
+      topic: "stigmer",
+      body: "I got lost at the install.",
       name: "Asha",
       email: "asha@example.com",
-      audio_key: `talk/${id}`,
-      audio_type: type,
-      audio_bytes: 5000,
-      duration_s: 12,
+      status: "received",
     });
-    const object = await (await harness.bucket()).get(`talk/${id}`);
-    expect(object?.size).toBe(5000);
-    expect(object?.httpMetadata?.contentType).toBe(type);
-    expect(new Uint8Array(await object!.arrayBuffer())).toEqual(audio);
+    expect(String(row?.received_at) >= before).toBe(true);
+  });
+
+  it.each(TOPICS)("is taken about %s", async (topic) => {
+    expect((await send({ note: { topic } })).status).toBe(201);
+    expect((await rows("inbox")).map((row) => row.topic)).toEqual([topic]);
   });
 
   it("keeps an empty name and email as nothing, and trims both", async () => {
-    expect((await send({ fields: { name: "  ", email: "" } })).status).toBe(201);
-    expect((await send({ fields: { name: " సురేష్ ", email: " a@b " }, ip: "203.0.113.8" })).status).toBe(201);
-    const stored = (await rows("inputs")).map((row) => [row.name, row.email]);
+    expect((await send({ note: { name: "  ", email: "" } })).status).toBe(201);
+    expect((await send({ note: { name: " సురేష్ ", email: " a@b " }, ip: "203.0.113.8" })).status).toBe(201);
+    const stored = (await rows("inbox")).map((row) => [row.name, row.email]);
     expect(stored).toEqual(expect.arrayContaining([[null, null], ["సురేష్", "a@b"]]));
+  });
+
+  it("trims the note and keeps its line breaks and tabs", async () => {
+    expect((await send({ note: { body: "  First line\n\n\tthen this  \n" } })).status).toBe(201);
+    expect((await rows("inbox")).map((row) => row.body)).toEqual(["First line\n\n\tthen this"]);
+  });
+
+  it("takes a JSON type with a charset", async () => {
+    expect((await send({ contentType: "application/json; charset=utf-8" })).status).toBe(201);
   });
 });
 
-describe("the 3-minute cap", () => {
-  it.each(["0", "181", "12.5", "", "-1"])("refuses %j seconds", async (seconds) => {
-    expect((await send({ fields: { seconds } })).status).toBe(400);
+describe("the note's bounds", () => {
+  it("takes 4,000 code units and refuses 4,001", async () => {
+    expect((await send({ note: { body: "a".repeat(MAX_BODY) } })).status).toBe(201);
+    const over = await send({ note: { body: "a".repeat(MAX_BODY + 1) } });
+    expect(over.status).toBe(400);
+    expect(await over.json()).toEqual({ reason: "body" });
   });
 
-  it("takes 1 and 180 seconds", async () => {
-    expect((await send({ fields: { seconds: "1" } })).status).toBe(201);
-    expect((await send({ fields: { seconds: "180" } })).status).toBe(201);
+  it("takes 4,000 code units of Telugu, 12,000 bytes, inside the request's bound", async () => {
+    // "తెలుగు" is six code units, each three bytes of UTF-8; "తెలు" is the first four.
+    const body = `${"తెలుగు".repeat(666)}తెలు`;
+    expect(body.length).toBe(MAX_BODY);
+    expect(new TextEncoder().encode(body).length).toBe(3 * MAX_BODY);
+    expect((await send({ note: { body, token: "p".repeat(2048) } })).status).not.toBe(413);
+    expect((await send({ note: { body } })).status).toBe(201);
+    expect((await rows("inbox")).map((row) => row.body)).toEqual([body]);
   });
 
-  it("refuses a request whose declared length is over the cap before reading its body", async () => {
+  it.each([
+    ["an empty note", ""],
+    ["a note of only spaces and line breaks", "  \n\t \n"],
+    ["a bell character", "hello\u0007"],
+    ["a carriage return", "one\rtwo"],
+    ["a null character", "one\u0000two"],
+    ["a lone surrogate", "broken \ud800 text"],
+  ])("refuses %s", async (_label, body) => {
+    const response = await send({ note: { body } });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ reason: "body" });
+    expect(await rows("inbox")).toEqual([]);
+  });
+
+  it.each(["nope", "", "Stigmer", "stigmer "])("refuses the topic %j", async (topic) => {
+    const response = await send({ note: { topic } });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ reason: "topic" });
+  });
+});
+
+describe("the wire", () => {
+  it.each([
+    ["a missing key", { token: undefined }],
+    ["an extra key", { audio: "x" }],
+    ["a number for a name", { name: 5 }],
+    ["null for the note", { body: null }],
+    ["a name over 80 characters", { name: "a".repeat(81) }],
+    ["a name with a control character", { name: "Asha\u0007" }],
+    ["an email that isn't one", { email: "not an email" }],
+    ["an email over 200 characters", { email: `${"a".repeat(195)}@b.com` }],
+    ["no token", { token: "" }],
+    ["a token over 2,048 characters", { token: "p".repeat(2049) }],
+  ])("refuses %s", async (_label, note) => {
+    const response = await send({ note });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ reason: "form" });
+  });
+
+  it.each([
+    ["text that isn't JSON", "not json"],
+    ["a JSON list", "[]"],
+    ["a JSON string", '"a note"'],
+    ["JSON null", "null"],
+  ])("refuses %s", async (_label, text) => {
+    expect((await send({ rawBody: new TextEncoder().encode(text) })).status).toBe(400);
+  });
+
+  it.each(["text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x", ""])(
+    "refuses the type %j before any bot check, even with a good note",
+    async (contentType) => {
+      const response = await send({ contentType });
+      expect(response.status).toBe(415);
+      expect(harness.outboundHosts.size).toBe(0);
+    },
+  );
+
+  it("refuses a recording sent as a form, as the old page sent it", async () => {
+    const form = new FormData();
+    form.append("audio", new Blob([new Uint8Array([0x1a, 0x45, 0xdf, 0xa3])], { type: "audio/webm" }), "recording");
+    for (const [key, value] of Object.entries({ seconds: "12", name: "Asha", email: "", token: "pass" })) form.append(key, value);
+    const encoded = new Response(form);
+    const rawBody = new Uint8Array(await encoded.arrayBuffer());
+    const response = await send({ rawBody, contentType: encoded.headers.get("content-type") ?? "" });
+    expect(response.status).toBe(415);
+    expect(await rows("inbox")).toEqual([]);
+    expect(harness.outboundHosts.size).toBe(0);
+  });
+
+  it("refuses a body over 16 KiB", async () => {
+    const response = await send({ note: { body: "a".repeat(MAX_REQUEST_BYTES) } });
+    expect(response.status).toBe(413);
+  });
+
+  it("refuses a request whose declared length is over the bound before reading its body", async () => {
     // 1 KB of the declared length is sent and the rest never comes, so only a Worker that answers without
     // reading the body can answer at all.
     let hold: () => void = () => undefined;
@@ -150,71 +223,27 @@ describe("the 3-minute cap", () => {
     });
     const init: RequestInit & { duplex: string } = {
       method: "POST",
-      headers: { "Content-Type": "multipart/form-data; boundary=x", "Content-Length": String(MAX_REQUEST_BYTES + 1), Origin: SITE, "CF-Connecting-IP": "203.0.113.7" },
+      headers: { "Content-Type": "application/json", "Content-Length": String(MAX_REQUEST_BYTES + 1), Origin: SITE, "CF-Connecting-IP": "203.0.113.7" },
       body,
       duplex: "half",
     };
     const response = await harness.fetch(`${SITE}/api/talk`, init);
     hold();
     expect(response.status).toBe(413);
-    expect(await objectCount()).toBe(0);
-  });
-
-  it("refuses an audio part one byte over 4 MB inside a request under the cap", async () => {
-    const response = await send({ audio: audioBytes("webm", MAX_AUDIO_BYTES + 1) });
-    expect(response.status).toBe(413);
-    expect(await objectCount()).toBe(0);
-  });
-
-  it("takes an audio part of exactly 4 MB", async () => {
-    expect((await send({ audio: audioBytes("webm", MAX_AUDIO_BYTES) })).status).toBe(201);
-  });
-});
-
-describe("the form", () => {
-  it.each([
-    ["an extra field", { extra: "x" }],
-    ["a name over 80 characters", { name: "a".repeat(81) }],
-    ["an email that isn't one", { email: "not an email" }],
-    ["an email over 200 characters", { email: `${"a".repeat(195)}@b.com` }],
-    ["no token", { token: "" }],
-  ])("refuses %s", async (_label, fields) => {
-    expect((await send({ fields })).status).toBe(400);
-  });
-
-  it("refuses a body that isn't a form", async () => {
-    expect((await send({ rawBody: new TextEncoder().encode("not a form") })).status).toBe(400);
-  });
-});
-
-describe("the content check", () => {
-  it.each([
-    ["a type that isn't audio", "webm" as const, "text/plain"],
-    ["a WAV file", "wav" as const, "audio/wav"],
-    ["WebM bytes called MP4", "webm" as const, "audio/mp4"],
-    ["MP4 bytes called WebM", "mp4" as const, WEBM],
-    ["Ogg bytes called WebM", "ogg" as const, WEBM],
-  ])("refuses %s", async (_label, kind, type) => {
-    expect((await send({ audio: audioBytes(kind), type })).status).toBe(415);
-    expect(await objectCount()).toBe(0);
-  });
-
-  it("takes Ogg", async () => {
-    expect((await send({ audio: audioBytes("ogg"), type: "audio/ogg;codecs=opus" })).status).toBe(201);
+    expect(await rows("inbox")).toEqual([]);
   });
 });
 
 describe("the bot check", () => {
   it.each(["fail", "wrong-host", "wrong-action", "unreachable"])("refuses a %s token, storing nothing", async (token) => {
-    const response = await send({ fields: { token } });
+    const response = await send({ note: { token } });
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ reason: "bot-check" });
-    expect(await rows("inputs")).toEqual([]);
-    expect(await objectCount()).toBe(0);
+    expect(await rows("inbox")).toEqual([]);
   });
 
   it("is refused before it counts towards the limits", async () => {
-    for (let i = 0; i < 25; i += 1) await send({ fields: { token: "fail" } });
+    for (let i = 0; i < 25; i += 1) await send({ note: { token: "fail" } });
     expect((await send()).status).toBe(201);
   });
 });
@@ -233,7 +262,7 @@ describe("the daily limits", () => {
       for (let i = 0; i < 20; i += 1) expect((await send({ ip })).status).toBe(201);
     }
     expect((await send({ ip: "192.0.2.4" })).status).toBe(429);
-    expect(await rows("inputs")).toHaveLength(60);
+    expect(await rows("inbox")).toHaveLength(60);
   });
 
   it("lets exactly 20 of 25 concurrent sends from one address through", async () => {
@@ -263,8 +292,8 @@ describe("privacy", () => {
     const tables = (
       await database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'").all<{ name: string }>()
     ).results.map((t) => t.name);
-    expect(tables.sort()).toEqual(["inputs", "talk_days", "talk_senders"]);
-    const everything = JSON.stringify(await Promise.all(tables.map(rows)));
+    expect(tables.sort()).toEqual(["inbox", "inputs", "talk_days", "talk_senders"]);
+    const everything = JSON.stringify(await Promise.all(tables.map((table) => rows(table))));
     for (const needle of ["203.0.113.77", "2001:db8:aa:bb", "2001:0db8:00aa:00bb"]) expect(everything).not.toContain(needle);
   });
 
@@ -277,6 +306,21 @@ describe("privacy", () => {
     expect((await send()).status).toBe(201);
     expect((await rows("talk_days")).map((r) => r.day)).toEqual([new Date().toISOString().slice(0, 10)]);
     expect((await rows("talk_senders")).map((r) => r.sender)).not.toContain("old");
+  });
+});
+
+describe("the recordings' old rows", () => {
+  it("are left as they were by a new note", async () => {
+    const database = await harness.db();
+    await database
+      .prepare(
+        "INSERT INTO inputs (id, received_at, source, name, email, audio_key, audio_type, audio_bytes, duration_s, status) VALUES ('old', '2026-11-04T00:00:00.000Z', 'talk', NULL, NULL, 'talk/old', 'audio/webm', 2048, 3, 'received')",
+      )
+      .run();
+    expect((await send()).status).toBe(201);
+    expect(await rows("inputs")).toEqual([
+      expect.objectContaining({ id: "old", audio_key: "talk/old", audio_bytes: 2048, duration_s: 3 }),
+    ]);
   });
 });
 
@@ -312,15 +356,9 @@ describe("with no bot-check secret", () => {
   });
 
   it("refuses every send with 503 and stores nothing", async () => {
-    const { bytes, type } = await body({});
-    const response = await bare.fetch(`${SITE}/api/talk`, {
-      method: "POST",
-      headers: { "Content-Type": type, Origin: SITE, "CF-Connecting-IP": "203.0.113.7" },
-      body: bytes,
-    });
+    const response = await send({}, bare);
     expect(response.status).toBe(503);
-    expect((await (await bare.db()).prepare("SELECT COUNT(*) AS n FROM inputs").first<{ n: number }>())?.n).toBe(0);
-    expect((await (await bare.bucket()).list()).objects).toEqual([]);
+    expect(await rows("inbox", bare)).toEqual([]);
     expect(bare.outboundHosts.size).toBe(0);
   });
 });
@@ -335,12 +373,7 @@ describe("with Cloudflare's test secret, as `npm run dev` runs", () => {
   });
 
   it("stores a send from localhost, though the test verdict names example.com and no action", async () => {
-    const { bytes, type } = await body({ fields: { token: "XXXX.DUMMY.TOKEN.XXXX" } });
-    const response = await local.fetch("http://localhost:8787/api/talk", {
-      method: "POST",
-      headers: { "Content-Type": type, Origin: "http://localhost:8787", "CF-Connecting-IP": "127.0.0.1" },
-      body: bytes,
-    });
+    const response = await send({ note: { token: "XXXX.DUMMY.TOKEN.XXXX" }, ip: "127.0.0.1" }, local, "http://localhost:8787/api/talk");
     expect(response.status).toBe(201);
   });
 });
@@ -359,22 +392,24 @@ describe("routes", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
-  it("deletes the recording when its row can't be written", async () => {
+  it("answers 500 and keeps nothing when the row can't be written", async () => {
     const database = await harness.db();
-    await database.prepare("ALTER TABLE inputs RENAME TO inputs_away").run();
+    await database.prepare("ALTER TABLE inbox RENAME TO inbox_away").run();
     try {
-      expect((await send()).status).toBe(500);
-      expect(await objectCount()).toBe(0);
+      const response = await send();
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ reason: "store" });
     } finally {
-      await database.prepare("ALTER TABLE inputs_away RENAME TO inputs").run();
+      await database.prepare("ALTER TABLE inbox_away RENAME TO inbox").run();
     }
+    expect(await rows("inbox")).toEqual([]);
   });
 });
 
 describe("the outside world", () => {
   it("is reached only at Turnstile", async () => {
     await send();
-    await send({ fields: { token: "fail" } });
+    await send({ note: { token: "fail" } });
     expect([...harness.outboundHosts]).toEqual([TURNSTILE_HOST]);
   });
 });
