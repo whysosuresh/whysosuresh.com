@@ -1,12 +1,12 @@
 # The headers on every file the site serves; the Worker's own answers under /api/ set theirs in code.
-# The CSP allows the site's own files, one frame (YouTube's privacy-mode player), the talk flow's two
-# scripts and Cloudflare's Turnstile (its script and its frame), the recording played back from the
-# page's own memory, and requests only to the site itself. The microphone is allowed to the site alone.
+# The CSP allows the site's own files, one frame (YouTube's privacy-mode player), the note flow's
+# scripts and Cloudflare's Turnstile (its script and its frame), and requests only to the site itself.
+# No page may use the camera, the microphone or the location.
 # The referrer policy is never no-referrer, because the player refuses to play without one.
 # test/site.test.ts checks this file against the pages and the scripts.
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; img-src 'self'; media-src blob:; connect-src 'self'; frame-src https://www.youtube-nocookie.com https://challenges.cloudflare.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; img-src 'self'; connect-src 'self'; frame-src https://www.youtube-nocookie.com https://challenges.cloudflare.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   Referrer-Policy: strict-origin-when-cross-origin
   X-Content-Type-Options: nosniff
-  Permissions-Policy: camera=(), microphone=(self), geolocation=()
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
   Strict-Transport-Security: max-age=31536000

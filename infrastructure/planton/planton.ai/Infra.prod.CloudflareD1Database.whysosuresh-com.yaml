@@ -1,6 +1,6 @@
-# The site's database in the Cloudflare account `whysosuresh` (../../vendors/cloudflare/README.md): one row per
-# recording someone sends from the talk flow, and the two tables that count today's sends without keeping
-# anyone's address. The Worker reaches it through the `DB` binding in ../../../wrangler.jsonc, by the id in
+# The site's database in the Cloudflare account `whysosuresh` (../../vendors/cloudflare/README.md): the inbox,
+# one row per note someone sends from the note flow, and the two tables that count today's sends without
+# keeping anyone's address. The Worker reaches it through the `DB` binding in ../../../wrangler.jsonc, by the id in
 # `status.outputs.database_id`.
 #
 # Planton creates the database and nothing inside it. Its tables are the repository's migrations

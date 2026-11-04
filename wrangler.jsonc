@@ -1,11 +1,11 @@
 // whysosuresh.com: one Cloudflare Worker that serves the folder ./site, and runs code only for /api/*:
-// the talk flow's one write (src/talk.ts), into the database and the recordings' bucket bound below. Every
-// page comes straight from ./site, with no code in its path. This file drives `wrangler dev`, the dry run
-// in `npm run check` (whose bundle the Worker tests run), and the deploy that .github/workflows/site.yaml
-// runs on every merge to main, all with the wrangler pinned in ./deploy.
+// the note flow's one write (src/talk.ts), into the database bound below. Every page comes straight from
+// ./site, with no code in its path. This file drives `wrangler dev`, the dry run in `npm run check` (whose
+// bundle the Worker tests run), and the deploy that .github/workflows/site.yaml runs on every merge to
+// main, all with the wrangler pinned in ./deploy.
 //
-// The zone, its records, its redirect rule and its settings, the database, the bucket and the bot check
-// are Planton's (infrastructure/); only the Worker, its route and its bindings are declared here. Routes
+// The zone, its records, its redirect rule and its settings, the database and the bot check are
+// Planton's (infrastructure/); only the Worker, its route and its bindings are declared here. Routes
 // are declared only in this file, never in Cloudflare's dashboard. The bot check's secret is not here: the
 // deploy hands it over from the GitHub environment `production`, and `npm run dev` uses Cloudflare's
 // public test secret.
@@ -42,8 +42,6 @@
       "migrations_dir": "migrations"
     }
   ],
-  // The recordings' bucket Planton created (Infra.prod.CloudflareR2Bucket.whysosuresh-com-recordings).
-  "r2_buckets": [{ "binding": "AUDIO", "bucket_name": "whysosuresh-com-recordings" }],
   // The Worker's own log lines (one per refused send: its status and reason, nothing personal) are kept;
   // Cloudflare's automatic record of each request is off, because nothing says it leaves out the
   // visitor's address.

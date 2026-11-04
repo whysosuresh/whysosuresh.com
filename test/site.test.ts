@@ -1,13 +1,14 @@
 // The site's checks: what is served, that every page is valid HTML with the head a shared link needs,
 // that every internal link reaches a file without a redirect, that nothing loads from elsewhere but
 // the allowed player and the scripts' allowed resources, that the headers match the pages and the
-// scripts, that the stylesheet carries no dead rules, that nothing opens the talk flow yet, and that
-// the Worker's config routes the one domain to the code only under /api/. `wrangler deploy --dry-run`
+// scripts, that the stylesheet carries no dead rules, that nothing opens the note flow yet, that the
+// topic list the Worker shares is plain data and reads page addresses right, and that the Worker's
+// config routes the one domain to the code only under /api/. `wrangler deploy --dry-run`
 // does not read site/_headers, so this file parses it. The Worker itself is test/talk.test.ts's.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { HtmlValidate, Parser, type HtmlElement } from "html-validate";
 import { describe, expect, it } from "vitest";
 
@@ -26,7 +27,8 @@ const SERVED = [
   "index.html",
   "robots.txt",
   "style.css",
-  "talk-recorder.js",
+  "talk-send.js",
+  "talk-topics.js",
   "talk.js",
 ];
 
@@ -38,6 +40,9 @@ const EXTERNAL_RESOURCES = ["https://www.youtube-nocookie.com/embed/videoseries?
  * the page checks, so it is allowed here instead. Turnstile's script also opens its own frame.
  */
 const SCRIPT_RESOURCES = ["https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"];
+
+/** The only addresses on another origin a site script links to. A link loads nothing, so the CSP leaves it out. */
+const SCRIPT_LINKS = ["https://cal.com/whysosuresh"];
 
 const originsOf = (urls: string[]): string => [...new Set(urls.map((url) => new URL(url).origin))].join(" ");
 
@@ -52,8 +57,6 @@ const EXPECTED_HEADERS: Record<string, string> = {
     `script-src 'self' ${originsOf(SCRIPT_RESOURCES)}`,
     "style-src 'self'",
     "img-src 'self'",
-    // "Listen back" plays the recording from the page's own memory.
-    "media-src blob:",
     "connect-src 'self'",
     `frame-src ${originsOf([...EXTERNAL_RESOURCES, ...SCRIPT_RESOURCES])}`,
     "base-uri 'none'",
@@ -62,7 +65,7 @@ const EXPECTED_HEADERS: Record<string, string> = {
   ].join("; "),
   "Referrer-Policy": "strict-origin-when-cross-origin",
   "X-Content-Type-Options": "nosniff",
-  "Permissions-Policy": "camera=(), microphone=(self), geolocation=()",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
   "Strict-Transport-Security": "max-age=31536000",
 };
 
@@ -206,9 +209,9 @@ describe.each(scripts)("%s", (script) => {
     expect(read(script)).toMatch(/^\/\/ @ts-check\n\/\/ \S/);
   });
 
-  it("names no address on another origin but the allowlisted resources", () => {
+  it("names no address on another origin but the allowlisted resources and links", () => {
     const named = [...read(script).matchAll(/\b(?:https?:)?\/\/[^\s'"`)]+/g)].map((m) => m[0]);
-    expect(named.filter((url) => !SCRIPT_RESOURCES.includes(url))).toEqual([]);
+    expect(named.filter((url) => !SCRIPT_RESOURCES.includes(url) && !SCRIPT_LINKS.includes(url))).toEqual([]);
   });
 
   it("imports only served files, and links only to clean root-absolute addresses", () => {
@@ -220,18 +223,84 @@ describe.each(scripts)("%s", (script) => {
   });
 });
 
-describe("the talk flow", () => {
+describe("the note flow", () => {
   it("is opened by no element yet: only /#talk reaches it until its inbox exists", async () => {
     for (const page of pages) expect((await parse(page)).querySelectorAll("[data-talk]")).toEqual([]);
   });
 
-  it("is loaded by the home page", async () => {
-    const loaded = (await parse("index.html")).querySelectorAll('script[type="module"]').map((el) => attr(el, "src"));
+  it.each(["index.html", "feedback.html"])("is loaded by %s", async (page) => {
+    const loaded = (await parse(page)).querySelectorAll('script[type="module"]').map((el) => attr(el, "src"));
     expect(loaded).toEqual(["/talk.js"]);
   });
 
   it("carries the production widget's site key", () => {
-    expect(read("talk-recorder.js")).toMatch(/^const SITE_KEY = '0x[0-9A-Za-z_-]{20,}';$/m);
+    expect(read("talk-send.js")).toMatch(/^const SITE_KEY = '0x[0-9A-Za-z_-]{20,}';$/m);
+  });
+});
+
+interface Topic {
+  slug: string;
+  label: string;
+  hint: string;
+  questions: unknown[];
+}
+interface TopicsModule {
+  TOPICS: Topic[];
+  isTopic(slug: string): boolean;
+  topicFromHash(hash: string): unknown;
+}
+
+function isTopicsModule(value: unknown): value is TopicsModule {
+  if (typeof value !== "object" || value === null) return false;
+  const module = value as Record<string, unknown>;
+  return Array.isArray(module.TOPICS) && typeof module.isTopic === "function" && typeof module.topicFromHash === "function";
+}
+
+describe("talk-topics.js, which the Worker imports too", () => {
+  // A computed address, so the type check doesn't follow it into a browser script; the shape is checked here.
+  const loading = import(pathToFileURL(join(siteDir, "talk-topics.js")).href).then((loaded: unknown) => {
+    if (!isTopicsModule(loaded)) throw new Error("talk-topics.js lacks TOPICS, isTopic or topicFromHash");
+    return loaded;
+  });
+
+  it("is plain data and pure functions: it imports nothing, touches no page, and only declares exports", () => {
+    const code = read("talk-topics.js").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code).not.toMatch(/^import /m);
+    expect(code).not.toMatch(/\b(document|window|location|navigator|globalThis|fetch|localStorage|sessionStorage|addEventListener|setTimeout)\b/);
+    const topLevel = code.split("\n").filter((line) => /^\S/.test(line));
+    expect(topLevel.filter((line) => !/^(export |\}|\]\);)/.test(line))).toEqual([]);
+  });
+
+  it("lists the four topics, each with a label, a hint and two or three questions", async () => {
+    const { TOPICS } = await loading;
+    expect(TOPICS.map((topic) => topic.slug)).toEqual(["stigmer", "videos", "capsjump", "other"]);
+    for (const topic of TOPICS) {
+      expect(topic.label).not.toBe("");
+      expect(topic.hint).not.toBe("");
+      expect(topic.questions.length).toBeGreaterThanOrEqual(2);
+      expect(topic.questions.length).toBeLessThanOrEqual(3);
+      for (const question of topic.questions) expect(typeof question === "string" && question !== "").toBe(true);
+    }
+  });
+
+  it.each([
+    ["#talk", { open: true, topic: null }],
+    ["#talk/stigmer", { open: true, topic: "stigmer" }],
+    ["#talk/other", { open: true, topic: "other" }],
+    ["#talk/nope", { open: true, topic: null }],
+    ["#talk/", { open: true, topic: null }],
+    ["#talks", { open: false }],
+    ["#other", { open: false }],
+    ["", { open: false }],
+  ])("reads %j as %j", async (hash, expected) => {
+    const { topicFromHash } = await loading;
+    expect(topicFromHash(hash)).toEqual(expected);
+  });
+
+  it("knows a topic only by its exact slug", async () => {
+    const { isTopic } = await loading;
+    expect(["stigmer", "videos", "capsjump", "other"].every((slug) => isTopic(slug))).toBe(true);
+    expect(["Stigmer", "", "talk", "stigmer "].some((slug) => isTopic(slug))).toBe(false);
   });
 });
 
