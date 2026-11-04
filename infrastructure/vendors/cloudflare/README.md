@@ -15,9 +15,9 @@ R2 is off in a new account, and Planton can't create a bucket until it is on. It
 
 The talk flow's Turnstile widget (`Infra.prod.CloudflareTurnstileWidget.whysosuresh-com-talk`) is Planton's, and so is its secret: Planton keeps it as the widget's sensitive output. The Worker isn't a Planton resource, so the secret has one more copy, carried by hand: `TURNSTILE_SECRET` in the GitHub environment `production` of `whysosuresh/whysosuresh.com`, beside the deploy key. On each deploy the job hands it to the Worker as a secret (`.github/workflows/site.yaml`); a deploy with it empty fails before uploading anything.
 
-**Custody.** Planton, the `production` environment, and the owner's password manager. Nowhere else: never in a file, a command line or a log.
+**Custody.** Planton and the `production` environment. Nowhere else: never in a file, a command line or a log.
 
-**Copy or re-mint.** On the widget's page in the dashboard (Turnstile, the widget `whysosuresh.com talk`), the owner copies the secret key; a one-line script pipes the clipboard into `gh secret set TURNSTILE_SECRET --env production --repo whysosuresh/whysosuresh.com`. To re-mint, rotate the secret key on that page first, then copy it the same way and re-run the latest `site` run on `main`. Until the deploy runs, the Worker keeps the old secret and refuses every send.
+**Copy or re-mint.** The copy is taken from Planton, never by hand: a script reads the widget's `status.outputs.secret` reference with `planton get`, reveals that one value with `planton secret get --reveal --key … -o plain` (recorded in the secret's read-audit trail), checks its shape, and pipes it into `gh secret set TURNSTILE_SECRET --env production --repo whysosuresh/whysosuresh.com`; nothing prints it. To re-mint, rotate the secret key on the widget's page in the dashboard, re-apply the widget's file so Planton holds the new value (Cloudflare returns the secret on every read), copy it the same way, and re-run the latest `site` run on `main`. Until the deploy runs, the Worker keeps the old secret and refuses every send.
 
 The site key is public. It is the widget's identity, and sits in `site/talk-recorder.js`.
 
@@ -46,13 +46,14 @@ Planton has no record of this zone default (`CloudflareWebAnalyticsSite` creates
 
 ## The account API token `github-whysosuresh-com-deployer`
 
-The `deploy` job's key in `.github/workflows/site.yaml`: it uploads `site/` to the Worker `whysosuresh-com` and sets the Worker's one route. Planton can't upload a repository's static files to a Worker yet, so this one Worker is deployed from GitHub instead. Created on 2026-11-03 under Manage Account, Account API Tokens, Create Token, "Start from scratch", as `github-whysosuresh-com-deployer`. No expiry, all IP addresses allowed. Two policies and nothing else; Cloudflare's review summary read "Entire whysosuresh account: Workers Scripts Write" and "All zones in whysosuresh: Zone Read, Workers Routes Write":
+The `deploy` job's key in `.github/workflows/site.yaml`: it applies the database's migrations, uploads `site/` and the Worker's code to the Worker `whysosuresh-com`, and sets the Worker's one route. Planton can't upload a repository's static files to a Worker yet, so this one Worker is deployed from GitHub instead. Created on 2026-11-03 under Manage Account, Account API Tokens, Create Token, "Start from scratch", as `github-whysosuresh-com-deployer`. No expiry, all IP addresses allowed. Two policies and nothing else; Cloudflare's review summary read "Entire whysosuresh account: Workers Scripts Write" and "All zones in whysosuresh: Zone Read, Workers Routes Write":
 
 - **Entire account, Workers Scripts (Legacy), Edit:** creates the Worker on the first deploy and uploads each version.
 - **All Domains, Workers Routes, Edit:** sets the route `whysosuresh.com/*` from `wrangler.jsonc`.
 - **All Domains, Zone, Read:** wrangler finds the zone by its name (`zone_name` in `wrangler.jsonc`), within this account only.
+- **Entire account, D1, Edit:** applies `migrations/` to the database `whysosuresh-com` before each deploy (`../../planton/planton.ai/README.md` row 19). Added after the key was created; its value didn't change.
 
-It has no DNS, Zone Edit or Zone Settings rights, so it can't change a record, including `_atproto` and `_dmarc`. The account holds no other zone and no other Worker, so the account-wide rows reach nothing else today; a second site in this account would need this key narrowed first.
+It has no DNS, Zone Edit or Zone Settings rights, so it can't change a record, including `_atproto` and `_dmarc`. The account holds no other zone, Worker or database, so the account-wide rows reach nothing else today; a second site in this account would need this key narrowed first.
 
 **Custody.** Its value is the secret `CLOUDFLARE_API_TOKEN` in the GitHub environment `production` of `whysosuresh/whysosuresh.com`, which only `main` may use, and its copy for people is in the owner's password manager. Nowhere else, and never in Planton.
 

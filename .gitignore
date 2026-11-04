@@ -1,3 +1,4 @@
-# Installs and wrangler's local state; nothing here is ever committed.
+# Installs, wrangler's local state and the dry run's bundle; nothing here is ever committed.
 node_modules/
 .wrangler/
+dist/

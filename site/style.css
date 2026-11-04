@@ -1,8 +1,8 @@
-/* whysosuresh.com: the one stylesheet for every page. Black and white in light and dark (following
-   the device's setting), on CapsJump's tokens and system type, so his two sites read as one person's;
-   one 920px column that narrows to a phone and keeps clear of the notch and the home bar. No web
-   font: every script, Telugu included, falls through to the device's own face. Every class selector
-   here is used by a served page (test/site.test.ts). */
+/* whysosuresh.com: the one stylesheet for every page and the talk sheet. Black and white in light and
+   dark (following the device's setting), on CapsJump's tokens and system type, so his two sites read
+   as one person's; one 920px column that narrows to a phone and keeps clear of the notch and the home
+   bar. No web font: every script, Telugu included, falls through to the device's own face. Every
+   class selector here is used by a served page or script (test/site.test.ts). */
 
 :root {
   --bg: #fafafa;
@@ -11,7 +11,10 @@
   --muted: #5c5c5c;
   --line: #e5e5e5;
   --accent: #0a0a0a;
+  --accent-ink: #ffffff;
   --accent-soft: #ededed;
+  --shadow: rgba(0, 0, 0, 0.16);
+  --scrim: rgba(10, 10, 10, 0.42);
   --gutter-l: max(16px, env(safe-area-inset-left, 0px));
   --gutter-r: max(16px, env(safe-area-inset-right, 0px));
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
@@ -27,7 +30,10 @@
     --muted: #a3a3a3;
     --line: #2a2a2a;
     --accent: #f1f1f1;
+    --accent-ink: #0a0a0a;
     --accent-soft: #262626;
+    --shadow: rgba(0, 0, 0, 0.6);
+    --scrim: rgba(0, 0, 0, 0.66);
     color-scheme: dark;
   }
 }
@@ -47,11 +53,21 @@ body {
 }
 
 a { color: var(--accent); text-underline-offset: 0.18em; }
-a:focus-visible {
+a:focus-visible, button:focus-visible, input:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 3px;
 }
 img { max-width: 100%; height: auto; }
+[hidden] { display: none !important; }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
 
 /* The column: every band's inner wrapper carries the side gutter. */
 .bar, main, .foot {
@@ -129,19 +145,40 @@ p { margin: 0; }
   .portrait { max-width: 200px; aspect-ratio: 1 / 1; border-radius: 18px; }
 }
 
-/* The row of ways to reach him. */
+/* The row of ways to reach him, and the talk sheet's buttons: the bold one, and the quiet one. */
 .talk-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.talk-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 60px;
+  padding: 14px 26px 14px 20px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: inherit;
+  font-size: 20px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 6px 20px var(--shadow);
+}
+.talk-button:hover { text-decoration: underline; text-underline-offset: 0.2em; }
+.talk-button svg { width: 24px; height: 24px; flex: none; }
 .ghost-button {
   display: inline-flex;
   align-items: center;
+  gap: 8px;
   min-height: 48px;
   padding: 10px 18px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--surface);
   color: var(--ink);
+  font: inherit;
   font-weight: 600;
   text-decoration: none;
+  cursor: pointer;
 }
 .ghost-button:hover { border-color: var(--ink); }
 
@@ -226,4 +263,147 @@ p { margin: 0; }
   background: var(--accent-soft);
   border-radius: 0 10px 10px 0;
   font-weight: 600;
+}
+
+/* The talk sheet: a native dialog, a sheet from the bottom on a phone and a panel on a laptop. */
+.talk-dialog {
+  width: min(520px, 100%);
+  max-width: 100%;
+  max-height: 100%;
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 24px 60px var(--shadow);
+}
+.talk-dialog::backdrop { background: var(--scrim); }
+.talk-sheet {
+  display: grid;
+  gap: 18px;
+  padding: 20px 24px 28px;
+}
+.sheet-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sheet-name { color: var(--muted); font-size: 14px; font-weight: 600; }
+.close-button {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-right: -10px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+}
+.close-button:hover { background: var(--accent-soft); }
+.state { display: grid; align-content: start; gap: 16px; padding: 0; }
+.state h2 { margin: 0; font-size: 26px; }
+.state h2:focus { outline: none; }
+.state .big {
+  justify-self: start;
+  min-height: 56px;
+}
+.state ol, .state ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+
+.clock {
+  font-family: var(--mono);
+  font-size: clamp(56px, 16vw, 76px);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.clock .cap { color: var(--muted); font-size: 0.36em; font-weight: 500; letter-spacing: 0; }
+.level {
+  height: 14px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  overflow: hidden;
+}
+.level span {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: var(--ink);
+  border-radius: inherit;
+  transform-origin: left center;
+  transform: scaleX(0.05);
+  transition: transform 90ms linear;
+}
+.rec-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.rec-dot::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ink);
+  animation: blink 1.2s steps(2, start) infinite;
+}
+@keyframes blink { to { visibility: hidden; } }
+
+.notice {
+  padding: 12px 14px;
+  border: 1px solid var(--ink);
+  border-radius: 12px;
+  font-weight: 600;
+}
+.field { display: grid; gap: 6px; }
+.field label { font-weight: 600; font-size: 15px; }
+.field .hint { color: var(--muted); font-weight: 400; }
+.field input {
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+}
+.field input:focus { border-color: var(--ink); }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.text-button {
+  min-height: 44px;
+  padding: 8px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+audio { width: 100%; height: 44px; }
+
+@media (max-width: 560px) {
+  .talk-dialog {
+    width: 100%;
+    margin: auto 0 0;
+    border-radius: 20px 20px 0 0;
+    border-bottom: 0;
+  }
+  .talk-sheet {
+    padding-left: var(--gutter-l);
+    padding-right: var(--gutter-r);
+    padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+  }
+  .talk-button { width: 100%; justify-content: center; }
+  .state .big { justify-self: stretch; justify-content: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .level span { transition: none; }
+  .rec-dot::before { animation: none; }
 }

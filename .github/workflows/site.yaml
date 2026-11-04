@@ -1,10 +1,12 @@
-# The site's one workflow. `check` runs the type check, the site tests and wrangler's dry run on every
-# pull request and on main, holding no key; main's ruleset requires it. On main, `deploy` then puts
-# site/ on the Worker whysosuresh-com with wrangler, using a key from the environment `production`,
-# which only main may use. The key can deploy Workers and their routes and read zones, and nothing in
-# DNS. The deploy job checks out only what the deploy reads and installs only the wrangler pinned in
-# deploy/, so none of the check tools runs beside the key. The zone, its records and its redirect are
-# Planton's (infrastructure/), not this workflow's.
+# The site's one workflow. `check` runs the type checks, wrangler's dry run, the site tests and the Worker
+# tests on every pull request and on main, holding no key; main's ruleset requires it. On main, `deploy`
+# then applies the database's new migrations and puts site/ and the Worker's code on the Worker
+# whysosuresh-com with wrangler, using a key and the bot check's secret from the environment
+# `production`, which only main may use. The key can deploy Workers and their routes, read zones and
+# edit the account's D1 databases, and nothing in DNS. The deploy job checks out only what the deploy
+# reads and installs only the wrangler pinned in deploy/, so none of the check tools runs beside the key.
+# The zone, its records, its redirect, the database, the bucket and the bot check are Planton's
+# (infrastructure/), not this workflow's.
 
 name: site
 
@@ -67,6 +69,8 @@ jobs:
             .nvmrc
             wrangler.jsonc
             site
+            src
+            migrations
             deploy
           sparse-checkout-cone-mode: false
 
@@ -80,8 +84,33 @@ jobs:
         working-directory: deploy
         run: npm ci --no-audit --no-fund
 
+      - name: Check the bot check's secret is set
+        env:
+          TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
+        run: |
+          if [ -z "$TURNSTILE_SECRET" ]; then
+            echo "::error::TURNSTILE_SECRET is empty in the environment production; nothing was changed"
+            exit 1
+          fi
+
+      # Before the code, so the new version never meets an old schema. Migrations only add, so the version
+      # still running keeps working if the deploy below fails. In CI wrangler asks nothing and still takes
+      # its backup of the database first.
+      - name: Apply the database's migrations
+        working-directory: deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: ./node_modules/.bin/wrangler d1 migrations apply whysosuresh-com --remote --config ../wrangler.jsonc
+
+      # The secret goes to wrangler in a file only this job's user can read, deleted when the step ends;
+      # never on a command line. Secrets are added to the version, never deleted by a deploy.
       - name: Deploy whysosuresh-com
         working-directory: deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: ./node_modules/.bin/wrangler deploy --config ../wrangler.jsonc --message "main ${GITHUB_SHA::12}"
+          TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
+        run: |
+          secrets="$RUNNER_TEMP/worker-secrets.json"
+          trap 'rm -f "$secrets"' EXIT
+          (umask 077 && jq -n '{TURNSTILE_SECRET: env.TURNSTILE_SECRET}' > "$secrets")
+          ./node_modules/.bin/wrangler deploy --config ../wrangler.jsonc --secrets-file "$secrets" --message "main ${GITHUB_SHA::12}"
