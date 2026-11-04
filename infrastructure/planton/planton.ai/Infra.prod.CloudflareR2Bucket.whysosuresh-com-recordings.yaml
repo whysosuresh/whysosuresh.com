@@ -3,6 +3,10 @@
 # it through the `AUDIO` binding in ../../../wrangler.jsonc, and nothing else does: no public access, no custom
 # domain, no CORS, no lock.
 #
+# A recording is deleted when its item is marked Done or Dropped, and in any case 30 days after it arrived, by the
+# lifecycle rule below; the written-out words stay in the database. At the Worker's daily limits (60 sends of at
+# most 4 MB) 30 days holds at most about 7 GB, under R2's free 10 GB, so the bucket can't grow into a bill.
+#
 # R2 refuses to delete a bucket that holds objects, so retiring this file means emptying the bucket first.
 # R2 must be turned on in the account before the first apply (row 15 of README.md).
 #
@@ -22,3 +26,13 @@ spec:
   location: apac # a hint honoured only at creation, near where Suresh listens
   jurisdiction: default
   publicAccess: false # only the Worker reads or writes a recording
+  lifecycle:
+    rules:
+      - id: delete-after-30-days
+        enabled: true
+        conditions:
+          prefix: "" # every recording, whatever door it came through
+        deleteObjectsTransition:
+          condition:
+            type: Age
+            maxAgeSeconds: 2592000 # 30 days
