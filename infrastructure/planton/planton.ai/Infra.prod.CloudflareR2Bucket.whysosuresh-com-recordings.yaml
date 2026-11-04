@@ -1,0 +1,38 @@
+# The site's recordings in the Cloudflare account `whysosuresh` (../../vendors/cloudflare/README.md): the audio
+# people send, one object per recording, keyed by where it came from and its id (`talk/<id>`). The Worker reaches
+# it through the `AUDIO` binding in ../../../wrangler.jsonc, and nothing else does: no public access, no custom
+# domain, no CORS, no lock.
+#
+# A recording is deleted when its item is marked Done or Dropped, and in any case 30 days after it arrived, by the
+# lifecycle rule below; the written-out words stay in the database. At the Worker's daily limits (60 sends of at
+# most 4 MB) 30 days holds at most about 7 GB, under R2's free 10 GB, so the bucket can't grow into a bill.
+#
+# R2 refuses to delete a bucket that holds objects, so retiring this file means emptying the bucket first.
+# R2 must be turned on in the account before the first apply (row 15 of README.md).
+#
+#   planton apply -f Infra.prod.CloudflareR2Bucket.whysosuresh-com-recordings.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareR2Bucket
+metadata:
+  name: whysosuresh-com-recordings # permanent
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  # Permanent, and named for what it holds rather than the one door it fills today; the key carries the source.
+  bucketName: whysosuresh-com-recordings
+  accountId: $var/cloudflare-whysosuresh-account-id
+  location: apac # a hint honoured only at creation, near where Suresh listens
+  jurisdiction: default
+  publicAccess: false # only the Worker reads or writes a recording
+  lifecycle:
+    rules:
+      - id: delete-after-30-days
+        enabled: true
+        conditions:
+          prefix: "" # every recording, whatever door it came through
+        deleteObjectsTransition:
+          condition:
+            type: Age
+            maxAgeSeconds: 2592000 # 30 days

@@ -1,0 +1,27 @@
+# The talk flow's bot check in the Cloudflare account `whysosuresh` (../../vendors/cloudflare/README.md): an
+# invisible Turnstile widget, so a visitor is never asked to prove anything. The page asks it for a token when
+# Send is pressed, and the Worker checks that token with the widget's secret before storing a recording.
+#
+# `status.outputs.sitekey` is public and sits in site/talk-recorder.js. `status.outputs.secret` is sensitive:
+# Planton keeps it, and its one other copy is the GitHub environment `production`'s `TURNSTILE_SECRET`, which
+# the deploy job hands to the Worker (the vendor record says how it got there).
+#
+#   planton apply -f Infra.prod.CloudflareTurnstileWidget.whysosuresh-com-talk.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareTurnstileWidget
+metadata:
+  name: whysosuresh-com-talk # permanent
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  accountId: $var/cloudflare-whysosuresh-account-id
+  name: whysosuresh.com talk
+  # The production widget allows only the site. Local runs use Cloudflare's public test keys instead, so
+  # this key never works on localhost.
+  domains:
+    - whysosuresh.com
+  # Never shows a challenge. A visitor it distrusts can't prove themselves with a click; changing the mode
+  # is an in-place edit and a product decision. Enterprise-only flags stay unset.
+  mode: invisible

@@ -1,0 +1,25 @@
+# The site's database in the Cloudflare account `whysosuresh` (../../vendors/cloudflare/README.md): one row per
+# recording someone sends from the talk flow, and the two tables that count today's sends without keeping
+# anyone's address. The Worker reaches it through the `DB` binding in ../../../wrangler.jsonc, by the id in
+# `status.outputs.database_id`.
+#
+# Planton creates the database and nothing inside it. Its tables are the repository's migrations
+# (../../../migrations/), applied by the deploy job with wrangler before each new version of the Worker.
+#
+#   planton apply -f Infra.prod.CloudflareD1Database.whysosuresh-com.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareD1Database
+metadata:
+  name: whysosuresh-com # permanent: the Worker's binding and the deploy's migrations name the database by it
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  databaseName: whysosuresh-com # permanent: `wrangler d1 migrations apply` finds the database by this name
+  accountId: $var/cloudflare-whysosuresh-account-id
+  # Suresh reads from India. Fixed at creation, and Cloudflare never reads it back, so a later edit does
+  # nothing; moving the database means recreating it, data included.
+  region: apac
+  readReplication:
+    mode: disabled # one primary: every read sees the latest write, with no sessions API in the Worker
