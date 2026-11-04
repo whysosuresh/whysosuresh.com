@@ -185,6 +185,22 @@ class TalkFlow {
     this.nameInput = find(this.dialog, '#talk-name', HTMLInputElement);
     this.emailInput = find(this.dialog, '#talk-email', HTMLInputElement);
 
+    // Chrome's recorder writes WebM with no length in it, so the player reports an endless duration and
+    // draws its progress bar wrongly. Seeking far past the end makes Chrome read the whole file and learn
+    // the real length; the player then goes back to the start. Safari's MP4 carries its length, so this
+    // never runs there.
+    this.findingLength = false;
+    this.audio.addEventListener('loadedmetadata', () => {
+      if (Number.isFinite(this.audio.duration)) return;
+      this.findingLength = true;
+      this.audio.currentTime = Number.MAX_SAFE_INTEGER;
+    });
+    this.audio.addEventListener('durationchange', () => {
+      if (!this.findingLength || !Number.isFinite(this.audio.duration)) return;
+      this.findingLength = false;
+      this.audio.currentTime = 0;
+    });
+
     this.dialog.addEventListener('click', (event) => this.onClick(event));
     this.dialog.addEventListener('cancel', (event) => {
       if (this.state === 'sending') event.preventDefault();
@@ -335,6 +351,7 @@ class TalkFlow {
   }
 
   discardTake() {
+    this.findingLength = false;
     this.audio.removeAttribute('src');
     this.audio.load();
     if (this.audioUrl) URL.revokeObjectURL(this.audioUrl);
