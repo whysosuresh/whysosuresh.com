@@ -10,13 +10,16 @@
 // Beside the site's notes it shows what the recorder sync adds: things told to him in person ("told to you by
 // <name>"), his own work and ideas ("yours", as "You"), each with a title, and items moved from a GitHub issue
 // with a link back to it. A note the sync filed as an issue sits in Done as Filed, with a link to the issue;
-// Done closes it once the issue is, and Reply then opens for its sender as for any feedback.
+// Done closes it once the issue is, and Reply then opens for its sender as for any feedback. What the sync
+// adds is written in GitHub's Markdown, so it is shown formatted (markdown.js parses, this file builds the
+// nodes, so nothing becomes markup); a visitor's note is always shown as the plain text they typed.
 //
 // Laptop: three columns (queues, list, note), every move on a key (`?` lists them). Phone: one note fills the
 // screen with the moves under the thumb and the queues along the bottom. The data sits behind inbox-store.js.
 
 import { TOPICS } from '../talk-topics.js';
 import { Failed, SignedOut, change, list } from './inbox-store.js';
+import { parse } from './markdown.js';
 
 /**
  * @typedef {import('./inbox-store.js').Item} Item
@@ -200,6 +203,59 @@ function fromOf(item) {
   const match = item.ref === null ? null : GITHUB_REF.exec(item.ref);
   if (!match) return null;
   return issueOf(`${GITHUB}${match[1]}/issues/${match[2]}`);
+}
+
+/**
+ * Inline runs as nodes: text stays text, a link opens in a new tab.
+ * @param {import('./markdown.js').Inline[]} runs
+ * @returns {(Node | string)[]}
+ */
+function inlineNodes(runs) {
+  return runs.map((run) => {
+    switch (run.type) {
+      case 'text':
+        return run.text;
+      case 'code':
+        return el('code', {}, [run.text]);
+      case 'strong':
+        return el('strong', {}, [run.text]);
+      case 'em':
+        return el('em', {}, [run.text]);
+      case 'link':
+        return el('a', { href: run.href, target: '_blank', rel: 'noopener' }, [run.text]);
+    }
+  });
+}
+
+/**
+ * An item the sync added, its Markdown shown formatted.
+ * @param {string} text
+ */
+function formatted(text) {
+  const box = el('div', { class: 'note-md', dir: 'auto' });
+  for (const block of parse(text)) {
+    switch (block.type) {
+      case 'p':
+        box.append(el('p', {}, inlineNodes(block.inline)));
+        break;
+      case 'h':
+        box.append(el('h3', {}, inlineNodes(block.inline)));
+        break;
+      case 'quote':
+        box.append(el('blockquote', {}, inlineNodes(block.inline)));
+        break;
+      case 'list':
+        box.append(el(block.ordered ? 'ol' : 'ul', {}, block.items.map((runs) => el('li', {}, inlineNodes(runs)))));
+        break;
+      case 'pre':
+        box.append(el('pre', {}, [el('code', {}, [block.text])]));
+        break;
+      case 'rule':
+        box.append(el('hr'));
+        break;
+    }
+  }
+  return box;
 }
 
 /**
@@ -737,7 +793,8 @@ class Inbox {
       el('div', { class: 'note-meta' }, [el('p', { class: 'fine' }, [`${when(item.receivedAt)} · ${sourceLabel(item)}`]), tags]),
     ]);
 
-    const text = el('p', { class: 'note-text', dir: 'auto' }, [item.body]);
+    const fromSync = item.source === 'self' || item.source === 'told';
+    const text = fromSync ? formatted(item.body) : el('p', { class: 'note-text', dir: 'auto' }, [item.body]);
     if (TELUGU.test(item.body)) text.setAttribute('lang', 'te');
     const body = el('div', { class: 'note-body' });
     if (item.title) body.append(el('h2', { class: 'note-title', dir: 'auto' }, [item.title]));

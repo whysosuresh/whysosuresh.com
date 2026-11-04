@@ -29,6 +29,7 @@ const SERVED = [
   "inbox/inbox-store.js",
   "inbox/inbox.js",
   "inbox/index.html",
+  "inbox/markdown.js",
   "index.html",
   "robots.txt",
   "style.css",

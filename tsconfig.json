@@ -1,6 +1,7 @@
 // The type check for the tests, their config and the command-line tools under tools/: strict TypeScript on
 // Node, no emit. The site's browser scripts and the Worker have their own (tsconfig.site.json,
-// tsconfig.worker.json), each against its own runtime's library; `npm run typecheck` runs all three.
+// tsconfig.worker.json), each against its own runtime's library; `npm run typecheck` runs all three. It
+// reads JavaScript too, so a test of a site module (site/inbox/markdown.js) gets that module's JSDoc types.
 {
   "compilerOptions": {
     "target": "es2023",
@@ -8,6 +9,7 @@
     "moduleResolution": "nodenext",
     "lib": ["es2023"],
     "types": ["node"],
+    "allowJs": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
