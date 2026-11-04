@@ -12,9 +12,8 @@ import { networkOf, takeSend } from "./quota.ts";
 import { keep, type Note } from "./store.ts";
 import { verifyToken } from "./turnstile.ts";
 import { json } from "./json.ts";
-
-/** The Worker's bindings (wrangler.jsonc), and the bot check's secret, which the deploy sets. */
-export type Bindings = Env & { readonly TURNSTILE_SECRET?: string };
+import { isJson, sameOrigin } from "./request.ts";
+import type { Bindings } from "./bindings.ts";
 
 /** The longest note, in UTF-16 code units of the trimmed text; the page counts the same way. */
 const MAX_BODY = 4000;
@@ -38,19 +37,6 @@ const BODY_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/;
 function refuse(status: number, reason: string): Response {
   console.log(JSON.stringify({ refused: status, reason }));
   return json(status, { reason });
-}
-
-/** Whether the request comes from the site's own page: its Origin is this request's own origin. */
-function sameOrigin(request: Request): boolean {
-  const site = request.headers.get("Sec-Fetch-Site");
-  if (site !== null && site !== "same-origin") return false;
-  return request.headers.get("Origin") === new URL(request.url).origin;
-}
-
-/** Whether the declared media type is JSON; parameters such as `charset` are allowed. */
-function isJson(request: Request): boolean {
-  const type = request.headers.get("Content-Type") ?? "";
-  return type.split(";")[0]?.trim().toLowerCase() === "application/json";
 }
 
 /** The five keys as strings, or null for anything else: another shape, a missing, extra or non-string key. */

@@ -5,11 +5,12 @@ The source of [whysosuresh.com](https://whysosuresh.com), Suresh's home page: wh
 ## How it is built
 
 - `site/` is the whole site: plain HTML, one stylesheet and the note flow's three scripts (`talk.js`, the screens; `talk-topics.js`, the topics a note can be about and their questions; `talk-send.js`, the bot check and the upload), with no build step. `site/_headers` sets the security headers on every file.
-- `src/` is the Worker's code, which runs only for `/api/*`: `POST /api/talk` takes a typed note of up to 4,000 characters about one of the topics, as JSON, checks it with Cloudflare's Turnstile and two daily limits (20 a day from one network, 60 in all), and stores it as a row in D1's `inbox`. `migrations/` holds the database's tables.
+- `site/inbox/` is Suresh's private inbox at `whysosuresh.com/inbox`: every note, newest first, in four tabs (To look at, To act on, To discuss, Done). He sorts a new note with one click (Act on it, for feedback; Talk it through, for an idea), drops junk, closes what's done, and replies from his own Gmail. Cloudflare Access guards `/inbox` and everything under it: he signs in with a one-time code sent to his email, and the recorder sync with its service token. The page holds no data; it reads the inbox's calls under `/inbox/api/`.
+- `src/` is the Worker's code, which runs only for `/api/*` and `/inbox/api/*`. `POST /api/talk` takes a typed note of up to 4,000 characters about one of the topics, as JSON, checks it with Cloudflare's Turnstile and two daily limits (20 a day from one network, 60 in all), and stores it as a row in D1's `inbox`. The inbox's calls check Access's signature on every request themselves (`src/access.ts`) and admit only the owner and the sync: `GET /inbox/api/items` lists one tab, 50 at a time, and `POST /inbox/api/items/<id>` makes one move on one note (owner only). `migrations/` holds the database's tables.
 - `wrangler.jsonc` describes the Cloudflare Worker `whysosuresh-com`: its files, its code, its one route (`whysosuresh.com`) and its binding to the database.
-- `test/site.test.ts` checks the site: the files served, valid HTML, links, outside resources, the headers, and unused CSS. `test/talk.test.ts` runs the Worker's bundle in Cloudflare's runtime, through Miniflare, with a local database.
+- `test/site.test.ts` checks the site: the files served, valid HTML, links, outside resources, the headers, unused CSS, and that no file names the owner's email address. `test/talk.test.ts` and `test/inbox.test.ts` run the Worker's bundle in Cloudflare's runtime, through Miniflare, with a local database; the inbox's tests play Access, signing tokens with the harness's own keys.
 - `.github/workflows/site.yaml` runs the checks on every pull request and on `main`. On `main` it also applies new migrations and deploys, with a key that can deploy Workers and edit the database, and nothing in DNS.
-- `infrastructure/` declares the rest: the zone, its records, the `www` redirect, the zone's settings, the database and the bot check, applied by Planton.
+- `infrastructure/` declares the rest: the zone, its records, the `www` redirect, the zone's settings, the database, the bot check and the inbox's Access (its sign-in, its two callers and its application), applied by Planton.
 
 ## Working on it
 
@@ -28,7 +29,7 @@ deploy/node_modules/.bin/wrangler d1 migrations apply whysosuresh-com --local --
 npm run dev
 ```
 
-Then open `http://localhost:8787/#talk`, or `#talk/stigmer` for one topic. No button opens the note flow yet; it appears with the inbox.
+Then open `http://localhost:8787/#talk`, or `#talk/stigmer` for one topic. No button opens the note flow yet; it appears once the inbox is live. Locally, `/inbox/` loads but every call it makes is refused: nothing signs for Access there, and the Worker admits no request Access didn't sign. The inbox's tests are where its calls run.
 
 `AGENTS.md` lists the rules for changes.
 

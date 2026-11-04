@@ -1,8 +1,8 @@
-/* whysosuresh.com: the one stylesheet for every page and the note sheet. Black and white in light and
-   dark (following the device's setting), on CapsJump's tokens and system type, so his two sites read
-   as one person's; one 920px column that narrows to a phone and keeps clear of the notch and the home
-   bar. No web font: every script, Telugu included, falls through to the device's own face. Every
-   class selector here is used by a served page or script (test/site.test.ts). */
+/* whysosuresh.com: the one stylesheet for every page, the note sheet and the private inbox. Black and
+   white in light and dark (following the device's setting), on CapsJump's tokens and system type, so his
+   two sites read as one person's; one 920px column that narrows to a phone and keeps clear of the notch
+   and the home bar. No web font: every script, Telugu included, falls through to the device's own face.
+   Every class selector here is used by a served page or script (test/site.test.ts). */
 
 :root {
   --bg: #fafafa;
@@ -53,7 +53,7 @@ body {
 }
 
 a { color: var(--accent); text-underline-offset: 0.18em; }
-a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible {
+a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 3px;
 }
@@ -357,6 +357,120 @@ p { margin: 0; }
   cursor: pointer;
 }
 
+/* The inbox: one list, four tabs, cards with the same edges as the doors. */
+.inbox-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; padding-top: 12px; }
+.inbox-head h1 { font-size: clamp(32px, 6vw, 44px); }
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin: 20px 0 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow-x: auto;
+}
+.tabs [role="tab"] {
+  flex: 1 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tabs [role="tab"][aria-selected="true"] { background: var(--accent); color: var(--accent-ink); }
+.tab-count {
+  min-width: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+[aria-selected="true"] .tab-count { background: var(--accent-ink); color: var(--accent); }
+[data-inbox] .notice { margin-top: 18px; }
+
+.cards { display: grid; gap: 14px; margin: 18px 0 16px; padding: 0; list-style: none; }
+.cards[aria-busy="true"] { opacity: 0.6; }
+.card {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+.card-top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.who { font-weight: 700; }
+.who .email { color: var(--muted); font-weight: 400; font-size: 15px; overflow-wrap: anywhere; }
+.when { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.chip-select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-height: 36px;
+  padding: 6px 30px 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 12px center;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.chip-select:hover { border-color: var(--ink); }
+.tag {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+.note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding-left: 14px;
+  border-left: 2px solid var(--line);
+}
+.note[data-open] { display: block; -webkit-line-clamp: unset; }
+.card .actions { padding-top: 14px; border-top: 1px solid var(--line); }
+.card .actions button, .drop-form button, .reply-dialog .actions button, .reply-dialog .actions a {
+  min-height: 44px;
+  padding: 8px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+.card .actions .primary, .drop-form .primary, .reply-dialog .actions .primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.drop-form { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.empty { padding: 40px 0; color: var(--muted); text-align: center; }
+.reply-dialog { width: min(640px, 100%); }
+.reply-dialog textarea { min-height: 280px; }
+
 @media (max-width: 560px) {
   .talk-dialog {
     width: 100%;
@@ -371,5 +485,7 @@ p { margin: 0; }
   }
   .talk-button { width: 100%; justify-content: center; }
   .state .big { justify-self: stretch; justify-content: center; }
+  .tabs { display: grid; grid-template-columns: 1fr 1fr; overflow: visible; }
+  .tabs [role="tab"] { padding: 8px 10px; }
 }
 

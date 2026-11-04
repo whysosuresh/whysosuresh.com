@@ -1,8 +1,12 @@
-// The Worker's code, which runs only for /api/* (`run_worker_first` in wrangler.jsonc); every other path is
-// a file from site/. One route: POST /api/talk, the talk flow's send.
+// The Worker's code, which runs only for /api/* and /inbox/api/* (`run_worker_first` in wrangler.jsonc); every
+// other path is a file from site/. Two doors: POST /api/talk, the note flow's public send (src/talk.ts), and
+// the private inbox's calls under /inbox/api/, behind Cloudflare Access and the Worker's own check of the
+// caller (src/inbox.ts).
 
+import type { Bindings } from "./bindings.ts";
+import { handleInbox } from "./inbox.ts";
 import { json } from "./json.ts";
-import { handleTalk, type Bindings } from "./talk.ts";
+import { handleTalk } from "./talk.ts";
 
 export default {
   async fetch(request, env): Promise<Response> {
@@ -11,6 +15,7 @@ export default {
       if (request.method !== "POST") return json(405, { reason: "method" }, { Allow: "POST" });
       return handleTalk(request, env);
     }
+    if (pathname.startsWith("/inbox/api/")) return handleInbox(request, env);
     return json(404, { reason: "not-found" });
   },
 } satisfies ExportedHandler<Bindings>;

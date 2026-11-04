@@ -1,0 +1,24 @@
+# The recorder sync's machine sign-in to the inbox: it sends the token's client id and secret as the
+# `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers instead of an email code. Access lets it through
+# by the policy whysosuresh-com-inbox-sync, and the Worker admits it by its client id alone
+# (`INBOX_SYNC_CLIENT_ID` in ../../../wrangler.jsonc): it may read the inbox, and change nothing yet.
+#
+# `status.outputs.client_id` is not secret and sits in wrangler.jsonc. `status.outputs.client_secret` is:
+# Cloudflare shows it once, at creation, and Planton keeps it as a sensitive output. It is read from there,
+# piped and never printed; there is no other copy. A lost or leaked secret is rotated by raising
+# `clientSecretVersion` and re-applying.
+#
+#   planton apply -f Infra.prod.CloudflareZeroTrustAccessServiceToken.whysosuresh-com-inbox-sync.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareZeroTrustAccessServiceToken
+metadata:
+  name: whysosuresh-com-inbox-sync # permanent
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  accountId: $var/cloudflare-whysosuresh-account-id
+  name: whysosuresh.com inbox sync
+  # Never expires on its own, so the sync can't break silently a year from now; it lives until rotated.
+  duration: forever

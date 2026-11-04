@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<!-- whysosuresh.com/inbox: Suresh's private inbox of the notes people send him, behind Cloudflare Access (only
+     his email gets in). One list in four tabs; inbox.js draws the cards and their actions from the inbox's own
+     calls under /inbox/api/, and fills the reply panel below with a drafted email he sends from his own mail.
+     The page holds no data itself. Every link and file is root-absolute. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex">
+  <title>Inbox · whysosuresh.com</title>
+  <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
+  <link rel="icon" type="image/png" sizes="192x192" href="/img/icon-192.png">
+  <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/inbox/inbox.js"></script>
+</head>
+<body>
+  <header class="bar">
+    <a class="brand" href="/">whysosuresh.com</a>
+    <a class="bar-link" href="/feedback">Talk to me</a>
+  </header>
+
+  <main data-inbox>
+    <div class="inbox-head">
+      <h1>Inbox</h1>
+      <p class="fine">What people told you, newest first.</p>
+    </div>
+
+    <div class="tabs" role="tablist" aria-label="Inbox">
+      <button type="button" role="tab" id="tab-look" data-tab="look" aria-controls="inbox-panel" aria-selected="true">To look at <span class="tab-count">0</span></button>
+      <button type="button" role="tab" id="tab-act" data-tab="act" aria-controls="inbox-panel" aria-selected="false" tabindex="-1">To act on <span class="tab-count">0</span></button>
+      <button type="button" role="tab" id="tab-discuss" data-tab="discuss" aria-controls="inbox-panel" aria-selected="false" tabindex="-1">To discuss <span class="tab-count">0</span></button>
+      <button type="button" role="tab" id="tab-done" data-tab="done" aria-controls="inbox-panel" aria-selected="false" tabindex="-1">Done <span class="tab-count">0</span></button>
+    </div>
+
+    <p class="notice" data-problem hidden></p>
+    <div role="tabpanel" id="inbox-panel" aria-labelledby="tab-look">
+      <ul class="cards" data-cards></ul>
+      <button type="button" class="text-button" data-older hidden>Show older</button>
+    </div>
+    <p class="visually-hidden" aria-live="polite" data-live></p>
+  </main>
+
+  <dialog class="talk-dialog reply-dialog" data-reply aria-labelledby="reply-title">
+    <div class="talk-sheet">
+      <div class="sheet-top">
+        <h2 id="reply-title">Reply</h2>
+        <button type="button" class="close-button" data-close-reply aria-label="Close">&times;</button>
+      </div>
+      <div class="field">
+        <label for="reply-to">To</label>
+        <input id="reply-to" type="email" readonly>
+      </div>
+      <div class="field">
+        <label for="reply-subject">Subject</label>
+        <input id="reply-subject" type="text">
+      </div>
+      <div class="field">
+        <label for="reply-body">Email</label>
+        <textarea id="reply-body"></textarea>
+      </div>
+      <div class="actions">
+        <a class="primary" href="https://mail.google.com/mail/" target="_blank" rel="noopener" data-open-gmail>Open in Gmail</a>
+        <button type="button" data-copy>Copy</button>
+      </div>
+      <p class="fine" aria-live="polite" data-copied></p>
+      <p class="fine">Gmail opens as the address you signed in with, with this written. You edit it there and press Send yourself.</p>
+    </div>
+  </dialog>
+</body>
+</html>

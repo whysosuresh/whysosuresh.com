@@ -1,0 +1,21 @@
+# Who may sign in to the inbox: the owner's email address, and no one else. The address comes from the Planton
+# secret inbox-owner-email, so this public file never names it. Anyone else who types an address on the sign-in
+# page is sent no code. The Worker checks the same address again on every request (../../../src/access.ts).
+#
+#   planton apply -f Infra.prod.CloudflareZeroTrustAccessPolicy.whysosuresh-com-inbox-owner.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareZeroTrustAccessPolicy
+metadata:
+  name: whysosuresh-com-inbox-owner # permanent
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  accountId: $var/cloudflare-whysosuresh-account-id
+  name: whysosuresh.com inbox owner
+  decision: allow
+  sessionDuration: 168h # a week between email codes
+  include:
+    - email:
+        email: $secret/inbox-owner-email

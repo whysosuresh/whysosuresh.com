@@ -2,9 +2,11 @@
 // that every internal link reaches a file without a redirect, that nothing loads from elsewhere but
 // the allowed player and the scripts' allowed resources, that the headers match the pages and the
 // scripts, that the stylesheet carries no dead rules, that nothing opens the note flow yet, that the
-// topic list the Worker shares is plain data and reads page addresses right, and that the Worker's
-// config routes the one domain to the code only under /api/. `wrangler deploy --dry-run`
-// does not read site/_headers, so this file parses it. The Worker itself is test/talk.test.ts's.
+// topic list the Worker shares is plain data and reads page addresses right, that the private inbox's
+// page is never indexed or shared, that no file names the owner's email address, and that the Worker's
+// config routes the one domain to the code only under /api/ and /inbox/api/. `wrangler deploy --dry-run`
+// does not read site/_headers, so this file parses it. The Worker itself is test/talk.test.ts's and
+// test/inbox.test.ts's.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -24,6 +26,9 @@ const SERVED = [
   "img/avatar.webp",
   "img/icon-192.png",
   "img/share.jpg",
+  "inbox/inbox-store.js",
+  "inbox/inbox.js",
+  "inbox/index.html",
   "index.html",
   "robots.txt",
   "style.css",
@@ -42,7 +47,7 @@ const EXTERNAL_RESOURCES = ["https://www.youtube-nocookie.com/embed/videoseries?
 const SCRIPT_RESOURCES = ["https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"];
 
 /** The only addresses on another origin a site script links to. A link loads nothing, so the CSP leaves it out. */
-const SCRIPT_LINKS = ["https://cal.com/whysosuresh"];
+const SCRIPT_LINKS = ["https://cal.com/whysosuresh", "https://mail.google.com/mail/"];
 
 const originsOf = (urls: string[]): string => [...new Set(urls.map((url) => new URL(url).origin))].join(" ");
 
@@ -77,6 +82,13 @@ function listFiles(dir: string): string[] {
 }
 
 const served = listFiles(siteDir).sort();
+
+function listFilesUnder(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    return statSync(path).isDirectory() ? listFilesUnder(path) : [path];
+  });
+}
 const pages = served.filter((file) => file.endsWith(".html"));
 const scripts = served.filter((file) => file.endsWith(".js"));
 const read = (file: string): string => readFileSync(join(siteDir, file), "utf8");
@@ -345,9 +357,10 @@ describe("style.css", () => {
         for (const name of attr(el, "class").split(/\s+/)) used.add(name);
       }
     }
-    // The talk flow draws its sheet from a template in its script, and names the dialog's class there.
+    // The note flow draws its sheet from a template in its script, and names the dialog's class there; the
+    // inbox builds its cards with a helper that takes the class as an object key (`class: 'card'`).
     for (const script of scripts) {
-      for (const match of read(script).matchAll(/class(?:Name)?\s*=\s*["']([^"'$]+)["']/g)) {
+      for (const match of read(script).matchAll(/class(?:Name)?\s*[=:]\s*["']([^"'$]+)["']/g)) {
         for (const name of (match[1] ?? "").split(/\s+/)) used.add(name);
       }
     }
@@ -359,6 +372,46 @@ describe("style.css", () => {
     const defined = new Set([...css.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1] ?? ""));
     const readProps = new Set([...css.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1] ?? ""));
     expect([...defined].filter((name) => !readProps.has(name))).toEqual([]);
+  });
+});
+
+describe("the inbox's page", () => {
+  it("is never indexed, and carries nothing a shared link reads", async () => {
+    const doc = await parse("inbox/index.html");
+    const robots = doc.querySelectorAll('meta[name="robots"]')[0];
+    expect(robots && attr(robots, "content")).toBe("noindex");
+    expect(doc.querySelectorAll('link[rel="canonical"], meta[property^="og:"], meta[name="description"]')).toEqual([]);
+    expect(SHARED_PAGES).not.toContain("inbox/index.html");
+  });
+
+  it("loads only its own script, which reaches the inbox's calls and nothing else of the site's", async () => {
+    const loaded = (await parse("inbox/index.html")).querySelectorAll('script[type="module"]').map((el) => attr(el, "src"));
+    expect(loaded).toEqual(["/inbox/inbox.js"]);
+    const paths = [...read("inbox/inbox-store.js").matchAll(/`(\/[^`?$]*)/g)].map((m) => m[1]);
+    expect(paths.every((path) => path?.startsWith("/inbox/api/"))).toBe(true);
+    expect(paths.length).toBeGreaterThan(0);
+  });
+
+  it("never submits a form, because the CSP allows none: its dialog holds no form", async () => {
+    expect((await parse("inbox/index.html")).querySelectorAll("form")).toEqual([]);
+  });
+});
+
+describe("the owner's email address", () => {
+  // The repository is public, so address scrapers read it: the address lives in Planton and the GitHub
+  // environment `production`, and the page learns it from the sign-in.
+  const files = [
+    ...served.filter((file) => !file.startsWith("img/")).map((file) => join(siteDir, file)),
+    ...listFilesUnder(join(root, "src")),
+    ...listFilesUnder(join(root, "infrastructure")),
+    join(root, "wrangler.jsonc"),
+    join(root, "README.md"),
+    join(root, "AGENTS.md"),
+    join(root, ".github", "workflows", "site.yaml"),
+  ];
+
+  it.each(files.map((file) => relative(root, file)))("is not in %s", (file) => {
+    expect(readFileSync(join(root, file), "utf8")).not.toMatch(/[\w.+-]+@gmail\.com/i);
   });
 });
 
@@ -375,8 +428,8 @@ describe("wrangler.jsonc", () => {
     expect(text).not.toContain("custom_domain");
   });
 
-  it("runs the code only under /api/, and every page comes straight from site/", () => {
-    expect(text).toContain('"run_worker_first": ["/api/*"]');
+  it("runs the code only under /api/ and /inbox/api/, and every page comes straight from site/", () => {
+    expect(text).toContain('"run_worker_first": ["/api/*", "/inbox/api/*"]');
     expect(text.match(/"run_worker_first"/g)).toHaveLength(1);
   });
 
