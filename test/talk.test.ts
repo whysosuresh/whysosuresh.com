@@ -96,6 +96,10 @@ describe("a good note", () => {
       kind: null,
       drop_reason: null,
       reply_opened_at: null,
+      title: null,
+      ref: null,
+      filed_link: null,
+      moved_at: null,
     });
     expect(String(row?.received_at) >= before).toBe(true);
   });

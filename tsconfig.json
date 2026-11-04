@@ -1,6 +1,6 @@
-// The type check for the tests and their config: strict TypeScript on Node, no emit. The site's browser
-// scripts and the Worker have their own (tsconfig.site.json, tsconfig.worker.json), each against its own
-// runtime's library; `npm run typecheck` runs all three.
+// The type check for the tests, their config and the command-line tools under tools/: strict TypeScript on
+// Node, no emit. The site's browser scripts and the Worker have their own (tsconfig.site.json,
+// tsconfig.worker.json), each against its own runtime's library; `npm run typecheck` runs all three.
 {
   "compilerOptions": {
     "target": "es2023",
@@ -20,5 +20,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["test/**/*.ts", "vitest.config.ts"]
+  "include": ["test/**/*.ts", "tools/**/*.ts", "vitest.config.ts"]
 }

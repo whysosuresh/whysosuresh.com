@@ -414,6 +414,7 @@ describe("the owner's email address", () => {
   const files = [
     ...served.filter((file) => !file.startsWith("img/")).map((file) => join(siteDir, file)),
     ...listFilesUnder(join(root, "src")),
+    ...listFilesUnder(join(root, "tools")),
     ...listFilesUnder(join(root, "infrastructure")),
     join(root, "wrangler.jsonc"),
     join(root, "README.md"),
