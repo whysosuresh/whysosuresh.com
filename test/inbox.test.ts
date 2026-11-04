@@ -229,7 +229,7 @@ describe("who gets in", () => {
     ["a token with no expiry", { claims: { exp: undefined } }],
     ["a token of another type", { claims: { type: "org" } }],
     ["a token that isn't one", { token: "not.a.token" }],
-    ["an oversized token", { token: "a".repeat(9000) }],
+    ["an oversized token, however well signed", { claims: { padding: "x".repeat(9000) } }],
   ];
   it.each(refused)("refuses %s with 403", async (_, ask) => {
     const response = await getList("?tab=look", ask);
