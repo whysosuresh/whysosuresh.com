@@ -1,10 +1,12 @@
 // The inbox's calls, run as production runs them: the Worker's bundle in workerd (test/harness.ts), with a local
 // D1 and Cloudflare Access played (its keys, and tokens signed with them). What it holds: each tab lists its
-// own notes newest first, 50 at a time, with a cursor to the rest and every tab's count; the owner may change a
-// note and the sync may only read; exactly two callers get in, and every other token is refused, whatever check
-// it fails; the keys are fetched once, again for a rotated key, and not again for a made-up key within the
-// minute; every move the inbox allows, every one it refuses, and the row exactly as it is after; the request
-// checks on a change; and that the Worker reaches nothing but Access's keys.
+// own notes newest first, 50 at a time, with a cursor to the rest and every tab's count; the owner and the sync
+// may both move a note, the owner alone from his own page and alone to mark his mail opened, the sync alone
+// to add an item or file one; exactly two callers get in, and every other token is refused, whatever check it
+// fails; the keys are fetched once, again for a rotated key, and not again for a made-up key within the
+// minute; every add, every move the inbox allows, every one it refuses, and the row exactly as it is after,
+// with every move stamping when; the request checks on an add and a change; and that the Worker reaches
+// nothing but Access's keys.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ACCESS_TEAM_DOMAIN, INBOX_SYNC_CLIENT_ID, OWNER, SITE, startHarness, type Claims, type Harness, type TokenOptions } from "./harness.ts";
@@ -24,6 +26,9 @@ interface Row {
   kind: string | null;
   drop_reason: string | null;
   reply_opened_at: string | null;
+  title: string | null;
+  ref: string | null;
+  filed_link: string | null;
 }
 
 interface ListAnswer {
@@ -56,6 +61,9 @@ async function seed(fields: Partial<Row> = {}, target: Harness = harness): Promi
     kind: null,
     drop_reason: null,
     reply_opened_at: null,
+    title: null,
+    ref: null,
+    filed_link: null,
     ...fields,
   };
   const columns = Object.keys(row);
@@ -66,8 +74,16 @@ async function seed(fields: Partial<Row> = {}, target: Harness = harness): Promi
   return row;
 }
 
+/** The row as a move left it, its `moved_at` stamp aside (stampOf reads that), so a move compares by what it changed. */
 async function rowOf(id: string, target: Harness = harness): Promise<Row | null> {
-  return (await target.db()).prepare("SELECT * FROM inbox WHERE id = ?1").bind(id).first<Row>();
+  const row = await (await target.db()).prepare("SELECT * FROM inbox WHERE id = ?1").bind(id).first<Row & { moved_at?: string | null }>();
+  if (row === null) return null;
+  delete row.moved_at;
+  return row;
+}
+
+async function stampOf(id: string): Promise<string | null> {
+  return (await (await harness.db()).prepare("SELECT moved_at FROM inbox WHERE id = ?1").bind(id).first<{ moved_at: string | null }>())?.moved_at ?? null;
 }
 
 interface Ask {
@@ -120,12 +136,13 @@ describe("a list", () => {
     const discuss = await seed({ status: "discuss", kind: "idea" });
     const done = await seed({ status: "done", kind: "feedback" });
     const dropped = await seed({ status: "dropped", drop_reason: "junk" });
+    const filed = await seed({ status: "filed", kind: "feedback", filed_link: "https://github.com/example/notes/issues/1" });
 
     const expected: Record<string, string[]> = {
       look: [look[1]?.id ?? "", look[0]?.id ?? ""],
       act: [act.id],
       discuss: [discuss.id],
-      done: [dropped.id, done.id],
+      done: [filed.id, dropped.id, done.id],
     };
     for (const [tab, ids] of Object.entries(expected)) {
       const response = await getList(`?tab=${tab}`);
@@ -133,7 +150,7 @@ describe("a list", () => {
       expect(response.headers.get("Cache-Control")).toBe("no-store");
       const answer = (await response.json()) as ListAnswer;
       expect(answer.items.map((item) => item.id)).toEqual(ids);
-      expect(answer.counts).toEqual({ look: 2, act: 1, discuss: 1, done: 2 });
+      expect(answer.counts).toEqual({ look: 2, act: 1, discuss: 1, done: 3 });
       expect(answer.next).toBeNull();
       expect(answer.me).toBe(OWNER);
     }
@@ -148,6 +165,7 @@ describe("a list", () => {
         receivedAt: row.received_at,
         source: "talk",
         topic: "stigmer",
+        title: null,
         body: row.body,
         name: null,
         email: "asha@example.com",
@@ -155,6 +173,9 @@ describe("a list", () => {
         kind: "idea",
         dropReason: "a test",
         replyOpenedAt: "2026-11-04T10:00:00.000Z",
+        ref: null,
+        filedLink: null,
+        movedAt: null,
       },
     ]);
   });
@@ -199,10 +220,10 @@ describe("a list", () => {
     expect(await reasonOf(response)).toBe("query");
   });
 
-  it("is GET only, and nothing else under /inbox/api/ answers", async () => {
-    const posted = await harness.fetch(`${SITE}/inbox/api/items`, { method: "POST", headers: assertion({}, harness) });
-    expect(posted.status).toBe(405);
-    expect(posted.headers.get("Allow")).toBe("GET");
+  it("is GET or POST only, and nothing else under /inbox/api/ answers", async () => {
+    const put = await harness.fetch(`${SITE}/inbox/api/items`, { method: "PUT", headers: assertion({}, harness) });
+    expect(put.status).toBe(405);
+    expect(put.headers.get("Allow")).toBe("GET, POST");
     expect((await harness.fetch(`${SITE}/inbox/api/other`, { headers: assertion({}, harness) })).status).toBe(404);
     expect((await harness.fetch(`${SITE}/inbox/api/items/${idFor(1)}`, { headers: assertion({}, harness) })).status).toBe(405);
   });
@@ -254,14 +275,16 @@ describe("who gets in", () => {
     expect((await getList("?tab=look", { claims: { email: OWNER.toUpperCase() } })).status).toBe(200);
   });
 
-  it("lets the sync read and change nothing", async () => {
+  it("lets the sync move a note with no origin, as a script sends, but not mark the owner's mail opened", async () => {
     const row = await seed();
     const sync = harness.access.syncClaims();
     expect((await getList("?tab=look", { claims: sync })).status).toBe(200);
-    const response = await post(row.id, { claims: sync, body: { action: "act" } });
-    expect(response.status).toBe(403);
-    expect(await reasonOf(response)).toBe("read-only");
-    expect(await rowOf(row.id)).toEqual(row);
+    expect((await post(row.id, { claims: sync, origin: null, body: { action: "act" } })).status).toBe(200);
+    expect(await rowOf(row.id)).toEqual({ ...row, status: "act", kind: "feedback" });
+    const refused = await post(row.id, { claims: sync, origin: null, body: { action: "reply-opened" } });
+    expect(refused.status).toBe(403);
+    expect(await reasonOf(refused)).toBe("owner-only");
+    expect(await rowOf(row.id)).toEqual({ ...row, status: "act", kind: "feedback" });
   });
 
   it("reaches nothing but the team's keys", async () => {
@@ -483,5 +506,205 @@ describe("a move", () => {
     const row = await seed();
     const response = await post(row.id, { rawBody: JSON.stringify({ action: "drop", reason: "x".repeat(2000) }) });
     expect(response.status).toBe(413);
+  });
+});
+
+describe("a move by the sync", () => {
+  const sync = (): Claims => harness.access.syncClaims();
+  const link = "https://github.com/example/notes/issues/42";
+
+  it.each(["received", "act", "discuss"])("file from %s makes it Filed, with its link, as something to act on", async (status) => {
+    const row = await seed({ status, kind: status === "discuss" ? "idea" : status === "act" ? "feedback" : null });
+    const response = await post(row.id, { claims: sync(), origin: null, body: { action: "file", link } });
+    expect(response.status).toBe(200);
+    expect(await rowOf(row.id)).toEqual({ ...row, status: "filed", filed_link: link, kind: "feedback" });
+    const answer = (await response.json()) as { item: { status: string; filedLink: string } };
+    expect(answer.item).toMatchObject({ status: "filed", filedLink: link });
+  });
+
+  it("done closes a filed note, reopen puts it back as Filed, and topic still changes it", async () => {
+    const row = await seed({ status: "filed", kind: "feedback", filed_link: link });
+    expect((await post(row.id, { body: { action: "done" } })).status).toBe(200);
+    expect(await rowOf(row.id)).toEqual({ ...row, status: "done" });
+    expect((await post(row.id, { body: { action: "reopen" } })).status).toBe(200);
+    expect(await rowOf(row.id)).toEqual(row);
+    expect((await post(row.id, { claims: sync(), origin: null, body: { action: "topic", topic: "videos" } })).status).toBe(200);
+    expect(await rowOf(row.id)).toEqual({ ...row, topic: "videos" });
+  });
+
+  it.each(["done", "dropped", "filed"])("file from %s is refused with 409", async (status) => {
+    const row = await seed({ status, kind: "feedback", filed_link: status === "filed" ? link : null });
+    const response = await post(row.id, { claims: sync(), origin: null, body: { action: "file", link } });
+    expect(response.status).toBe(409);
+    expect(await rowOf(row.id)).toEqual(row);
+  });
+
+  it.each(["act", "discuss", "unsort", "drop"])("%s from Filed is refused with 409", async (action) => {
+    const row = await seed({ status: "filed", kind: "feedback", filed_link: link });
+    const body = action === "drop" ? { action, reason: "" } : { action };
+    expect((await post(row.id, { claims: sync(), origin: null, body })).status).toBe(409);
+    expect(await rowOf(row.id)).toEqual(row);
+  });
+
+  it("file is the sync's alone: the owner is refused with 403", async () => {
+    const row = await seed();
+    const response = await post(row.id, { body: { action: "file", link } });
+    expect(response.status).toBe(403);
+    expect(await reasonOf(response)).toBe("sync-only");
+    expect(await rowOf(row.id)).toEqual(row);
+  });
+
+  it.each([
+    ["no link", { action: "file" }],
+    ["a link that isn't text", { action: "file", link: 42 }],
+    ["a link to another site", { action: "file", link: "https://example.com/example/notes/issues/1" }],
+    ["a link to a pull request", { action: "file", link: "https://github.com/example/notes/pull/1" }],
+    ["a link over http", { action: "file", link: "http://github.com/example/notes/issues/1" }],
+    ["a link with more after it", { action: "file", link: `${link}#issuecomment-1` }],
+    ["an extra key", { action: "file", link, reason: "x" }],
+  ])("file with %s is refused with 400", async (_, body) => {
+    const row = await seed();
+    const response = await post(row.id, { claims: sync(), origin: null, body });
+    expect(response.status).toBe(400);
+    expect(await reasonOf(response)).toBe("change");
+    expect(await rowOf(row.id)).toEqual(row);
+  });
+});
+
+describe("the stamp", () => {
+  const stamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+  it.each([
+    ["act", "received", {}],
+    ["unsort", "act", {}],
+    ["done", "act", {}],
+    ["drop", "discuss", { reason: "" }],
+    ["reopen", "dropped", {}],
+    ["topic", "act", { topic: "videos" }],
+    ["reply-opened", "act", {}],
+  ])("%s from %s stamps when it moved", async (action, status, extra) => {
+    const row = await seed({ status, kind: status === "received" ? null : "feedback" });
+    expect(await stampOf(row.id)).toBeNull();
+    expect((await post(row.id, { body: { action, ...extra } })).status).toBe(200);
+    expect(await stampOf(row.id)).toMatch(stamp);
+  });
+
+  it("is left alone by a refused move", async () => {
+    const row = await seed({ status: "done", kind: "feedback" });
+    expect((await post(row.id, { body: { action: "act" } })).status).toBe(409);
+    expect(await stampOf(row.id)).toBeNull();
+  });
+});
+
+describe("an add", () => {
+  const sync = (): Claims => harness.access.syncClaims();
+  const self = { ref: "chat:2026-11-04-a-plugin", source: "self", title: "A plugin for coding agents", body: "Install once, every agent gets it.", topic: "stigmer", status: "discuss" };
+  const told = { ref: "recorder:260104_0001:2", source: "told", title: "Try these thumbnail sites", body: "He said they cost less.", topic: "videos", name: "Dev", status: "received" };
+
+  async function addItem(body: unknown, ask: Post = {}): Promise<Response> {
+    const headers: Record<string, string> = { "Content-Type": ask.contentType ?? "application/json", ...assertion({ claims: sync(), ...ask }, harness) };
+    const text = ask.rawBody ?? JSON.stringify(body);
+    return harness.fetch(`${SITE}/inbox/api/items`, { method: "POST", headers, body: new TextEncoder().encode(text) });
+  }
+
+  async function byRef(ref: string): Promise<(Row & { moved_at: string | null })[]> {
+    return (await (await harness.db()).prepare("SELECT * FROM inbox WHERE ref = ?1").bind(ref).all<Row & { moved_at: string | null }>()).results;
+  }
+
+  it("keeps his own item, sorted where he put it, with its title and where it came from", async () => {
+    const response = await addItem(self);
+    expect(response.status).toBe(201);
+    const { item } = (await response.json()) as { item: { id: string; receivedAt: string } };
+    expect(await byRef(self.ref)).toEqual([
+      {
+        id: item.id,
+        received_at: item.receivedAt,
+        source: "self",
+        topic: "stigmer",
+        body: self.body,
+        name: null,
+        email: null,
+        status: "discuss",
+        kind: "idea",
+        drop_reason: null,
+        reply_opened_at: null,
+        title: self.title,
+        ref: self.ref,
+        filed_link: null,
+        moved_at: null,
+      },
+    ]);
+    const look = (await (await getList("?tab=discuss", { claims: sync() })).json()) as ListAnswer;
+    expect(look.items.map((one) => one.id)).toEqual([item.id]);
+  });
+
+  it("keeps a thing told to him with the teller's name, and no topic when it has none", async () => {
+    expect((await addItem({ ...told, topic: null })).status).toBe(201);
+    expect(await byRef(told.ref)).toMatchObject([{ source: "told", name: "Dev", topic: null, status: "received", kind: null, email: null }]);
+    expect((await addItem({ ...told, ref: "recorder:260104_0001:3", status: "act" })).status).toBe(201);
+    expect(await byRef("recorder:260104_0001:3")).toMatchObject([{ status: "act", kind: "feedback" }]);
+  });
+
+  it("answers the item already there, unchanged, when the same ref comes again", async () => {
+    const first = (await (await addItem(self)).json()) as { item: { id: string } };
+    const again = await addItem({ ...self, title: "Something else", status: "act" });
+    expect(again.status).toBe(200);
+    const second = (await again.json()) as { item: { id: string; title: string; status: string } };
+    expect(second.item).toMatchObject({ id: first.item.id, title: self.title, status: "discuss" });
+    expect(await byRef(self.ref)).toHaveLength(1);
+  });
+
+  it("trims the title and body, and keeps the body's line breaks and a long Telugu body whole", async () => {
+    const body = `${"తెలుగు ".repeat(4500).trim()}\n\nమరో పేరా`;
+    expect(body.length).toBeLessThanOrEqual(32_000);
+    expect((await addItem({ ...self, title: "  Spaced  ", body: `  ${body}  ` })).status).toBe(201);
+    expect(await byRef(self.ref)).toMatchObject([{ title: "Spaced", body }]);
+  });
+
+  it("is the sync's alone: the owner is refused with 403, from his own page too", async () => {
+    const response = await addItem(self, { claims: harness.access.ownerClaims() });
+    expect(response.status).toBe(403);
+    expect(await reasonOf(response)).toBe("sync-only");
+    expect(await byRef(self.ref)).toEqual([]);
+  });
+
+  it.each([
+    ["an array", ["self"], "item"],
+    ["no source", { ...self, source: undefined }, "source"],
+    ["a source of the site's", { ...self, source: "talk" }, "source"],
+    ["an extra key", { ...self, email: "a@example.com" }, "keys"],
+    ["a missing key", { ...self, topic: undefined }, "keys"],
+    ["a name on his own item", { ...self, name: "Suresh" }, "keys"],
+    ["a told item with no name", { ...told, name: undefined }, "keys"],
+    ["a ref with no kind", { ...self, ref: "42" }, "ref"],
+    ["a ref with a space", { ...self, ref: "chat:an idea" }, "ref"],
+    ["a ref over 200", { ...self, ref: `chat:${"x".repeat(191)}` }, "ref"],
+    ["an empty title", { ...self, title: "  " }, "title"],
+    ["a title on two lines", { ...self, title: "one\ntwo" }, "title"],
+    ["a title over 200", { ...self, title: "x".repeat(201) }, "title"],
+    ["an empty body", { ...self, body: " \n " }, "body"],
+    ["a body over 32,000", { ...self, body: "x".repeat(32_001) }, "body"],
+    ["a body with a control character", { ...self, body: "a\u0007b" }, "body"],
+    ["a body that isn't text", { ...self, body: 7 }, "body"],
+    ["an unknown topic", { ...self, topic: "company" }, "topic"],
+    ["an empty name", { ...told, name: " " }, "name"],
+    ["a name over 80", { ...told, name: "x".repeat(81) }, "name"],
+    ["a closed status", { ...self, status: "done" }, "status"],
+    ["the Filed status", { ...self, status: "filed" }, "status"],
+  ])("with %s is refused with 400, and nothing is kept", async (_, body, reason) => {
+    const response = await addItem(body);
+    expect(response.status).toBe(400);
+    expect(await reasonOf(response)).toBe(reason);
+    const all = await (await harness.db()).prepare("SELECT COUNT(*) AS n FROM inbox").first<{ n: number }>();
+    expect(all?.n).toBe(0);
+  });
+
+  it("that isn't JSON is refused with 415, invalid JSON with 400, and over 128 KiB with 413 before it is read", async () => {
+    expect((await addItem(null, { rawBody: "ref=x", contentType: "application/x-www-form-urlencoded" })).status).toBe(415);
+    const broken = await addItem(null, { rawBody: "{" });
+    expect(broken.status).toBe(400);
+    expect(await reasonOf(broken)).toBe("item");
+    const large = await addItem(null, { rawBody: JSON.stringify({ ...self, body: "x".repeat(128 * 1024) }) });
+    expect(large.status).toBe(413);
   });
 });
