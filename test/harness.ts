@@ -212,7 +212,7 @@ function playAccess(): PlayedAccess & { serve(request: RuntimeRequest): RuntimeR
   };
 }
 
-export async function startHarness(options: { secret?: string; owner?: string; through?: string; port?: number } = {}): Promise<Harness> {
+export async function startHarness(options: { secret?: string; owner?: string; through?: string } = {}): Promise<Harness> {
   const bundlePath = join(root, "dist", "worker.js");
   if (!existsSync(bundlePath)) throw new Error("dist/worker.js is missing: run `npm run dry-run` first (`npm test` does)");
   if (!COMPATIBILITY_DATE) throw new Error("wrangler.jsonc names no compatibility_date");
@@ -248,7 +248,7 @@ export async function startHarness(options: { secret?: string; owner?: string; t
   const owner = options.owner ?? OWNER;
   const mf = new Miniflare({
     host: "127.0.0.1",
-    port: options.port ?? 0,
+    port: 0,
     workers: [
       {
         config: {

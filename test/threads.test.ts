@@ -1,13 +1,15 @@
 // The threads' calls under /threads/api/, run as production runs them: the Worker's bundle in workerd
 // (test/harness.ts), with a local D1 and Cloudflare Access played for the threads' own application. What it
 // holds: a list answers one tab newest number first, 50 at a time, with the number to go on from and every tab's
-// count; an add is numbered after the last, once per ref, and numbers stay unique under adds at the same time; a
-// thread's call answers it with its comments and its history, oldest first; every move by number writes its
-// event in the same transaction, a refused one writes nothing, and `reopen`'s event names the status it really
-// went to; a comment and a text, each from either caller, an edit keeping the text it replaced and leaving
-// `moved_at` alone, and a visitor's own words never rewritten; the owner's writes only from his own page, the
-// sync alone adding and filing, the owner alone marking his mail opened; each door refuses the other's token;
-// and the inbox's moves are in the same history.
+// count; an add is numbered after the last, once per ref, and numbers stay unique under adds at the same time; the
+// owner starts a thread of his own from his page; a thread's call answers it with its comments and its history,
+// oldest first; every move by number writes its event in the same transaction, a refused one writes nothing, and
+// `reopen`'s event names the status it really went to; a comment and a text (a title, a summary or a main text),
+// each from either caller, an edit keeping the text it replaced and leaving `moved_at` alone, and a visitor's own
+// words never rewritten; every write stamps the thread's last activity; a search answers a number or words; the
+// sign-in sends the owner back only to a threads page; the owner's writes only from his own page, the sync alone
+// filing, the owner alone marking his mail opened; each door refuses the other's token; and the inbox's moves are
+// in the same history.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SITE, startHarness, type App, type Harness } from "./harness.ts";
@@ -47,6 +49,7 @@ interface Thread {
   ref: string | null;
   filedLink: string | null;
   movedAt: string | null;
+  activityAt: string;
 }
 
 interface Event {
@@ -160,6 +163,7 @@ describe("an add", () => {
       ref: body.ref,
       filedLink: null,
       movedAt: null,
+      activityAt: thread.createdAt,
     });
     const again = await call("", { body: { ...body, title: "Another title" } });
     expect(again.status).toBe(200);
@@ -194,10 +198,29 @@ describe("an add", () => {
     expect(await eventCount()).toBe(0);
   });
 
-  it("is the sync's alone: the owner is refused with 403, from his own page too", async () => {
-    const response = await call("", { as: "owner", body: self() });
-    expect(response.status).toBe(403);
-    expect(await reasonOf(response)).toBe("sync-only");
+  it("from the owner's page starts a thread of his own, with a title, a space and an open tab, and no origin", async () => {
+    await added();
+    const response = await call("", { as: "owner", body: { title: "  Pricing for small teams ", body: "", space: "stigmer", status: "act" } });
+    expect(response.status).toBe(201);
+    const { thread } = (await response.json()) as { thread: Thread };
+    expect(thread).toMatchObject({ number: 2, source: "self", title: "Pricing for small teams", body: "", space: "stigmer", status: "act", kind: "feedback", ref: null, senderName: null });
+    expect((await shown(thread.number)).events).toEqual([
+      { id: expect.any(Number), at: thread.createdAt, actor: "owner", type: "created", data: { source: "self", status: "act" } },
+    ]);
+    const again = await call("", { as: "owner", body: { title: "Pricing for small teams", body: "", space: "stigmer", status: "act" } });
+    expect(((await again.json()) as { thread: Thread }).thread.number).toBe(3);
+  });
+
+  it.each([
+    ["the sync's shape", { ref: "chat:x", source: "self", title: "x", body: "x", space: "company", status: "received" }, "keys"],
+    ["no title", { title: " ", body: "", space: "company", status: "received" }, "title"],
+    ["a title of two lines", { title: "one\ntwo", body: "", space: "company", status: "received" }, "title"],
+    ["no space", { title: "x", body: "", space: null, status: "received" }, "space"],
+    ["a closed status", { title: "x", body: "", space: "company", status: "done" }, "status"],
+  ])("from the owner with %s is refused with 400, and nothing is kept", async (_, body, reason) => {
+    const response = await call("", { as: "owner", body });
+    expect([response.status, await reasonOf(response)]).toEqual([400, reason]);
+    expect(await eventCount()).toBe(0);
   });
 });
 
@@ -419,16 +442,124 @@ describe("a text", () => {
     expect(summary.status).toBe(200);
   });
 
+  it("renames a thread, a visitor's note too, keeping the title it replaced", async () => {
+    const thread = await added({ title: "First name" });
+    const response = await call(`/${thread.number}/text`, { as: "owner", body: { field: "title", text: "  Who owns what " } });
+    expect(((await response.json()) as { thread: Thread }).thread.title).toBe("Who owns what");
+    expect((await shown(thread.number)).events[1]).toMatchObject({ actor: "owner", type: "edited", data: { field: "title", before: "First name" } });
+    const note = await visitorNote();
+    const named = await call(`/${note}/text`, { as: "owner", body: { field: "title", text: "Lost at the install" } });
+    expect(((await named.json()) as { thread: Thread }).thread).toMatchObject({ title: "Lost at the install", body: "My own words, *as typed*." });
+  });
+
   it.each([
     ["an empty main text", { field: "body", text: " " }],
     ["a summary over 4,000", { field: "summary", text: "x".repeat(4001) }],
-    ["a field that isn't one", { field: "title", text: "x" }],
+    ["an empty title", { field: "title", text: " " }],
+    ["a title of two lines", { field: "title", text: "one\ntwo" }],
+    ["a title over 200", { field: "title", text: "x".repeat(201) }],
+    ["a field that isn't one", { field: "name", text: "x" }],
     ["a missing text", { field: "summary" }],
     ["a text that isn't one", { field: "summary", text: 4 }],
   ])("with %s is refused with 400", async (_, body) => {
     const thread = await added();
     const response = await call(`/${thread.number}/text`, { body });
     expect([response.status, await reasonOf(response)]).toEqual([400, "text"]);
+  });
+});
+
+describe("the last activity", () => {
+  it("is the arrival, then moves with every move, edit and comment, and never with a read", async () => {
+    const thread = await added();
+    expect(thread.activityAt).toBe(thread.createdAt);
+    let last = thread.activityAt;
+    const writes: [string, unknown][] = [
+      [`/${thread.number}`, { action: "act" }],
+      [`/${thread.number}/text`, { field: "summary", text: "Next: call Meera." }],
+      [`/${thread.number}/comments`, { body: "Called her." }],
+    ];
+    for (const [path, body] of writes) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect((await call(path, { body })).status).toBeLessThan(300);
+      const now = (await shown(thread.number)).thread.activityAt;
+      expect(now > last).toBe(true);
+      last = now;
+    }
+    await call("?tab=act");
+    expect((await shown(thread.number)).thread.activityAt).toBe(last);
+  });
+});
+
+describe("a search", () => {
+  async function found(words: string, as: Who = "owner"): Promise<number[]> {
+    const response = await harness.fetch(`${SITE}/threads/api/search?${new URLSearchParams({ q: words }).toString()}`, {
+      headers: { "Cf-Access-Jwt-Assertion": harness.access.token(as === "owner" ? harness.access.ownerClaims("threads") : harness.access.syncClaims("threads"), { app: "threads" }) },
+    });
+    expect(response.status).toBe(200);
+    return ((await response.json()) as { threads: Thread[] }).threads.map((thread) => thread.number);
+  }
+
+  it("answers the thread with that number, as 42 or #42", async () => {
+    for (let i = 0; i < 3; i += 1) await added();
+    expect(await found("2")).toEqual([2]);
+    expect(await found("#3", "sync")).toEqual([3]);
+    expect(await found("#9")).toEqual([]);
+  });
+
+  it("answers the threads whose title, summary or text hold the words, ignoring case, most recently active first", async () => {
+    const title = await added({ title: "Pricing for small teams" });
+    const body = await added({ body: "We talked about PRICING again." });
+    const summary = await added();
+    await call(`/${summary.number}/text`, { body: { field: "summary", text: "Open: pricing." } });
+    await added({ title: "Something else" });
+    expect(await found("pricing")).toEqual([summary.number, body.number, title.number]);
+  });
+
+  it("takes % and _ as themselves", async () => {
+    await added({ title: "100% done" });
+    await added({ title: "1000 done" });
+    expect(await found("100%")).toEqual([1]);
+    expect(await found("_")).toEqual([]);
+  });
+
+  it("answers at most 20", async () => {
+    for (let i = 0; i < 22; i += 1) await added({ title: `Same words ${i}` });
+    expect(await found("same words")).toHaveLength(20);
+  });
+
+  it.each(["", "q=", "q=a&q=b", "q=x&tab=look", `q=${"x".repeat(101)}`])("refuses %j with 400", async (query) => {
+    const response = await harness.fetch(`${SITE}/threads/api/search?${query}`, {
+      headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims("threads"), { app: "threads" }) },
+    });
+    expect([response.status, await reasonOf(response)]).toEqual([400, "query"]);
+  });
+});
+
+describe("the sign-in", () => {
+  async function signIn(next: string | null): Promise<Response> {
+    const query = next === null ? "" : `?${new URLSearchParams({ next }).toString()}`;
+    return harness.fetch(`${SITE}/threads/api/sign-in${query}`, {
+      redirect: "manual",
+      headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims("threads"), { app: "threads" }) },
+    });
+  }
+
+  it.each(["/threads/", "/threads/42", "/threads/42-who-owns-what"])("sends the owner on to %s", async (next) => {
+    const response = await signIn(next);
+    expect([response.status, response.headers.get("location")]).toEqual([303, next]);
+  });
+
+  it.each([null, "https://elsewhere.example/", "//elsewhere.example/threads/", "/inbox/", "/threads/42/../../x", "/threads/042", "/threads/42-Who"])(
+    "sends %j to the threads, never anywhere else",
+    async (next) => {
+      const response = await signIn(next);
+      expect([response.status, response.headers.get("location")]).toEqual([303, "/threads/"]);
+    },
+  );
+
+  it("is behind the threads' sign-in like every call: no token is 401", async () => {
+    const response = await harness.fetch(`${SITE}/threads/api/sign-in?next=/threads/`, { redirect: "manual" });
+    expect(response.status).toBe(401);
   });
 });
 
@@ -453,12 +584,18 @@ describe("who gets in", () => {
 
   it.each(["", "/1", "/1/comments", "/1/text"])("refuses the owner's write to %j from another origin, or none, with 403", async (path) => {
     if (path !== "") await added();
-    const body = path.endsWith("comments") ? { body: "x" } : path.endsWith("text") ? { field: "summary", text: "x" } : path === "" ? self() : { action: "act" };
+    const body = path.endsWith("comments")
+      ? { body: "x" }
+      : path.endsWith("text")
+        ? { field: "summary", text: "x" }
+        : path === ""
+          ? { title: "x", body: "", space: "company", status: "received" }
+          : { action: "act" };
     for (const origin of ["https://elsewhere.example", null]) {
       const response = await call(path, { as: "owner", body, origin });
-      expect(response.status).toBe(403);
-      expect(await reasonOf(response)).toBe(path === "" ? "sync-only" : "origin");
+      expect([response.status, await reasonOf(response)]).toEqual([403, "origin"]);
     }
+    expect(await eventCount()).toBe(path === "" ? 0 : 1);
   });
 
   it("answers an unknown route 404 and a wrong method 405", async () => {

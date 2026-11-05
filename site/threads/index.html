@@ -1,11 +1,11 @@
 <!DOCTYPE html>
 <!-- whysosuresh.com/threads: Suresh's threads, the page the Worker hands over at /threads/ and at every thread's
-     own address, /threads/42 (src/pages.ts). Today (new notes, and what sat a week in one tab), the threads list
-     (four tabs and the spaces), and a thread: its living summary on top, its text drawn as blocks, then comments and
-     history in order. threads.js draws all of it from the threads' private calls under /threads/api/, behind
-     Cloudflare Access; the page itself holds no data. Until a call answers, nothing shows: a visitor who isn't
-     signed in sees the same "Nothing here" a missing thread shows, and a small "Sign in" only on a device that
-     has signed in before. Every link and file is root-absolute; the icons are a template the script copies. -->
+     own address, /threads/42 (src/pages.ts). Today (new notes, and what sat a week), the threads list (four tabs
+     and the spaces), and a thread: its living summary on top, its main text, then comments and history in order.
+     /app/threads.js draws all of it from the threads' private calls under /threads/api/, behind Cloudflare Access;
+     the page itself holds no data. Until a call answers, nothing shows: a visitor who isn't signed in sees the
+     same "Nothing here" a missing thread shows, and a small "Sign in" only on a device that has signed in before.
+     Every link and file is root-absolute; the icons are a template the script copies. -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -57,6 +57,7 @@
   <dialog class="t-dialog" data-dialog aria-label="Threads"></dialog>
 
   <template data-icons>
+    <svg class="t-i" data-name="lock" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>
     <svg class="t-i" data-name="search" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/></svg>
     <svg class="t-i" data-name="plus" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
     <svg class="t-i" data-name="sun" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1"/></svg>
@@ -69,7 +70,6 @@
     <svg class="t-i" data-name="doc" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.5h5.5L12.5 4.5V14a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2a.5.5 0 0 1 .5-.5Z"/><path d="M9.5 1.5v3h3M5.5 8h5M5.5 10.5h5"/></svg>
     <svg class="t-i" data-name="x" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
     <svg class="t-i" data-name="pen" viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 2.5 13.5 5.5 6 13H3v-3Z"/></svg>
-    <svg class="t-i" data-name="fork" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="3.5" r="1.5"/><circle cx="12" cy="3.5" r="1.5"/><circle cx="8" cy="12.5" r="1.5"/><path d="M4 5v1.5c0 1.5 4 2 4 4.5M12 5v1.5c0 1.5-4 2-4 4.5"/></svg>
     <svg class="t-i" data-name="reply" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4 2.5 7.5 6 11M2.5 7.5H10a3.5 3.5 0 0 1 3.5 3.5v1"/></svg>
     <svg class="t-i" data-name="up" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 10 4-4 4 4"/></svg>
     <svg class="t-i" data-name="down" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>

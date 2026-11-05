@@ -1,10 +1,11 @@
-// The inbox's Markdown reader (site/inbox/markdown.js), which turns what the recorder sync adds into blocks
-// and inline runs the page builds with DOM calls. What it holds: each block it knows, a moved issue's shape
-// (a body, a rule, a comment's byline), inline code, bold, italic and http(s) links, and that anything else
-// (HTML, a script link, a stray star) stays plain text, never markup.
+// The threads' Markdown reader (site/app/markdown.js), which turns what the recorder sync and Suresh write into
+// blocks and inline runs the pages build with DOM calls. What it holds: each block it knows, a table kept as
+// typed, a moved issue's shape (a body, a rule, a comment's byline), inline code, bold, italic, http(s) links and
+// a thread's number, a living summary read as labelled lines only when every line is one, and that anything else
+// (HTML, a script link, a stray star, a number glued to a word) stays plain text, never markup.
 
 import { describe, expect, it } from "vitest";
-import { inline, parse } from "../site/inbox/markdown.js";
+import { inline, parse, summaryLines } from "../site/app/markdown.js";
 
 describe("blocks", () => {
   it("reads headings, paragraphs with their line breaks, quotes, rules and fenced code", () => {
@@ -58,12 +59,54 @@ describe("inline runs", () => {
     ]);
   });
 
+  it("reads a thread's number at the start, after a space and in brackets", () => {
+    expect(inline("#59, see #7 (and #12)")).toEqual([
+      { type: "thread", number: 59 },
+      { type: "text", text: ", see " },
+      { type: "thread", number: 7 },
+      { type: "text", text: " (and " },
+      { type: "thread", number: 12 },
+      { type: "text", text: ")" },
+    ]);
+  });
+
   it.each([
     ["HTML", "<img src=x onerror=alert(1)>"],
     ["a script link", "[click](javascript:alert(1))"],
     ["a stray star", "2 * 3 = 6"],
     ["snake_case", "a_b_c"],
+    ["a number glued to a word", "issue#12 and #12a and #0 and #1234567890"],
+    ["a number inside a link's address", "https://example.com/#42"],
   ])("leaves %s as plain text", (_, text) => {
     expect(inline(text)).toEqual([{ type: "text", text }]);
+  });
+
+  it("keeps a number inside code as code", () => {
+    expect(inline("`#42`")).toEqual([{ type: "code", text: "#42" }]);
+  });
+});
+
+describe("a living summary", () => {
+  it("is read as labelled lines when every line is one, blank lines aside", () => {
+    expect(summaryLines("Decided: a release needs two people.\n\nOpen: who owns **pricing**.\nWaiting on: you.\nNext: see #42.")).toEqual([
+      { label: "Decided", inline: [{ type: "text", text: "a release needs two people." }] },
+      { label: "Open", inline: [{ type: "text", text: "who owns " }, { type: "strong", text: "pricing" }, { type: "text", text: "." }] },
+      { label: "Waiting on", inline: [{ type: "text", text: "you." }] },
+      { label: "Next", inline: [{ type: "text", text: "see " }, { type: "thread", number: 42 }, { type: "text", text: "." }] },
+    ]);
+  });
+
+  it("takes a bold label as GitHub writes it", () => {
+    expect(summaryLines("**Decided:** yes")).toEqual([{ label: "Decided", inline: [{ type: "text", text: "yes" }] }]);
+  });
+
+  it.each([
+    ["a paragraph", "We talked it through and nothing is decided yet."],
+    ["one line that isn't labelled", "Decided: yes.\nThe rest is open."],
+    ["a lower-case label", "decided: yes"],
+    ["a label too long to be one", "This label runs far too long: yes"],
+    ["nothing", " \n "],
+  ])("is drawn as Markdown for %s", (_, text) => {
+    expect(summaryLines(text)).toBeNull();
   });
 });

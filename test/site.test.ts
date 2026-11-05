@@ -3,9 +3,9 @@
 // player and the scripts' allowed resources, that the headers match the pages and the scripts, that the
 // stylesheet carries no dead rules, that the "Send a note" doors open the note flow, that the topic list
 // the Worker shares is plain data and reads page addresses right, that the spaces the Worker shares are plain
-// data and hold every topic, that the private inbox's page is never indexed or shared, that no file names the
-// owner's email address, and that the Worker's config routes the one domain to the code only under /api/,
-// /inbox/api/ and /threads/api/ (test/routing.test.ts sends the requests). `wrangler deploy --dry-run` does not read
+// data and hold every topic, that the private inbox's page and the threads page are never indexed or shared and
+// reach only their own calls, that no file names the owner's email address, and that the Worker's config routes
+// the one domain to the code only under /api/, /inbox/api/ and /threads/ (test/routing.test.ts sends the requests). `wrangler deploy --dry-run` does not read
 // site/_headers, so this file parses it. The Worker itself is test/talk.test.ts's and
 // test/inbox.test.ts's.
 
@@ -22,6 +22,10 @@ const siteDir = join(root, "site");
 const SERVED = [
   "404.html",
   "_headers",
+  "app/keys.js",
+  "app/markdown.js",
+  "app/threads-store.js",
+  "app/threads.js",
   "feedback.html",
   "img/apple-touch-icon.png",
   "img/avatar.webp",
@@ -30,7 +34,6 @@ const SERVED = [
   "inbox/inbox-store.js",
   "inbox/inbox.js",
   "inbox/index.html",
-  "inbox/markdown.js",
   "index.html",
   "robots.txt",
   "spaces.js",
@@ -38,6 +41,7 @@ const SERVED = [
   "talk-send.js",
   "talk-topics.js",
   "talk.js",
+  "threads/index.html",
 ];
 
 /** The only resources a page may load from another origin. */
@@ -455,6 +459,32 @@ describe("the inbox's page", () => {
   });
 });
 
+describe("the threads page", () => {
+  it("is never indexed, and carries nothing a shared link reads", async () => {
+    const doc = await parse("threads/index.html");
+    const robots = doc.querySelectorAll('meta[name="robots"]')[0];
+    expect(robots && attr(robots, "content")).toBe("noindex");
+    expect(doc.querySelectorAll('link[rel="canonical"], meta[property^="og:"], meta[name="description"]')).toEqual([]);
+  });
+
+  it("loads only its own script, whose calls reach the threads' calls and nothing else of the site's", async () => {
+    const loaded = (await parse("threads/index.html")).querySelectorAll('script[type="module"]').map((el) => attr(el, "src"));
+    expect(loaded).toEqual(["/app/threads.js"]);
+    const store = read("app/threads-store.js");
+    expect(store).toContain("const API = '/threads/api';");
+    const paths = [...store.matchAll(/`\$\{API\}(\/[^`?$]*)/g)].map((m) => m[1]);
+    expect(paths.length).toBeGreaterThan(0);
+    expect(store.match(/fetch\(/g)).toHaveLength(1);
+    for (const script of ["app/threads.js", "app/keys.js", "app/markdown.js"]) expect([script, read(script).includes("fetch(")]).toEqual([script, false]);
+  });
+
+  it("holds no form and no inline script or style, which the CSP would refuse", async () => {
+    const doc = await parse("threads/index.html");
+    expect(doc.querySelectorAll("form, [style]")).toEqual([]);
+    expect(doc.querySelectorAll("script").filter((el) => !el.hasAttribute("src"))).toEqual([]);
+  });
+});
+
 describe("the owner's email address", () => {
   // The repository is public, so address scrapers read it: the address lives in Planton and the GitHub
   // environment `production`, and the page learns it from the sign-in.
@@ -487,9 +517,13 @@ describe("wrangler.jsonc", () => {
     expect(text).not.toContain("custom_domain");
   });
 
-  it("runs the code only under /api/, /inbox/api/ and /threads/api/, and every page comes straight from site/", () => {
-    expect(text).toContain('"run_worker_first": ["/api/*", "/inbox/api/*", "/threads/api/*"]');
+  it("runs the code only under /api/, /inbox/api/ and /threads/, and every other page comes straight from site/", () => {
+    expect(text).toContain('"run_worker_first": ["/api/*", "/inbox/api/*", "/threads/*"]');
     expect(text.match(/"run_worker_first"/g)).toHaveLength(1);
+  });
+
+  it("hands the threads page over through the assets binding the code names", () => {
+    expect(text).toContain('"binding": "ASSETS"');
   });
 
   it("binds the database Planton created, by a real id", () => {
