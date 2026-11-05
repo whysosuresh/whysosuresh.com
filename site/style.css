@@ -722,6 +722,42 @@ textarea.t-field { resize: vertical; line-height: 1.5; }
 .t-lost-text { margin: 0; color: var(--muted); font-size: 13.5px; }
 .t-lost-text .t-btn { margin-top: 8px; }
 
+/* Public threads: the public view anyone reads, the note form, a visitor's note waiting for his OK, and Share's
+   switch. A note waiting is the one solid-bordered card on his page; a public comment carries the globe chip. */
+.t-chip-public { color: var(--ink); border-color: var(--ink); }
+.t-chip .t-i { width: 12px; height: 12px; }
+.t-pub { min-height: 100vh; background: var(--bg); padding-top: env(safe-area-inset-top, 0px); }
+.t-pub-bar { max-width: 760px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; gap: 12px; }
+.t-pub-bar a { font-weight: 800; font-size: 15px; text-decoration: none; color: var(--ink); }
+.threads .t-pub-bar .t-pub-sign-in { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 600; }
+.t-pub-doc { max-width: 760px; margin: 0 auto; padding: 8px 24px 56px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-content: start; }
+.t-pub-doc .t-feed { padding-top: 10px; }
+.t-cm-pending .t-cm-box { border: 1.5px solid var(--ink); }
+.t-cm-pending .t-cm-head { background: var(--accent-soft); border-top-left-radius: 9px; border-top-right-radius: 9px; }
+.t-cm-from { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.t-cm-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 0 12px 10px; }
+.t-cm-actions .t-note { margin-left: auto; }
+.t-noteform { display: grid; gap: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 14px; margin-top: 8px; }
+.t-noteform h2 { margin: 0; font-size: 15px; letter-spacing: -0.01em; }
+.t-noteform textarea.t-field { min-height: 96px; }
+.t-noteform .t-field[aria-invalid="true"] { border-color: var(--ink); }
+.t-noteform-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.t-noteform-bar .t-note { flex: 1; min-width: 200px; }
+.t-noteform-sent { display: grid; gap: 6px; justify-items: start; }
+.t-noteform-sent b { font-size: 15px; display: inline-flex; align-items: center; gap: 6px; }
+.t-noteform-sent p { margin: 0; color: var(--muted); font-size: 13px; }
+.t-switch-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.t-switch-row b { font-size: 13px; display: inline-flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+.t-switch-row small { grid-column: 1; color: var(--muted); font-size: 12px; }
+.t-switch-row[aria-disabled="true"] { color: var(--muted); background: var(--bg); }
+.t-switch { grid-row: 1 / span 2; grid-column: 2; position: relative; width: 38px; height: 22px; border-radius: 999px; border: 1px solid var(--line); background: var(--accent-soft); padding: 0; }
+.t-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px var(--shadow); transition: transform 0.15s; }
+.t-switch[aria-checked="true"] { background: var(--ink); border-color: var(--ink); }
+.t-switch[aria-checked="true"]::after { transform: translateX(16px); background: var(--accent-ink); }
+.threads .t-switch:disabled { opacity: 0.45; cursor: not-allowed; }
+.t-level { display: inline-flex; align-items: center; gap: 5px; }
+.t-level .t-i { width: 13px; height: 13px; }
+
 @media (max-width: 999px) {
   .t-thread { grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 18px 22px 48px; }
   .t-details { position: static; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0 16px; padding-top: 8px; border-top: 1px solid var(--line); }
@@ -758,7 +794,10 @@ textarea.t-field { resize: vertical; line-height: 1.5; }
   .t-toast { bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
   .t-lost-bar { padding: 14px var(--gutter-r) 14px var(--gutter-l); }
   .t-lost-body { padding: 0 var(--gutter-r) 0 var(--gutter-l); }
+  .t-pub-bar { padding: 12px var(--gutter-r) 12px var(--gutter-l); }
+  .t-pub-doc { padding: 6px var(--gutter-r) 40px var(--gutter-l); }
 }
 @media (prefers-reduced-motion: reduce) {
   .t-toast-bar { animation: none; }
+  .t-switch::after { transition: none; }
 }

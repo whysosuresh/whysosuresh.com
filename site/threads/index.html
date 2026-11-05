@@ -6,7 +6,9 @@
      the page itself holds no data. Until a call answers, nothing shows: a visitor who isn't signed in sees the
      same "Nothing here" a missing thread shows at a thread's address, and a small "Sign in" there only on a device that
      has signed in before; at /threads/ itself, which names no thread, it always offers "Sign in". A person Suresh
-     invited to a thread gets the same page, drawn for them: their threads, and each with a comment box.
+     invited to a thread gets the same page, drawn for them: their threads, and each with a comment box. A thread
+     Suresh made public is drawn for anyone who isn't in it in the public view below: the thread, the comments he
+     made public, and a note form whose note waits for his OK.
      Every link and file is root-absolute; the icons are a template the script copies. -->
 <html lang="en">
 <head>
@@ -48,6 +50,11 @@
     </div>
   </div>
 
+  <div class="t-pub" data-public hidden>
+    <div class="t-pub-bar"><a href="/">whysosuresh.com</a><a class="t-pub-sign-in" data-public-sign-in href="/threads/" hidden>Sign in</a></div>
+    <article class="t-pub-doc" data-public-doc></article>
+  </div>
+
   <p class="t-banner" role="alert" data-banner hidden></p>
 
   <div class="t-toast" role="status" data-toast hidden>
@@ -78,6 +85,7 @@
     <svg class="t-i" data-name="reopen" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v3h3"/></svg>
     <svg class="t-i" data-name="mic" viewBox="0 0 16 16" aria-hidden="true"><rect x="6" y="1.5" width="4" height="8" rx="2"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V15"/></svg>
     <svg class="t-i" data-name="space" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11Z"/></svg>
+    <svg class="t-i" data-name="globe" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M1.5 8h13M8 1.5c1.8 1.9 2.7 4 2.7 6.5S9.8 12.6 8 14.5C6.2 12.6 5.3 10.5 5.3 8S6.2 3.4 8 1.5Z"/></svg>
     <svg class="t-i" data-name="people" viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="5.5" r="2.5"/><path d="M1.5 13.5a4.5 4.5 0 0 1 9 0"/><circle cx="11.5" cy="6" r="2"/><path d="M11.2 9.6a3.6 3.6 0 0 1 3.3 3.9"/></svg>
   </template>
 </body>

@@ -26,6 +26,15 @@
 // edits, spaces, Reply or Share, and only their own keys. Removed from every thread, they are told "Nothing is
 // shared with you now" rather than sent round the sign-in again.
 //
+// One of his own threads can be public (Share's switch). Anyone who isn't in it (signed out, signed in to other
+// threads, or removed from every one) then reads it at its address in the public view: the thread as the public call
+// answers it (`showPublic`, outside Access), the comments written as Public that he OK'd or wrote, and "Send Suresh a
+// note on this", a form with the site's bot check (../talk-send.js) whose note waits for his OK. On his side such a
+// note is a solid-bordered card, "Waits for your OK", with Show it, Drop it and Reply by email; Today lists the
+// threads with notes waiting, and a globe marks a public thread in every list. A comment on a public thread is
+// written for anyone by default (Public), or for the people here, or for him alone. A visitor's words are drawn as
+// typed, never as Markdown, wherever they show.
+//
 // Signed out at a thread's address, the page shows what a missing address shows ("Nothing here"), so the address
 // alone never says a thread exists; a device that has signed in before also gets a small "Sign in". The link in an
 // invitation carries `?invite`: signed out, it goes straight to the sign-in and back; signed in, the page drops it
@@ -39,7 +48,8 @@
 import { SPACES } from '../spaces.js';
 import { MEMBER_COMMANDS, MEMBER_SHEET, SHEET, commandFor } from './keys.js';
 import { parse, summaryLines } from './markdown.js';
-import { addressOf, invitation, invitationProblem, listed, seatsLine, seesLines } from './share.js';
+import { addressOf, invitation, invitationProblem, levelOf, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
+import { prepare as prepareBotCheck, sendTo } from '../talk-send.js';
 import {
   Failed,
   Missing,
@@ -48,14 +58,17 @@ import {
   comment,
   edit,
   invite,
+  judge,
   listAll,
   listMine,
   me,
   move,
   pageAddress,
   people,
+  publicPageAddress,
   search,
   show,
+  showPublic,
   signInAddress,
   start,
   uninvite,
@@ -72,6 +85,9 @@ import {
  * @typedef {import('./threads-store.js').Action} Action
  * @typedef {import('./threads-store.js').Field} Field
  * @typedef {import('./threads-store.js').Person} Person
+ * @typedef {import('./threads-store.js').Audience} Audience
+ * @typedef {import('./threads-store.js').PublicShown} PublicShown
+ * @typedef {import('./threads-store.js').Judgement} Judgement
  * @typedef {import('./markdown.js').Inline} Inline
  * @typedef {import('./keys.js').Command} Command
  * @typedef {{ view: 'today' } | { view: 'list', tab: Tab, space: string | null } | { view: 'thread', number: number }} Route
@@ -82,6 +98,7 @@ import {
  * @typedef {{ number: number, people: Person[], count: number, email: string, name: string, problem: string,
  *   invited: { name: string, email: string } | null, busy: boolean }} Sharing
  * @typedef {{ label: string, sub: string, side: string, number: number | null, run: () => void }} FindItem
+ * @typedef {{ name: string, email: string, body: string, sent: boolean, busy: boolean, problem: string }} NoteForm
  */
 
 /** @type {readonly Tab[]} */
@@ -133,6 +150,8 @@ const SIGNED_IN_KEY = 'threads:signed-in';
 const PAGE_SANDBOX = 'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox';
 /** The heights a page may ask its frame for; anything else is ignored. */
 const PAGE_HEIGHT = { min: 160, max: 20000 };
+/** The longest note a visitor may send, as the Worker counts it (trimmed, in UTF-16 code units). */
+const MAX_NOTE = 4000;
 /** A thread's own address, with its title after the number or not. */
 const THREAD_PATH = /^\/threads\/([1-9]\d{0,8})(?:-[^/]*)?$/;
 
@@ -360,6 +379,10 @@ function predict(thread, action) {
       return { ...touched, space: action.space, movedAt: now };
     case 'reply-opened':
       return { ...touched, replyOpenedAt: now, movedAt: now };
+    case 'publish':
+      return { ...touched, publicAt: now, movedAt: now };
+    case 'unpublish':
+      return { ...touched, publicAt: null, movedAt: now };
   }
 }
 
@@ -385,6 +408,10 @@ function inverse(before, action) {
       return before.space !== null && isSpace(before.space) ? { action: 'space', space: before.space } : null;
     case 'reply-opened':
       return null;
+    case 'publish':
+      return { action: 'unpublish' };
+    case 'unpublish':
+      return { action: 'publish' };
   }
 }
 
@@ -397,6 +424,10 @@ function saidOf(thread, action) {
       return `Moved #${thread.number} to ${spaceLabel(action.space)}`;
     case 'reply-opened':
       return 'Opened in Gmail, as you. Send it there.';
+    case 'publish':
+      return `#${thread.number} is public. Anyone can read it.`;
+    case 'unpublish':
+      return `#${thread.number} is no longer public.`;
     default:
       return `Moved #${thread.number} to ${STATUS_NAMES[predict(thread, action).status]}`;
   }
@@ -529,10 +560,22 @@ function wantsNewTab(event) {
   return event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
 }
 
-/** A row's small mark for a thread that shows a page or a link. @param {Thread} thread @returns {Node[]} */
+/** A row's small marks: a globe for a public thread, and a mark for one that shows a page or a link. @param {Thread} thread @returns {Node[]} */
 function rowMark(thread) {
-  if (thread.main === 'text') return [];
-  return [el('span', { class: 't-row-mark', title: thread.main === 'page' ? 'A page' : 'A link' }, [icon(thread.main === 'page' ? 'doc' : 'link')])];
+  /** @type {Node[]} */
+  const marks = thread.publicAt ? [el('span', { class: 't-row-mark', title: 'Public' }, [icon('globe')])] : [];
+  if (thread.main !== 'text') marks.push(el('span', { class: 't-row-mark', title: thread.main === 'page' ? 'A page' : 'A link' }, [icon(thread.main === 'page' ? 'doc' : 'link')]));
+  return marks;
+}
+
+/** The chip a public thread or a comment for anyone carries. */
+function publicChip() {
+  return el('span', { class: 't-chip t-chip-public' }, [icon('globe'), 'Public']);
+}
+
+/** A day as a public byline says it: "2 Nov". @param {string} iso */
+function day(iso) {
+  return new Date(iso).toLocaleDateString([], { day: 'numeric', month: 'short' });
 }
 
 /**
@@ -598,6 +641,9 @@ class Threads {
     this.toastBar = find(document, '[data-toast-bar]', HTMLElement);
     this.undoButton = find(document, '[data-act="undo"]', HTMLButtonElement);
     this.dialog = find(document, '[data-dialog]', HTMLDialogElement);
+    this.pub = find(document, '[data-public]', HTMLElement);
+    this.pubDoc = find(document, '[data-public-doc]', HTMLElement);
+    this.pubSignIn = find(document, '[data-public-sign-in]', HTMLAnchorElement);
     iconTemplate = find(document, 'template[data-icons]', HTMLTemplateElement);
 
     /** @type {Route} */
@@ -615,8 +661,14 @@ class Threads {
     this.caller = 'owner';
     /** The signed-in address, which Gmail's link names. */
     this.me = '';
-    /** Whether the comment being written is for the owner alone. */
-    this.onlyMe = false;
+    /** Who the comment being written is for, when the writer chose; null for the thread's own default. @type {Audience | null} */
+    this.audience = null;
+    /** A public thread, as the public view shows it. @type {PublicShown | null} */
+    this.publicShown = null;
+    /** The public view's note, as it is being written. @type {NoteForm} */
+    this.note = { name: '', email: '', body: '', sent: false, busy: false, problem: '' };
+    /** Dropped notes whose words are shown under their line. @type {Set<string>} */
+    this.notesOpened = new Set();
     /** The Share sheet's state while it is open. @type {Sharing | null} */
     this.sharing = null;
     /** The selected row on Today or the list. @type {number | null} */
@@ -706,15 +758,34 @@ class Threads {
       await Promise.all([this.loadAll(), thread]);
     } catch (error) {
       if (error instanceof SignedOut && inviting) location.replace(signInAddress(location.pathname));
-      else if (error instanceof SignedOut) this.showLost();
-      else if (error instanceof NotShared) this.showNotShared();
-      else this.fail(error, "The threads didn't load.");
+      else if (error instanceof SignedOut) {
+        if (!(await this.tryPublic(route))) this.showLost();
+      } else if (error instanceof NotShared) {
+        if (!(await this.tryPublic(route))) this.showNotShared();
+      } else this.fail(error, "The threads didn't load.");
       return;
     }
     if (inviting || (this.caller === 'member' && route.view === 'list')) history.replaceState(null, '', this.route.view === 'thread' ? location.pathname : '/threads/');
     this.applyCaller();
     rememberSignedIn();
+    if (this.member && this.missing !== null && (await this.tryPublic(route))) return;
     this.render();
+  }
+
+  /**
+   * Shows the thread an address names in the public view when it is public, for anyone who can't read it otherwise;
+   * false when the address names no thread or the thread isn't public, and nothing is shown.
+   * @param {Route} route
+   */
+  async tryPublic(route) {
+    if (route.view !== 'thread') return false;
+    try {
+      this.publicShown = await showPublic(route.number);
+    } catch {
+      return false;
+    }
+    this.renderPublic();
+    return true;
   }
 
   async loadAll() {
@@ -744,6 +815,7 @@ class Threads {
       ...thread,
       shared: given.shared ?? thread.shared ?? known?.shared ?? 0,
       waiting: given.acted ? false : (thread.waiting ?? known?.waiting ?? false),
+      pending: thread.pending ?? known?.pending ?? 0,
     });
   }
 
@@ -880,6 +952,7 @@ class Threads {
       return;
     }
     if (this.route.view === 'thread' && this.route.number === route.number) {
+      if (this.member && this.missing === route.number && (await this.tryPublic(route))) return;
       this.keepScroll = true;
       this.render();
     }
@@ -906,6 +979,11 @@ class Threads {
     return [...this.threads.values()].filter((thread) => thread.waiting === true).sort((a, b) => b.activityAt.localeCompare(a.activityAt));
   }
 
+  /** Public threads with visitors' notes waiting for his OK, the most recent first. */
+  noting() {
+    return [...this.threads.values()].filter((thread) => (thread.pending ?? 0) > 0).sort((a, b) => b.activityAt.localeCompare(a.activityAt));
+  }
+
   /** New notes, newest first, but for one already waiting on him. */
   fresh() {
     return [...this.threads.values()].filter((thread) => thread.status === 'received' && !thread.waiting).sort((a, b) => b.activityAt.localeCompare(a.activityAt));
@@ -927,7 +1005,11 @@ class Threads {
   /** The threads J and K walk: an invited person's own, Today's, or the list's. */
   walk() {
     if (this.member) return this.mine().map((thread) => thread.number);
-    return (this.from === 'today' ? [...this.waiting(), ...this.fresh(), ...this.sat()] : this.inTab(this.tab)).map((thread) => thread.number);
+    if (this.from !== 'today') return this.inTab(this.tab).map((thread) => thread.number);
+    const seen = new Set();
+    return [...this.noting(), ...this.waiting(), ...this.fresh(), ...this.sat()]
+      .map((thread) => thread.number)
+      .filter((number) => (seen.has(number) ? false : (seen.add(number), true)));
   }
 
   /** The thread a key acts on: the open one, or the selected row. */
@@ -955,6 +1037,8 @@ class Threads {
   render() {
     if (!this.loaded) return;
     this.lost.hidden = true;
+    this.pub.hidden = true;
+    this.publicShown = null;
     this.app.hidden = false;
     const scroll = this.main.scrollTop;
     this.renderNav();
@@ -995,7 +1079,7 @@ class Threads {
     const counts = new Map();
     for (const thread of this.threads.values()) if (isOpen(thread) && thread.space !== null) counts.set(thread.space, (counts.get(thread.space) ?? 0) + 1);
     const view = this.route.view;
-    const today = this.waiting().length + this.fresh().length + this.sat().length;
+    const today = this.noting().length + this.waiting().length + this.fresh().length + this.sat().length;
     const todayItem = el('a', { class: 't-nav-item', href: '/threads/', 'data-go': 'today' }, [icon('sun'), 'Today', el('span', { class: 't-nav-count' }, [String(today)])]);
     const allItem = el('a', { class: 't-nav-item', href: '/threads/?tab=look', 'data-go': 'list' }, [icon('list'), 'All threads']);
     if (view === 'today') todayItem.setAttribute('aria-current', 'page');
@@ -1046,10 +1130,11 @@ class Threads {
   }
 
   todayView() {
+    const noting = this.noting();
     const waiting = this.waiting();
     const fresh = this.fresh();
     const sat = this.sat();
-    const total = waiting.length + fresh.length + sat.length;
+    const total = noting.length + waiting.length + fresh.length + sat.length;
     const date = new Date().toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
     /**
      * @param {string} title
@@ -1071,6 +1156,14 @@ class Threads {
         ]),
         el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'new' }, [icon('plus'), 'New thread ', kbd('N')]),
       ]),
+      ...(noting.length > 0
+        ? [
+            section('Notes waiting for your OK', noting, ["a visitor's note shows only once you OK it"], (thread) => {
+              const n = thread.pending ?? 0;
+              return `${n} note${n === 1 ? '' : 's'} waiting · ${firstLine(thread)}`;
+            }, ''),
+          ]
+        : []),
       ...(waiting.length > 0 ? [section('Waiting on you', waiting, ['the last word on a shared thread is theirs'], (thread) => firstLine(thread), '')] : []),
       section('New', fresh, [el('span', { class: 't-keys-hint' }, [kbd('A'), ' act · ', kbd('T'), ' talk · ', kbd('D'), ' drop'])], (thread) => this.rowLine(thread), 'All sorted.'),
       section('Sat a week', sat, ['still open, untouched for 7 days'], (thread) => `${ago(thread.activityAt)} in ${STATUS_NAMES[thread.status]}. Move it, or drop it.`, 'Nothing has sat a week.'),
@@ -1153,6 +1246,7 @@ class Threads {
       el('span', {}, ['/']),
       el('span', {}, [`#${thread.number}`]),
       el('span', { class: 't-chip' }, [STATUS_NAMES[thread.status]]),
+      ...(thread.publicAt ? [publicChip()] : []),
       pager,
     ]);
     const by = this.member
@@ -1241,7 +1335,7 @@ class Threads {
    * @param {MessageEvent} event
    */
   onPageHeight(event) {
-    const frame = this.main.querySelector('.t-page-frame');
+    const frame = (this.pub.hidden ? this.main : this.pubDoc).querySelector('.t-page-frame');
     if (!(frame instanceof HTMLIFrameElement) || event.source !== frame.contentWindow) return;
     const data = /** @type {unknown} */ (event.data);
     const height = typeof data === 'object' && data !== null && 'whysosureshPageHeight' in data ? data.whysosureshPageHeight : null;
@@ -1323,7 +1417,9 @@ class Threads {
     /** @type {{ at: string, order: number, node: HTMLElement }[]} */
     const entries = [];
     shown.events.forEach((event, i) => entries.push({ at: event.at, order: i, node: this.eventNode(event, thread) }));
-    shown.comments.forEach((said, i) => entries.push({ at: said.createdAt, order: shown.events.length + i, node: this.commentNode(said, thread) }));
+    shown.comments.forEach((said, i) => {
+      for (const node of this.commentNode(said, thread)) entries.push({ at: said.createdAt, order: shown.events.length + i, node });
+    });
     entries.sort((a, b) => (a.at === b.at ? a.order - b.order : a.at.localeCompare(b.at)));
     return entries.map((entry) => entry.node);
   }
@@ -1396,6 +1492,21 @@ class Threads {
       case 'removed':
         [name, words] = ['people', ['removed ', word(data.name ?? 'someone')]];
         break;
+      case 'published':
+        [name, words] = ['globe', ['made this public']];
+        break;
+      case 'unpublished':
+        [name, words] = ['globe', ['made this no longer public']];
+        break;
+      case 'note-shown':
+        [name, words] = ['check', ['showed a note from ', word(data.name ?? 'someone')]];
+        break;
+      case 'note-dropped':
+        [name, words] = ['x', ['dropped a note from ', word(data.name ?? 'someone')]];
+        break;
+      case 'note-held':
+        [name, words] = ['reopen', ['put a note from ', word(data.name ?? 'someone'), ' back to wait']];
+        break;
     }
     const line = el('div', { class: 't-ev' }, [
       el('span', { class: 't-pip' }, [icon(name)]),
@@ -1412,58 +1523,162 @@ class Threads {
       );
       if (shownBefore) line.append(el('div', { class: 't-ev-before' }, [before ?? '(none)']));
     }
+    // A dropped note is drawn nowhere else; the line of its latest drop can show its words and put it back to wait.
+    const latest = event.type === 'note-dropped' && this.shown?.events.findLast((one) => one.type === 'note-dropped' && one.data.note === data.note)?.id === event.id;
+    const dropped = latest && !this.member ? this.shown?.comments.find((said) => said.id === data.note && said.state === 'dropped') : undefined;
+    if (dropped) {
+      const open = this.notesOpened.has(dropped.id);
+      line.querySelector('.t-ev-text')?.append(
+        ' · ',
+        el('button', { type: 'button', class: 't-text-btn', 'data-act': 'note-peek', 'data-note': dropped.id, 'aria-expanded': String(open) }, [open ? 'Hide the note' : 'Show the note']),
+      );
+      if (open) {
+        line.append(
+          el('div', { class: 't-ev-before' }, [
+            plain(dropped.body),
+            el('button', { type: 'button', class: 't-text-btn', 'data-act': 'note-hold', 'data-note': dropped.id }, ['Back to waiting for your OK']),
+          ]),
+        );
+      }
+    }
     return line;
   }
 
-  /** @param {ThreadComment} said @param {Thread} thread */
+  /**
+   * A comment: the owner's, the sync's, an invited person's, or a visitor's note on a public thread, whose words are
+   * drawn as typed. A note waiting for his OK is a card of its own; a dropped one is drawn only on its event's line.
+   * @param {ThreadComment} said
+   * @param {Thread} thread
+   * @returns {HTMLElement[]}
+   */
   commentNode(said, thread) {
-    const who = said.author === 'owner' ? 'owner' : said.author === 'member' ? 'member' : 'sync';
-    const name = who === 'member' ? (said.name ?? 'Someone') : this.actorName(said.author, thread);
+    if (said.state === 'dropped') return [];
+    if (said.author === 'visitor' && said.state === 'pending') return this.member ? [] : [this.pendingNode(said, thread)];
+    const who = said.author === 'owner' ? 'owner' : said.author === 'member' ? 'member' : said.author === 'visitor' ? 'visitor' : 'sync';
+    const name = who === 'member' || who === 'visitor' ? (said.name?.trim() || 'Someone') : this.actorName(said.author, thread);
     const onlyMe = said.audience === 'owner';
-    return el('div', { class: 't-cm', 'data-audience': onlyMe ? 'owner' : 'thread' }, [
-      avatar(who, name),
+    const email = who === 'visitor' && !this.member && said.senderEmail ? [el('span', { class: 't-cm-from' }, [`${said.senderEmail} · only you see this`])] : [];
+    return [
+      el('div', { class: 't-cm', 'data-audience': said.audience }, [
+        avatar(who, name),
+        el('div', { class: 't-cm-box' }, [
+          el('div', { class: 't-cm-head' }, [
+            el('b', {}, [name]),
+            ...(who === 'sync' ? [el('span', { class: 't-chip' }, ['Recorder sync'])] : []),
+            ...(onlyMe ? [el('span', { class: 't-chip' }, [icon('lock'), 'Only me'])] : []),
+            ...(said.audience === 'public' ? [publicChip()] : []),
+            ...email,
+            el('time', { datetime: said.createdAt }, [when(said.createdAt)]),
+          ]),
+          el('div', { class: 't-cm-body' }, [who === 'visitor' ? plain(said.body) : prose(said.body)]),
+        ]),
+      ]),
+    ];
+  }
+
+  /**
+   * A visitor's note waiting for his OK: who sent it and their email (his alone), their words as typed, and Show it,
+   * Drop it and Reply by email, which his Gmail opens as a draft.
+   * @param {ThreadComment} said
+   * @param {Thread} thread
+   */
+  pendingNode(said, thread) {
+    const name = said.name?.trim() || 'Someone';
+    const reply = said.senderEmail
+      ? [
+          el('a', { class: 't-btn t-btn-quiet', target: '_blank', rel: 'noopener', href: gmailLink(noteReply({ number: thread.number, title: titleOf(thread) }, { name: said.name, email: said.senderEmail, body: said.body }), this.me) }, [
+            icon('mail'),
+            'Reply by email',
+          ]),
+        ]
+      : [];
+    return el('div', { class: 't-cm t-cm-pending', 'data-audience': 'public' }, [
+      avatar('visitor', name),
       el('div', { class: 't-cm-box' }, [
         el('div', { class: 't-cm-head' }, [
+          el('b', {}, ['Waits for your OK']),
+          el('span', {}, ['·']),
           el('b', {}, [name]),
-          ...(who === 'sync' ? [el('span', { class: 't-chip' }, ['Recorder sync'])] : []),
-          ...(onlyMe ? [el('span', { class: 't-chip' }, [icon('lock'), 'Only me'])] : []),
+          ...(said.senderEmail ? [el('span', { class: 't-cm-from' }, [`${said.senderEmail} · only you see this`])] : []),
           el('time', { datetime: said.createdAt }, [when(said.createdAt)]),
         ]),
-        el('div', { class: 't-cm-body' }, [prose(said.body)]),
+        el('div', { class: 't-cm-body' }, [plain(said.body)]),
+        el('div', { class: 't-cm-actions' }, [
+          el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'note-show', 'data-note': said.id }, [icon('check'), 'Show it on the thread']),
+          el('button', { type: 'button', class: 't-btn', 'data-act': 'note-drop', 'data-note': said.id }, ['Drop it']),
+          ...reply,
+          el('span', { class: 't-note' }, ['Sent from the site, on this thread']),
+        ]),
       ]),
     ]);
+  }
+
+  /**
+   * The audiences the comment box offers on a thread, the one it starts on first: on a public thread, Public, then the
+   * people here (for the owner, only when it has people) and his Only me; elsewhere the thread and Only me, as before.
+   * @param {Thread} thread
+   * @returns {Audience[]}
+   */
+  audiences(thread) {
+    if (this.member) return thread.publicAt ? ['public', 'thread'] : ['thread'];
+    const people = (this.shown?.people ?? []).length > 0;
+    if (thread.publicAt) return people ? ['public', 'thread', 'owner'] : ['public', 'owner'];
+    return ['thread', 'owner'];
+  }
+
+  /** Who the comment being written is for: the writer's choice when the thread offers it, else its first. @param {Thread} thread */
+  audienceOf(thread) {
+    const offered = this.audiences(thread);
+    return this.audience !== null && offered.includes(this.audience) ? this.audience : (offered[0] ?? 'thread');
   }
 
   /** @param {Thread} thread */
   composer(thread) {
     const draft = this.drafts.get(thread.number) ?? '';
-    const onlyMe = !this.member && this.onlyMe;
+    const audience = this.audienceOf(thread);
+    const onlyMe = audience === 'owner';
     const box = this.commentPreview
       ? el('div', { class: 't-preview-pane', id: 'comment-preview' }, [draft.trim() === '' ? el('span', { class: 't-note' }, ['Nothing to preview.']) : prose(draft)])
-      : el('textarea', { id: 'comment-text', 'aria-label': 'Comment', placeholder: onlyMe ? 'A note for you alone. Markdown works.' : 'Comment. Markdown works.' }, [draft]);
+      : el('textarea', {
+          id: 'comment-text',
+          'aria-label': 'Comment',
+          placeholder: onlyMe ? 'A note for you alone. Markdown works.' : audience === 'public' ? 'A comment anyone can read. Markdown works.' : 'Comment. Markdown works.',
+        }, [draft]);
     const others = (this.shown?.people ?? []).filter((person) => !person.owner).map((person) => person.name ?? 'someone');
-    const note = this.member
-      ? 'Suresh and everyone in this thread read this.'
-      : onlyMe
-        ? 'Only you and Claude read this.'
-        : others.length > 0
-          ? `${listed(others)} read${others.length === 1 ? 's' : ''} this too.`
-          : 'Only you read this thread.';
-    const audience = this.member
-      ? []
-      : [
-          el('span', { class: 't-seg', role: 'group', 'aria-label': 'Who reads it' }, [
-            el('button', { type: 'button', 'data-act': 'audience', 'data-audience': 'thread', 'aria-pressed': String(!onlyMe) }, ['Thread']),
-            el('button', { type: 'button', 'data-act': 'audience', 'data-audience': 'owner', 'aria-pressed': String(onlyMe) }, [icon('lock'), ' Only me']),
-          ]),
-        ];
-    return el('form', { class: 't-composer', 'data-submit': 'comment', 'data-audience': onlyMe ? 'owner' : 'thread' }, [
+    const note =
+      audience === 'public'
+        ? 'Anyone can read this.'
+        : this.member
+          ? 'Suresh and everyone in this thread read this.'
+          : onlyMe
+            ? 'Only you and Claude read this.'
+            : others.length > 0
+              ? `${listed(others)} read${others.length === 1 ? 's' : ''} this too.`
+              : 'Only you read this thread.';
+    /** @type {Record<Audience, (Node | string)[]>} */
+    const labels = {
+      public: [icon('globe'), ' Public'],
+      thread: [thread.publicAt ? 'People here' : 'Thread'],
+      owner: [icon('lock'), ' Only me'],
+    };
+    const offered = this.audiences(thread);
+    const choice =
+      offered.length > 1
+        ? [
+            el(
+              'span',
+              { class: 't-seg', role: 'group', 'aria-label': 'Who reads it' },
+              offered.map((one) => el('button', { type: 'button', 'data-act': 'audience', 'data-audience': one, 'aria-pressed': String(audience === one) }, labels[one])),
+            ),
+          ]
+        : [];
+    return el('form', { class: 't-composer', 'data-submit': 'comment', 'data-audience': audience }, [
       this.member ? avatar('member', this.me) : avatar('owner', ''),
       el('div', { class: 't-composer-box' }, [
         box,
         el('div', { class: 't-composer-bar' }, [
           el('span', { class: 't-note' }, [note]),
-          ...audience,
+          ...choice,
           el('span', { class: 't-seg', role: 'group', 'aria-label': 'Comment view' }, [
             el('button', { type: 'button', 'data-act': 'comment-view', 'data-view': 'write', 'aria-pressed': String(!this.commentPreview) }, ['Write']),
             el('button', { type: 'button', 'data-act': 'comment-view', 'data-view': 'preview', 'aria-pressed': String(this.commentPreview) }, ['Preview']),
@@ -1492,6 +1707,7 @@ class Threads {
         el('span', { class: 't-dval' }, [STATUS_NAMES[thread.status], ...(thread.status === 'dropped' && thread.dropReason ? [el('span', { class: 't-chip' }, [thread.dropReason])] : [])]),
       ]),
       row('Space', [el('span', { class: 't-dval' }, [select])]),
+      row('Who can see it', [this.level(thread), el('span', {}, [el('button', { type: 'button', class: 't-text-btn', 'data-act': 'share' }, ['Share…'])])]),
       row('Started', [el('span', { class: 't-dval t-dval-soft' }, [`${when(thread.createdAt)}, ${fromWords(thread)}`])]),
       row('Last activity', [el('span', { class: 't-dval t-dval-soft' }, [`${ago(thread.activityAt)} ago`])]),
       ...(origin ? [row('Moved from', [el('a', { class: 't-linkline', href: origin.href, target: '_blank', rel: 'noopener' }, [origin.name])], true)] : []),
@@ -1510,6 +1726,12 @@ class Threads {
     ]);
   }
 
+  /** Who can see a thread: Public, Invited or Private, with its mark. @param {Thread} thread */
+  level(thread) {
+    const level = levelOf(thread.publicAt, this.member ? 1 : (this.shown?.people ?? []).length);
+    return el('span', { class: 't-dval' }, [el('span', { class: 't-level' }, [icon(level === 'Public' ? 'globe' : level === 'Invited' ? 'people' : 'lock'), level])]);
+  }
+
   /** The details beside a thread, as an invited person sees them: where it stands, its people by name, its link. @param {Thread} thread */
   memberDetails(thread) {
     /** @param {string} label @param {(Node | string)[]} value @param {boolean} [wide] */
@@ -1517,6 +1739,7 @@ class Threads {
     const address = `whysosuresh.com/threads/${thread.number}`;
     return el('aside', { class: 't-details', 'aria-label': 'About this thread' }, [
       row('Where it stands', [el('span', { class: 't-dval' }, [STATUS_NAMES[thread.status]])]),
+      ...(thread.publicAt ? [row('Who can see it', [this.level(thread)])] : []),
       row(
         'People',
         [el('span', { class: 't-dpeople' }, (this.shown?.people ?? []).map((person) => el('span', {}, [person.name ?? 'Someone', ...(person.owner ? [' ', el('small', {}, ['shared it'])] : [])])))],
@@ -1955,22 +2178,23 @@ class Threads {
   async sendComment(thread) {
     const text = (this.drafts.get(thread.number) ?? '').trim();
     if (text === '') return;
-    const onlyMe = !this.member && this.onlyMe;
+    const audience = this.audienceOf(thread);
+    const onlyMe = audience === 'owner';
     try {
-      await comment(thread.number, text, onlyMe ? 'owner' : 'thread');
+      await comment(thread.number, text, audience);
     } catch (error) {
       this.fail(error, "The comment didn't save. It is still in the box.");
       return;
     }
     this.drafts.delete(thread.number);
     this.commentPreview = false;
-    this.onlyMe = false;
+    this.audience = null;
     this.clearProblem();
     const known = this.threads.get(thread.number);
     if (known) this.threads.set(thread.number, { ...known, activityAt: new Date().toISOString(), waiting: this.member ? (known.waiting ?? false) : false });
     await this.refreshShown(thread.number);
     this.main.scrollTo({ top: this.main.scrollHeight });
-    this.say(onlyMe ? `Noted on #${thread.number}, for you alone` : `Commented on #${thread.number}`, null);
+    this.say(onlyMe ? `Noted on #${thread.number}, for you alone` : audience === 'public' ? `Commented on #${thread.number}, for anyone` : `Commented on #${thread.number}`, null);
   }
 
   /* ---------- Share: the owner invites people to a thread, and takes invitations back ---------- */
@@ -1999,7 +2223,8 @@ class Threads {
     if (sharing === null || thread === undefined) return;
     const shown = this.shown?.thread.number === sharing.number ? this.shown : null;
     const comments = shown?.comments ?? [];
-    const lines = seesLines(comments.filter((said) => said.audience !== 'owner').length, comments.filter((said) => said.audience === 'owner').length);
+    // Invited people read the comments for the thread or for anyone that are shown, never a note waiting or dropped.
+    const lines = seesLines(comments.filter((said) => said.audience !== 'owner' && said.state === 'shown').length, comments.filter((said) => said.audience === 'owner').length);
     const form = el('form', { class: 't-invite', 'data-submit': 'invite', novalidate: '' }, [
       el('label', { class: 't-fld' }, [
         el('span', { class: 't-lbl' }, ['Email']),
@@ -2029,6 +2254,7 @@ class Threads {
         form,
         ...(sharing.problem ? [el('p', { class: 't-err', role: 'alert' }, [sharing.problem])] : []),
         el('div', { class: 't-plist' }, rows),
+        this.publicSwitch(thread),
         el('div', { class: 't-sees' }, [el('span', {}, [el('b', {}, ['They see']), ' ', lines.sees]), el('span', {}, [el('b', {}, ['Never']), ' ', lines.never])]),
         el('div', { class: 't-seats' }, [el('meter', { class: 't-seat-bar', min: '0', max: '50', value: String(sharing.count), 'aria-label': 'People with access' }), el('span', {}, [seatsLine(sharing.count)])]),
         ...(draft === null || invited === null
@@ -2042,6 +2268,251 @@ class Threads {
             ]),
       ]),
     ]);
+  }
+
+  /**
+   * Share's one switch: the thread is public, or not. Off and disabled, with the reason, for words that aren't his.
+   * @param {Thread} thread
+   */
+  publicSwitch(thread) {
+    const on = thread.publicAt !== null;
+    const said = publicLines(thread.number, thread.source, on);
+    return el('div', { class: 't-switch-row', ...(said.allowed ? {} : { 'aria-disabled': 'true' }) }, [
+      el('b', { id: 'public-label' }, [icon('globe'), ' ', said.label]),
+      el('button', {
+        type: 'button',
+        class: 't-switch',
+        role: 'switch',
+        'aria-checked': String(on),
+        'aria-labelledby': 'public-label',
+        'aria-describedby': 'public-note',
+        'data-act': 'public',
+        ...(said.allowed ? {} : { disabled: '' }),
+      }),
+      el('small', { id: 'public-note' }, [said.note]),
+    ]);
+  }
+
+  /**
+   * Makes a thread public or not, from Share: shown at once and saved behind it, put back if refused, with Undo. The
+   * sheet stays open.
+   * @param {Thread} thread
+   */
+  async togglePublic(thread) {
+    /** @type {Action} */
+    const action = { action: thread.publicAt === null ? 'publish' : 'unpublish' };
+    const predicted = predict(thread, action);
+    this.threads.set(thread.number, { ...predicted, shared: thread.shared ?? 0, pending: thread.pending ?? 0 });
+    if (this.shown?.thread.number === thread.number) this.shown = { ...this.shown, thread: predicted };
+    this.keepScroll = true;
+    this.render();
+    this.renderShare();
+    /** @type {Thread} */
+    let saved;
+    try {
+      saved = await move(thread.number, action);
+    } catch (error) {
+      this.threads.set(thread.number, thread);
+      if (this.shown?.thread.number === thread.number) this.shown = { ...this.shown, thread };
+      this.keepScroll = true;
+      this.render();
+      this.renderShare();
+      this.fail(error, `That didn't save, so #${thread.number} is as it was.`);
+      return;
+    }
+    this.remember(saved, { acted: true });
+    this.clearProblem();
+    await this.refreshShown(saved.number);
+    this.renderShare();
+    const back = inverse(thread, action);
+    this.say(saidOf(thread, action), back === null ? null : async () => {
+      await this.revert(saved, back);
+      this.renderShare();
+    });
+  }
+
+  /**
+   * His ruling on a visitor's note: shown on the thread, dropped, or back to waiting; Show and Drop can be undone.
+   * @param {Thread} thread
+   * @param {string} note
+   * @param {Judgement} action
+   */
+  async judgeNote(thread, note, action) {
+    try {
+      await judge(thread.number, note, action);
+    } catch (error) {
+      this.fail(error, "That didn't save, so the note is as it was.");
+      return;
+    }
+    this.clearProblem();
+    this.notesOpened.delete(note);
+    await this.refreshShown(thread.number);
+    const pending = (this.shown?.comments ?? []).filter((said) => said.state === 'pending').length;
+    const known = this.threads.get(thread.number);
+    if (known) this.threads.set(thread.number, { ...known, pending });
+    this.keepScroll = true;
+    this.render();
+    const said = action === 'show' ? 'The note is on the thread, for anyone.' : action === 'drop' ? 'Note dropped. Nobody sees it.' : 'The note waits for your OK again.';
+    this.say(said, action === 'hold' ? null : () => this.judgeNote(thread, note, 'hold'));
+  }
+
+  /* ---------- The public view: a public thread, for anyone who isn't in it ---------- */
+
+  /** Draws the public view of `publicShown`, its note form last. */
+  renderPublic() {
+    const shown = this.publicShown;
+    if (shown === null) return;
+    const thread = shown.thread;
+    this.app.hidden = true;
+    this.lost.hidden = true;
+    this.pub.hidden = false;
+    this.pubSignIn.hidden = !signedInBefore() || this.loaded;
+    this.pubSignIn.href = signInAddress(location.pathname);
+    const title = thread.title ?? `#${thread.number}`;
+    document.title = `#${thread.number} ${title} · whysosuresh.com`;
+    /** @type {HTMLElement[]} */
+    let main = [];
+    if (thread.main === 'page' && shown.page) main = [this.publicPage(thread.number, shown.page)];
+    else if (thread.main === 'link' && thread.link) main = [linkCard(thread.link)];
+    else if (thread.body !== null) main = [prose(thread.body)];
+    const comments = shown.comments.map((said) => {
+      const who = said.author === 'owner' ? 'owner' : said.author === 'member' ? 'member' : 'visitor';
+      const name = who === 'owner' ? 'Suresh' : said.name?.trim() || 'Someone';
+      return el('div', { class: 't-cm' }, [
+        avatar(who, name),
+        el('div', { class: 't-cm-box' }, [
+          el('div', { class: 't-cm-head' }, [el('b', {}, [name]), el('time', { datetime: said.createdAt }, [day(said.createdAt)])]),
+          el('div', { class: 't-cm-body' }, [who === 'visitor' ? plain(said.body) : prose(said.body)]),
+        ]),
+      ]);
+    });
+    const view = [
+      el('div', { class: 't-crumbs' }, [el('span', {}, [spaceLabel(thread.space)]), el('span', {}, ['/']), el('span', {}, [`#${thread.number}`]), publicChip()]),
+      el('h1', { class: 't-title' }, [el('span', { class: 't-tn' }, [`#${thread.number}`]), ' ', title]),
+      el('div', { class: 't-byline' }, [el('span', {}, [el('b', {}, ['Suresh']), `, ${day(thread.createdAt)}`])]),
+      ...(thread.summary ? [el('section', { class: 't-summary', 'aria-label': 'Summary' }, [el('div', { class: 't-summary-head' }, [el('span', {}, ['Summary'])]), summaryBody(thread.summary)])] : []),
+      ...main,
+      ...(comments.length > 0 ? [el('div', { class: 't-feed' }, comments)] : []),
+      ...(shown.truncated ? [el('p', { class: 't-note' }, ['Only the first 500 comments are shown.'])] : []),
+      el('div', { 'data-note-area': '' }, [this.noteForm()]),
+    ];
+    const frame = this.pubDoc.querySelector('.t-page');
+    const fresh = view.find((node) => node.classList.contains('t-page'));
+    if (frame instanceof HTMLElement && fresh && frame.dataset.pageKey === fresh.dataset.pageKey) {
+      // The frame already loaded stays; only its bar is redrawn, so a toggle never reloads the page.
+      const bar = fresh.querySelector('.t-page-bar');
+      if (bar) frame.querySelector('.t-page-bar')?.replaceWith(bar);
+      frame.dataset.full = fresh.dataset.full ?? 'false';
+      view[view.indexOf(fresh)] = frame;
+    }
+    this.pubDoc.replaceChildren(...view);
+  }
+
+  /**
+   * A public thread's page: its bar (the version shown, Versions, Full screen; no claude.ai address, which is his) over
+   * its frame, from the public page address.
+   * @param {number} number
+   * @param {import('./threads-store.js').PublicPage} page
+   */
+  publicPage(number, page) {
+    const version = this.pageVersions.get(number) ?? page.version;
+    const shown = page.versions.find((one) => one.version === version) ?? page.versions[page.versions.length - 1];
+    const at = shown?.version ?? page.version;
+    const bar = el('div', { class: 't-page-bar' }, [
+      icon('doc'),
+      el('b', {}, ['Page']),
+      el('span', {}, [`version ${at} of ${page.version} · saved ${shown ? day(shown.savedAt) : ''}`]),
+      el('span', { class: 't-grow' }),
+      ...(page.versions.length > 1 ? [el('button', { type: 'button', class: 't-btn', 'data-act': 'public-versions' }, ['Versions'])] : []),
+      el('button', { type: 'button', class: 't-btn', 'data-act': 'page-full' }, [this.pageFull ? 'Back to thread' : 'Full screen']),
+    ]);
+    const frame = el('iframe', { class: 't-page-frame', sandbox: PAGE_SANDBOX, src: publicPageAddress(number, at), title: `Page, version ${at}`, loading: 'lazy' });
+    return el('section', { class: 't-page', 'aria-label': 'Page', 'data-page-key': `${number}-${at}`, 'data-full': String(this.pageFull) }, [bar, frame]);
+  }
+
+  /** "Send Suresh a note on this", or its Sent state. */
+  noteForm() {
+    const note = this.note;
+    if (note.sent) {
+      return el('section', { class: 't-noteform', 'aria-label': 'Send Suresh a note' }, [
+        el('div', { class: 't-noteform-sent', role: 'status' }, [
+          el('b', {}, [icon('check'), ' Sent']),
+          el('p', {}, ['Suresh reads every note. If he OKs it, it shows here with your name; your email stays with him.']),
+          el('button', { type: 'button', class: 't-text-btn', 'data-act': 'note-again' }, ['Send another']),
+        ]),
+      ]);
+    }
+    const count = note.body.trim().length;
+    return el('form', { class: 't-noteform', 'data-submit': 'note', novalidate: '', 'aria-label': 'Send Suresh a note' }, [
+      el('h2', {}, ['Send Suresh a note on this']),
+      el('div', { class: 't-two' }, [
+        el('label', { class: 't-fld' }, [el('span', { class: 't-lbl' }, ['Your name']), el('input', { class: 't-field', id: 'note-name', autocomplete: 'name', maxlength: '80', value: note.name })]),
+        el('label', { class: 't-fld' }, [
+          el('span', { class: 't-lbl' }, ['Email, if you want an answer']),
+          el('input', { class: 't-field', id: 'note-email', type: 'email', autocomplete: 'email', maxlength: '200', value: note.email }),
+        ]),
+      ]),
+      el('label', { class: 't-fld' }, [
+        el('span', { class: 't-lbl' }, ['Your note', el('small', { 'data-note-count': '' }, [`${count} / ${MAX_NOTE}`])]),
+        el('textarea', { class: 't-field', id: 'note-body', rows: '4', ...(note.problem === 'empty' ? { 'aria-invalid': 'true' } : {}) }, [note.body]),
+      ]),
+      ...(note.problem !== '' && note.problem !== 'empty' ? [el('p', { class: 't-err', role: 'alert' }, [note.problem])] : []),
+      el('div', { class: 't-noteform-bar' }, [
+        el('span', { class: 't-note' }, ['He reads every note. It shows here only after he OKs it, with your name; your email is never shown.']),
+        el('button', { type: 'submit', class: 't-btn t-btn-primary', ...(note.busy ? { disabled: '' } : {}) }, [note.busy ? 'Sending…' : 'Send']),
+      ]),
+    ]);
+  }
+
+  /** Redraws the note form alone, so the thread above it, and its page, stay as they are. */
+  renderNote() {
+    this.pubDoc.querySelector('[data-note-area]')?.replaceChildren(this.noteForm());
+  }
+
+  /** Reads the note form's fields into its state. */
+  readNote() {
+    for (const [id, key] of /** @type {const} */ ([['note-name', 'name'], ['note-email', 'email'], ['note-body', 'body']])) {
+      const field = this.pubDoc.querySelector(`#${id}`);
+      if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) this.note[key] = field.value;
+    }
+  }
+
+  /** Sends the note on the public thread through the site's bot check; it waits for his OK. */
+  async sendNote() {
+    this.readNote();
+    const shown = this.publicShown;
+    const note = this.note;
+    if (shown === null || note.busy) return;
+    const body = note.body.trim();
+    if (body === '') {
+      this.note = { ...note, problem: 'empty' };
+      this.renderNote();
+      focusIn(this.pubDoc, '#note-body');
+      return;
+    }
+    if (body.length > MAX_NOTE) {
+      this.note = { ...note, problem: `Keep it to ${MAX_NOTE} characters.` };
+      this.renderNote();
+      return;
+    }
+    this.note = { ...note, busy: true, problem: '' };
+    this.renderNote();
+    try {
+      await sendTo(`/api/threads/${shown.thread.number}/notes`, { body, name: note.name.trim(), email: note.email.trim() });
+    } catch (error) {
+      const reason = error instanceof Error && 'reason' in error ? error.reason : 'failed';
+      const problem =
+        reason === 'limit'
+          ? "Today's limit for notes is reached. Your note is still here; try again tomorrow."
+          : reason === 'gone'
+            ? "This thread isn't public any more, so the note can't be sent."
+            : "That didn't send. Your note is still here; try again.";
+      this.note = { ...this.note, busy: false, problem };
+      this.renderNote();
+      return;
+    }
+    this.note = { name: note.name, email: note.email, body: '', sent: true, busy: false, problem: '' };
+    this.renderNote();
   }
 
   /** Reads the sheet's two fields into its state. */
@@ -2212,6 +2683,10 @@ class Threads {
       this.closeOverlay();
       return;
     }
+    if (!this.pub.hidden) {
+      this.onPublicClick(target);
+      return;
+    }
     const link = target.closest('a[data-thread], a[data-go], a[data-space], a[data-tab]');
     if (link instanceof HTMLAnchorElement && !wantsNewTab(event)) {
       event.preventDefault();
@@ -2256,8 +2731,24 @@ class Threads {
       case 'share-remove':
         void this.removePerson(button.dataset.person ?? '');
         break;
+      case 'public':
+        if (thread && thread.source === 'self' && !this.member) void this.togglePublic(thread);
+        break;
+      case 'note-show':
+      case 'note-drop':
+      case 'note-hold':
+        if (thread && !this.member && button.dataset.note) void this.judgeNote(thread, button.dataset.note, button.dataset.act === 'note-show' ? 'show' : button.dataset.act === 'note-drop' ? 'drop' : 'hold');
+        break;
+      case 'note-peek': {
+        const id = button.dataset.note ?? '';
+        if (this.notesOpened.has(id)) this.notesOpened.delete(id);
+        else this.notesOpened.add(id);
+        this.keepScroll = true;
+        this.render();
+        break;
+      }
       case 'audience':
-        this.onlyMe = button.dataset.audience === 'owner';
+        this.audience = button.dataset.audience === 'owner' ? 'owner' : button.dataset.audience === 'public' ? 'public' : 'thread';
         this.keepScroll = true;
         this.render();
         focusIn(this.main, '#comment-text');
@@ -2372,6 +2863,49 @@ class Threads {
     }
   }
 
+  /**
+   * A click in the public view: its page's bar, its versions, and the note form's Send another. Links (a thread's
+   * number in the text among them) are left to the browser, which loads that address as a page of its own.
+   * @param {Element} target
+   */
+  onPublicClick(target) {
+    const button = target.closest('[data-act]');
+    const shown = this.publicShown;
+    if (!(button instanceof HTMLElement) || shown === null) return;
+    switch (button.dataset.act) {
+      case 'page-full':
+        this.pageFull = !this.pageFull;
+        this.renderPublic();
+        break;
+      case 'public-versions':
+        if (shown.page) {
+          const page = shown.page;
+          const current = this.pageVersions.get(shown.thread.number) ?? page.version;
+          const picks = [...page.versions].reverse().map((one) =>
+            el('button', { type: 'button', class: 't-pick', 'data-act': 'public-version', 'data-version': String(one.version), ...(one.version === current ? { 'aria-current': 'true' } : {}) }, [
+              `Version ${one.version} · ${day(one.savedAt)}`,
+              ...(one.version === page.version ? [el('span', { class: 't-chip' }, ['newest'])] : []),
+            ]),
+          );
+          this.openOverlay('versions', `Versions of #${shown.thread.number}'s page`, 'narrow', [this.sheetHead('Versions'), el('div', { class: 't-sheet-body' }, [el('div', { class: 't-pick-list' }, picks)])]);
+        }
+        break;
+      case 'public-version':
+        this.pageVersions.set(shown.thread.number, Number(button.dataset.version));
+        this.closeOverlay();
+        this.renderPublic();
+        break;
+      case 'close':
+        this.closeOverlay();
+        break;
+      case 'note-again':
+        this.note = { ...this.note, sent: false };
+        this.renderNote();
+        focusIn(this.pubDoc, '#note-body');
+        break;
+    }
+  }
+
   /** @param {Event} event */
   onInput(event) {
     const target = event.target;
@@ -2383,6 +2917,12 @@ class Threads {
       this.main.querySelector('#edit-preview')?.replaceChildren(...this.editorPreview(this.shown.thread, this.editing));
     } else if (target.id.startsWith('new-')) this.readNew();
     else if (target.id.startsWith('share-')) this.readShare();
+    else if (target.id.startsWith('note-')) {
+      this.readNote();
+      prepareBotCheck();
+      const count = this.pubDoc.querySelector('[data-note-count]');
+      if (count) count.textContent = `${this.note.body.trim().length} / ${MAX_NOTE}`;
+    }
   }
 
   /** @param {Event} event */
@@ -2409,10 +2949,19 @@ class Threads {
     if (kind === 'edit' && thread) void this.saveEdit(thread);
     if (kind === 'new') void this.saveNew();
     if (kind === 'invite') void this.sendInvite();
+    if (kind === 'note') void this.sendNote();
   }
 
   /** @param {KeyboardEvent} event */
   onKey(event) {
+    if (!this.pub.hidden) {
+      const form = event.target instanceof Element ? event.target.closest('form[data-submit="note"]') : null;
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && form) {
+        event.preventDefault();
+        void this.sendNote();
+      }
+      return;
+    }
     if (!this.loaded || !this.lost.hidden) return;
     const target = event.target;
     const typing = typingIn(target);

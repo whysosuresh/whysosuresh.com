@@ -3,7 +3,10 @@
 // passes before it is sent, the lines that tell him what an invited person will see and how many people have access,
 // and the invitation itself, a draft his own Gmail opens for him to send; nothing is sent from the site. The link in
 // it is the thread's own address with `?invite`, which takes a signed-out reader straight to Cloudflare's code page
-// and back. Plain data and pure functions, so a test can read them without a page.
+// and back. Below the people, one switch makes the thread public: anyone reads it at its address with no sign-in,
+// and only his own threads may be (`publicLines` says what the switch says, and why it is off for someone else's
+// words). A visitor's note on a public thread is answered from his own Gmail too (`noteReply`). Plain data and pure
+// functions, so a test can read them without a page.
 
 /** How many people Cloudflare's free plan signs in. */
 export const SEATS = 50;
@@ -87,4 +90,66 @@ export function invitation(thread, person, origin) {
 export function listed(names) {
   if (names.length <= 1) return names[0] ?? '';
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/** How much of a note a reply quotes. */
+const QUOTE = 400;
+
+/**
+ * Who can see a thread, as the page names it: Public when he made it public, else Invited when it has people, else
+ * Private.
+ * @param {string | null} publicAt
+ * @param {number} people
+ * @returns {'Public' | 'Invited' | 'Private'}
+ */
+export function levelOf(publicAt, people) {
+  if (publicAt !== null) return 'Public';
+  return people > 0 ? 'Invited' : 'Private';
+}
+
+/**
+ * What the Public switch says: its label, the line under it for where it stands, and whether it can be turned on.
+ * Only his own threads can be public; a site note's and a told thread's words are someone else's.
+ * @param {number} number
+ * @param {string} source `self`, `talk` or `told`
+ * @param {boolean} on
+ * @returns {{ label: string, note: string, allowed: boolean }}
+ */
+export function publicLines(number, source, on) {
+  const label = `Public: anyone can read it at whysosuresh.com/threads/${number}`;
+  if (source !== 'self') {
+    return {
+      label,
+      allowed: false,
+      note:
+        source === 'talk'
+          ? "A note someone sent from the site can't be public: the words are theirs. Start a thread of your own and quote them, with their OK."
+          : "Something someone told you can't be public: the words are theirs. Start a thread of your own and quote them, with their OK.",
+    };
+  }
+  return {
+    label,
+    allowed: true,
+    note: on
+      ? 'Anyone who opens the link or tries the number reads the title, the summary, the text and the comments you write as Public. Earlier comments, Only me notes, the people and the history stay yours. Search engines are told not to list it.'
+      : 'Off: only you and the people above read it.',
+  };
+}
+
+/**
+ * The reply to a visitor's note on a public thread, as a draft for his Gmail: to them, about the thread, the note
+ * quoted.
+ * @param {{ number: number, title: string }} thread
+ * @param {{ name: string | null, email: string, body: string }} note
+ * @returns {{ to: string, subject: string, body: string }}
+ */
+export function noteReply(thread, note) {
+  const first = (note.name ?? '').trim().split(/\s+/)[0] || 'there';
+  const cut = note.body.length > QUOTE ? `${note.body.slice(0, QUOTE).trimEnd()}…` : note.body;
+  const quoted = cut.split('\n').map((line) => `> ${line}`).join('\n');
+  return {
+    to: note.email,
+    subject: `Your note on #${thread.number} ${thread.title}`,
+    body: `Hi ${first},\n\nThanks for your note on ${thread.title}:\n\n${quoted}\n\n[your answer]\n\nSuresh`,
+  };
 }

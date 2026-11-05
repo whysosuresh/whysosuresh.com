@@ -1,9 +1,10 @@
 // @ts-check
-// The note flow's sender: the bot check and the upload, behind the two calls talk.js makes. prepare()
-// starts loading Cloudflare's Turnstile when the note opens, so nobody who only looks at the topics loads
-// it and it is ready long before Send. send() gets a fresh token from the invisible widget and posts the
-// note to /api/talk as JSON. The widget runs only at Send, because a token lasts 5 minutes and writing a
-// note can outlast one.
+// Every visitor note's sender: the bot check and the upload. talk.js sends a note about a topic (send(), to
+// /api/talk); the threads page sends a note on a public thread (sendTo(), to /api/threads/<n>/notes, which waits
+// for his OK). Both share one budget on the server and one sender here. prepare() starts loading Cloudflare's
+// Turnstile when a note opens, so nobody who only looks loads it and it is ready long before Send. Each send gets a
+// fresh token from the invisible widget and posts the note as JSON. The widget runs only at Send, because a token
+// lasts 5 minutes and writing a note can outlast one.
 
 /**
  * @typedef {{ topic: string, body: string, name: string, email: string }} Note
@@ -124,22 +125,34 @@ export function prepare() {
 }
 
 /**
- * Sends a note to Suresh. Fails with reason `limit` when today's limit is reached, and with a plain
- * failure for anything else, which keeps the note on screen to send again.
- * @param {Note} note
+ * Sends a note's fields, with a fresh bot-check token, to one of the site's note addresses. Fails with reason
+ * `limit` when today's limit is reached, `gone` when the address answers that there is nothing there (a thread no
+ * longer public), and `failed` for anything else, which keeps the note on screen to send again.
+ * @param {string} address
+ * @param {Record<string, string>} fields
  * @returns {Promise<void>}
  */
-export async function send(note) {
+export async function sendTo(address, fields) {
   /** @type {Response} */
   let response;
   try {
-    const body = JSON.stringify({ topic: note.topic, body: note.body, name: note.name, email: note.email, token: await token() });
-    response = await fetch('/api/talk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    const body = JSON.stringify({ ...fields, token: await token() });
+    response = await fetch(address, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
   } catch (err) {
     throw failure(err instanceof Error ? err.message : "That didn't send.", 'failed');
   } finally {
     resetWidget();
   }
   if (response.status === 429) throw failure("Today's limit is reached.", 'limit');
+  if (response.status === 404) throw failure('There is nothing to send this to now.', 'gone');
   if (response.status !== 201) throw failure("That didn't send.", 'failed');
+}
+
+/**
+ * Sends a note to Suresh about one of his topics.
+ * @param {Note} note
+ * @returns {Promise<void>}
+ */
+export async function send(note) {
+  await sendTo('/api/talk', { topic: note.topic, body: note.body, name: note.name, email: note.email });
 }

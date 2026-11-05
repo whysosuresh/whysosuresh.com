@@ -459,14 +459,17 @@ describe("the threads page", () => {
     expect(doc.querySelectorAll('link[rel="canonical"], meta[property^="og:"], meta[name="description"]')).toEqual([]);
   });
 
-  it("loads only its own script, whose calls reach the threads' calls and nothing else of the site's", async () => {
+  it("loads only its own script, whose calls reach the threads' calls and a public thread's, and nothing else of the site's", async () => {
     const loaded = (await parse("threads/index.html")).querySelectorAll('script[type="module"]').map((el) => attr(el, "src"));
     expect(loaded).toEqual(["/app/threads.js"]);
     const store = read("app/threads-store.js");
     expect(store).toContain("const API = '/threads/api';");
     const paths = [...store.matchAll(/`\$\{API\}(\/[^`?$]*)/g)].map((m) => m[1]);
     expect(paths.length).toBeGreaterThan(0);
-    expect(store.match(/fetch\(/g)).toHaveLength(1);
+    // One fetch for the private calls, one for a public thread's own call (src/public.ts); a note is sent by the site's
+    // one note sender (talk-send.js).
+    expect(store.match(/fetch\(/g)).toHaveLength(2);
+    expect(store).toContain("fetch(`/api/threads/${number}`");
     for (const script of ["app/threads.js", "app/keys.js", "app/markdown.js"]) expect([script, read(script).includes("fetch(")]).toEqual([script, false]);
   });
 
