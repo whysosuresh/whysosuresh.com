@@ -111,9 +111,9 @@ export interface PlayedAccess {
   /** An invited person's claims for the threads' application: the owner's, with another address. */
   memberClaims(email: string): Claims;
   /**
-   * What Access sends the evaluation door at sign-in, after Cloudflare's example: the address that asked for a code
-   * (`identity.email`) and a nonce, with no application's audience or type. Passed to `token`, it replaces every
-   * application claim.
+   * What Access sends the evaluation door at sign-in, by the claim names it sent on 2026-11-05: `aud`, `exp`, `iat`,
+   * the address that asked for a code (`identity.email`), a `nonce` and `request_url`, and no issuer or type.
+   * Passed to `token`, it replaces every application claim.
    */
   evaluationClaims(email: string, nonce?: string): Claims;
   /** How many times the Worker fetched the certs. */
@@ -209,12 +209,14 @@ function playAccess(): PlayedAccess & { serve(request: RuntimeRequest): RuntimeR
       return { ...this.ownerClaims(), email, sub: "0f6f2c1e-6a40-4a5e-9d5e-3f1d5b2a7c11" };
     },
     evaluationClaims: (email, nonce = "nonce-from-access") => ({
-      iss: `https://${ACCESS_TEAM_DOMAIN}`,
+      // Its audience is sent but never checked, so the harness's value stands for any.
+      aud: "an-audience-the-door-does-not-check",
       iat: now(),
       exp: now() + 60,
       nonce,
       identity: { email, idp: { type: "onetimepin" } },
-      aud: undefined,
+      request_url: "https://whysosuresh.com/threads/api/sign-in",
+      iss: undefined,
       nbf: undefined,
       type: undefined,
       email: undefined,

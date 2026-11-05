@@ -3,8 +3,8 @@
 // Cloudflare's example) and the Worker's own evaluation key. What it holds: yes only for an address with an
 // invitation that stands, in any case, and no for a stranger, a person removed and the owner (whose own policy
 // lets him in first); every answer is a JWT the evaluation key signed, naming it, with the nonce Access sent and a
-// minute to live; a token Access didn't sign, an expired one, one from another issuer and an application token are
-// refused; a question that isn't one is refused by its shape and size; the keys address serves the key's public
+// minute to live, for a token with no issuer, as Access sends it; a token Access didn't sign, an expired one and an
+// application token are refused; a question that isn't one is refused by its shape and size; the keys address serves the key's public
 // half only, named by its RFC 7638 thumbprint, at both spellings; and without a usable key, or Access's keys, both
 // answer 503, which Access counts as no.
 
@@ -109,7 +109,7 @@ describe("a token that isn't Access's question", () => {
     ["signed with a key Access doesn't serve", {}, { foreignKey: true }],
     ["with a spoiled signature", {}, { badSignature: true }],
     ["expired", { exp: Math.floor(Date.now() / 1000) - 3600 }, {}],
-    ["from another issuer", { iss: "https://elsewhere.cloudflareaccess.com" }, {}],
+    ["not yet valid", { nbf: Math.floor(Date.now() / 1000) + 3600 }, {}],
     ["with no nonce", { nonce: undefined }, {}],
     ["with no identity", { identity: undefined }, {}],
     ["with an identity that names no address", { identity: { name: "Meera" } }, {}],
