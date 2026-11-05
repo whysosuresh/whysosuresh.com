@@ -143,7 +143,7 @@ function migrations(): { number: string; statements: string[] }[] {
 }
 
 /** The tables `reset` empties, children before the tables they name, because D1 checks foreign keys. */
-const TABLES = ["events", "comments", "threads", "inbox", "talk_days", "talk_senders"];
+const TABLES = ["events", "comments", "threads", "talk_days", "talk_senders"];
 
 const base64Url = (bytes: Buffer): string => bytes.toString("base64url");
 
