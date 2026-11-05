@@ -976,6 +976,7 @@ textarea.t-field { resize: vertical; line-height: 1.5; }
 .t-lost-body { max-width: 420px; margin: 56px auto 0; padding: 0 24px; display: grid; gap: 8px; }
 .t-lost-title { margin: 0; font-size: 19px; }
 .t-lost-text { margin: 0; color: var(--muted); font-size: 13.5px; }
+.t-lost-text .t-btn { margin-top: 8px; }
 
 @media (max-width: 999px) {
   .t-thread { grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 18px 22px 48px; }
