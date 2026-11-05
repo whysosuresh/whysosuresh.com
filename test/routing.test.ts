@@ -1,7 +1,8 @@
 // Which paths reach the Worker's code and which are the site's own files, sent through the same routing the deploy
 // uses: the harness serves site/ with wrangler.jsonc's `run_worker_first`, `html_handling` and
 // `not_found_handling`, and the assets binding the code hands files over through (test/harness.ts). What it
-// holds: the two doors (/api/, /threads/api/) answer the Worker's JSON; the pages come from site/; /inbox, the
+// holds: the two doors (/api/, /threads/api/) answer the Worker's JSON, the public threads' calls under
+// /api/threads/ among them; the pages come from site/; /inbox, the
 // threads' old address, and everything under it, its old calls included, redirect for good to /threads/;
 // a page's .html address redirects to its clean one; /threads/ and every thread's address answer the threads
 // page with the site's headers (its CSP among them) and status 200, whatever the number, with no sign-in, because
@@ -37,6 +38,8 @@ afterAll(async () => {
 describe("the Worker's code", () => {
   it.each([
     ["/api/talk", 405],
+    ["/api/threads/1", 404],
+    ["/api/threads/1/notes", 405],
     ["/threads/api/threads", 401],
     ["/threads/api/anything", 401],
   ])("answers %s with its own JSON (%i)", async (path, status) => {

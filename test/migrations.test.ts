@@ -249,7 +249,7 @@ describe("0007, the inbox retired a deploy later", () => {
     expect(await thread(harness, "00000000-0000-4000-8000-000000000007")).toBeNull();
     const after = (await database.prepare("SELECT * FROM threads WHERE id NOT IN (?1, ?2, ?3) ORDER BY number").bind("00000000-0000-4000-8000-000000000003", "00000000-0000-4000-8000-000000000005", "00000000-0000-4000-8000-000000000006").all<Record<string, unknown>>()).results;
     // Later migrations add a thread's last activity and its main section; everything 0007 found stays as it was.
-    expect(after.map(({ activity_at: _activity, main: _main, link_url: _url, link_title: _title, ...rest }) => rest)).toEqual(before);
+    expect(after.map(({ activity_at: _activity, main: _main, link_url: _url, link_title: _title, public_at: _public, ...rest }) => rest)).toEqual(before);
   });
 
   it("drops the inbox's table", async () => {
@@ -308,5 +308,24 @@ describe("0010, the people a thread is shared with", () => {
     for (const table of ["people", "members"]) {
       expect((await database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>())?.n).toBe(0);
     }
+  });
+});
+
+describe("0011, public threads and the notes on them", () => {
+  it("leaves every thread private and every earlier comment shown, with no visitor's name or email", async () => {
+    harness = await startHarness({ through: "0010" });
+    const database = await harness.db();
+    await database.batch([
+      database.prepare("INSERT INTO threads (id, number, created_at, source, body, status) VALUES ('t1', 1, '2026-11-01T00:00:00.000Z', 'self', 'x', 'act')"),
+      database.prepare("INSERT INTO comments (id, thread_id, author, body, created_at, audience) VALUES ('c1', 't1', 'owner', 'Mine.', '2026-11-02T00:00:00.000Z', 'owner')"),
+      database.prepare("INSERT INTO comments (id, thread_id, author, body, created_at) VALUES ('c2', 't1', 'sync', 'Claude.', '2026-11-03T00:00:00.000Z')"),
+    ]);
+    await harness.migrate();
+    expect(await database.prepare("SELECT public_at FROM threads").first()).toEqual({ public_at: null });
+    const comments = (await database.prepare("SELECT id, audience, state, sender_name, sender_email FROM comments ORDER BY id").all()).results;
+    expect(comments).toEqual([
+      { id: "c1", audience: "owner", state: "shown", sender_name: null, sender_email: null },
+      { id: "c2", audience: "thread", state: "shown", sender_name: null, sender_email: null },
+    ]);
   });
 });

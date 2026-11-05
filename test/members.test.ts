@@ -320,7 +320,7 @@ describe("what an invited person sees", () => {
     const n = await shared();
     const seen = await answer<Shown>(await call(`/threads/${n}`, { as: { email: MEERA } }));
     expect(Object.keys(seen.thread).sort()).toEqual(
-      ["activityAt", "body", "createdAt", "id", "kind", "link", "main", "movedAt", "number", "senderName", "source", "space", "status", "summary", "title"].sort(),
+      ["activityAt", "body", "createdAt", "id", "kind", "link", "main", "movedAt", "number", "publicAt", "senderName", "source", "space", "status", "summary", "title"].sort(),
     );
     expect(seen.thread).toMatchObject({ senderName: "Asha", summary: "Decided: yes.", body: "My own words." });
     expect(JSON.stringify(seen)).not.toMatch(/asha@example\.com|meera@|dev@|Junk|Private first draft/);
@@ -369,9 +369,9 @@ describe("what an invited person sees", () => {
     expect(dev.comments.at(-1)).toMatchObject({ author: "member", name: "Meera", body: "Thanks!" });
   });
 
-  it("refuses a comment's audience that is neither", async () => {
+  it("refuses a comment's audience that is none of thread, owner and public", async () => {
     const n = await thread();
-    expect(await reasonOf(await call(`/threads/${n}/comments`, { body: { body: "x", audience: "public" } }))).toEqual([400, "comment"]);
+    expect(await reasonOf(await call(`/threads/${n}/comments`, { body: { body: "x", audience: "everyone" } }))).toEqual([400, "comment"]);
   });
 });
 

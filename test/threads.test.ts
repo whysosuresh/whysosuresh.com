@@ -165,6 +165,7 @@ describe("an add", () => {
       activityAt: thread.createdAt,
       main: "text",
       link: null,
+      publicAt: null,
     });
     const again = await call("", { body: { ...body, title: "Another title" } });
     expect(again.status).toBe(200);
@@ -383,7 +384,7 @@ describe("a comment", () => {
     const response = await call(`/${thread.number}/comments`, { body: { body: "  **Meera** agreed.\n\n- releases need two people  " } });
     expect(response.status).toBe(201);
     const { comment } = (await response.json()) as { comment: { id: string; author: string; body: string; createdAt: string } };
-    expect(comment).toEqual({ id: expect.any(String), author: "sync", name: null, audience: "thread", body: "**Meera** agreed.\n\n- releases need two people", createdAt: expect.any(String) });
+    expect(comment).toEqual({ id: expect.any(String), author: "sync", name: null, audience: "thread", state: "shown", body: "**Meera** agreed.\n\n- releases need two people", createdAt: expect.any(String) });
     expect((await shown(thread.number)).events).toHaveLength(1);
   });
 

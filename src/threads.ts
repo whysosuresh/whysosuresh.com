@@ -13,6 +13,7 @@
 //   GET  /threads/api/threads/<n>                                             everyone
 //   POST /threads/api/threads/<n>             {"action": ...}                  owner and sync
 //   POST /threads/api/threads/<n>/comments    {"body": ..., "audience"?: ...}  everyone
+//   POST /threads/api/threads/<n>/comments/<id>   {"action": "show" | "drop" | "hold"}   owner
 //   POST /threads/api/threads/<n>/text        {"field": ..., "text": ...}      owner and sync
 //   POST /threads/api/threads/<n>/pages[?from=<claude.ai address>]   an HTML document   sync
 //   GET  /threads/api/threads/<n>/pages/<version>                             everyone
@@ -50,6 +51,15 @@
 // only works there, and an empty one clears it. Every thread answers its last activity (`activityAt`). The
 // owner's writes must come from his own page; `reply-opened` is his alone and `file` the sync's. Nothing
 // personal is logged: a refusal's line holds its status and reason only.
+//
+// One of his own threads may be public: `publish` and `unpublish` are moves, his alone, and a thread that isn't his
+// own (a site note, a told thread) is never published (409 `not-his-words`). Every reader's thread says when it was
+// made public (`publicAt`). A comment's audience is the writer's own choice: `public` (anyone, on a public thread
+// only, 409 `not-public` elsewhere) from the owner or an invited person, never from the sync, so nothing it
+// transcribes is published without him. A visitor's note on a public thread (src/public.ts) waits for his OK: he
+// shows it, drops it or sends it back to waiting at its own address, and the owner's list counts the notes waiting
+// on each thread (`pending`). An invited person never reads a note that isn't shown, and nobody but the owner and the
+// sync ever reads a visitor's email.
 
 import { identify, type Caller, type Refusal } from "./access.ts";
 import type { Bindings } from "./bindings.ts";
@@ -77,7 +87,9 @@ import {
   search,
   setLink,
   uninvite,
+  judgeNote,
   type CommentRow,
+  type Judgement,
   type EventRow,
   type PageRow,
   type PersonRow,
@@ -134,8 +146,8 @@ const MAX_EMAIL = 254;
  * characters that would split or quote it in a mail draft's recipients.
  */
 const EMAIL_SHAPE = /^[^\s@,;:<>()"\[\]\\]+@(?:[^\s@,;:<>()"\[\]\\.]+\.)+[^\s@,;:<>()"\[\]\\.]+$/;
-/** A person's id, as the store gives it. */
-const PERSON_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** A person's or a comment's id, as the store gives it. */
+const ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** How invited people see the owner among a thread's people: the site is his, and so is every thread. */
 const OWNER_NAME = "Suresh";
 /** What an event's data may say that an invited person never reads: earlier texts, drop reasons, issue links, people's ids. */
@@ -162,6 +174,7 @@ function thread(row: ThreadRow, reader: Reader): { readonly [key: string]: JsonV
     activityAt: row.activity_at,
     main: row.main,
     link: row.link_url === null ? null : { url: row.link_url, title: row.link_title },
+    publicAt: row.public_at,
   };
   if (reader.caller === "member") return said;
   return {
@@ -203,9 +216,22 @@ function claudeAddress(value: unknown): string | null {
   }
 }
 
-/** A comment, with who may read it and the name of the invited person who wrote it (null for the owner's and the sync's). */
-function commentView(row: CommentRow): { readonly [key: string]: JsonValue } {
-  return { id: row.id, author: row.author, name: row.person_name, audience: row.audience, body: row.body, createdAt: row.created_at };
+/**
+ * A comment, with who may read it, its state, and the name of who wrote it: the invited person's, or the name a
+ * visitor typed (null for the owner's and the sync's, and a visitor who gave none). A visitor's email reaches the
+ * owner and the sync only.
+ */
+function commentView(row: CommentRow, reader: Reader): { readonly [key: string]: JsonValue } {
+  const said = {
+    id: row.id,
+    author: row.author,
+    name: row.person_name ?? row.sender_name,
+    audience: row.audience,
+    state: row.state,
+    body: row.body,
+    createdAt: row.created_at,
+  };
+  return reader.caller === "member" || row.author !== "visitor" ? said : { ...said, senderEmail: row.sender_email };
 }
 
 /** An event; an invited person reads its data without what is the owner's own (`OWNERS_DATA`). */
@@ -238,7 +264,7 @@ async function list(url: URL, env: Bindings, caller: Writer): Promise<Response> 
   const shown = rows.slice(0, PAGE);
   const last = shown[shown.length - 1];
   return json(200, {
-    threads: shown.map((row) => ({ ...thread(row, caller), shared: row.shared ?? 0, waiting: row.waiting === 1 })),
+    threads: shown.map((row) => ({ ...thread(row, caller), shared: row.shared ?? 0, waiting: row.waiting === 1, pending: row.pending ?? 0 })),
     counts,
     next: rows.length > PAGE && last !== undefined ? last.number : null,
   });
@@ -270,7 +296,7 @@ async function show(number: number, env: Bindings, caller: Caller): Promise<Resp
     thread: thread(row, caller),
     page: pageView(pages),
     people: peopleView(people, caller),
-    comments: comments.slice(0, HISTORY).map(commentView),
+    comments: comments.slice(0, HISTORY).map((row) => commentView(row, caller)),
     events: events.slice(0, HISTORY).map((event) => eventView(event, caller)),
     truncated: comments.length > HISTORY || events.length > HISTORY,
   });
@@ -287,6 +313,7 @@ async function move(request: Request, number: number, env: Bindings, caller: Wri
   const moved = await makeMove(env.DB, { number }, change, caller.caller);
   if (moved === "no-thread") return refuse(404, "no-thread");
   if (moved === "not-from-here") return refuse(409, "not-from-here");
+  if (moved === "not-his-words") return refuse(409, "not-his-words");
   return json(200, { thread: thread(moved, caller) });
 }
 
@@ -298,8 +325,9 @@ function exactly(value: unknown, keys: readonly string[]): Record<string, unknow
 }
 
 /**
- * Adds a comment: Markdown, for everyone in the thread (`audience` `thread`, the default) or, from the owner or the
- * sync, for them alone (`owner`, his "Only me"). An invited person's comment is always for everyone in the thread.
+ * Adds a comment: Markdown, for everyone in the thread (`audience` `thread`, the default), from the owner or the
+ * sync for them alone (`owner`, his "Only me"), or, from the owner or an invited person on a public thread, for
+ * anyone (`public`). The sync never writes for anyone.
  */
 async function addComment(request: Request, number: number, env: Bindings, caller: Caller): Promise<Response> {
   const length = lengthRefusal(request, MAX_TEXT_BYTES);
@@ -308,12 +336,14 @@ async function addComment(request: Request, number: number, env: Bindings, calle
   const fields = exactly(given, ["body"]) ?? exactly(given, ["audience", "body"]);
   const body = fields === null ? null : text(fields.body, MAX_BODY);
   const audience = fields?.audience ?? "thread";
-  if (body === null || body === "" || (audience !== "thread" && audience !== "owner")) return refuse(400, "comment");
+  if (body === null || body === "" || (audience !== "thread" && audience !== "owner" && audience !== "public")) return refuse(400, "comment");
   if (audience === "owner" && caller.caller === "member") return refuse(403, "owner-only");
+  if (audience === "public" && caller.caller === "sync") return refuse(403, "not-for-sync");
 
   const added = await comment(env.DB, { number }, caller, body, audience);
   if (added === null) return refuse(404, "no-thread");
-  return json(201, { comment: commentView(added) });
+  if (added === "not-public") return refuse(409, "not-public");
+  return json(201, { comment: commentView(added, caller) });
 }
 
 async function replaceText(request: Request, number: number, env: Bindings, caller: Writer): Promise<Response> {
@@ -443,7 +473,7 @@ async function changePeople(request: Request, number: number, env: Bindings, cal
     if (row === null) return refuse(404, "no-thread");
     return peopleAnswer(row, env, caller);
   }
-  if (removing === null || typeof removing.remove !== "string" || !PERSON_ID_SHAPE.test(removing.remove)) return refuse(400, "person");
+  if (removing === null || typeof removing.remove !== "string" || !ID_SHAPE.test(removing.remove)) return refuse(400, "person");
   const row = await uninvite(env.DB, number, removing.remove);
   if (row === "no-thread") return refuse(404, "no-thread");
   if (row === "not-invited") return refuse(409, "not-invited");
@@ -455,6 +485,20 @@ async function readPeople(number: number, env: Bindings, caller: Caller): Promis
   const row = await find(env.DB, { number }, caller);
   if (row === null) return refuse(404, "no-thread");
   return peopleAnswer(row, env, caller);
+}
+
+/** His ruling on a visitor's note: shown on the thread, dropped, or back to waiting (Undo). The owner's alone. */
+async function judge(request: Request, number: number, noteId: string, env: Bindings, caller: Caller): Promise<Response> {
+  const length = lengthRefusal(request, MAX_CHANGE_BYTES);
+  if (length !== null) return length;
+  const fields = exactly(await readJson(request), ["action"]);
+  const action = fields?.action;
+  if (action !== "show" && action !== "drop" && action !== "hold") return refuse(400, "change");
+  if (!ID_SHAPE.test(noteId)) return refuse(404, "no-note");
+  const judged = await judgeNote(env.DB, number, noteId, action satisfies Judgement);
+  if (judged === "no-thread" || judged === "no-note") return refuse(404, judged);
+  if (judged === "not-from-here") return refuse(409, "not-from-here");
+  return json(200, { comment: commentView(judged, caller) });
 }
 
 /** Sends a caller Access has just signed in back to the threads page they came from, or to the threads. */
@@ -496,6 +540,15 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
     if (request.method !== "GET") return json(405, { reason: "method" }, { Allow: "GET" });
     const [, number = "", page = ""] = version;
     return NUMBER_SHAPE.test(number) ? readPage(request, Number(number), page, env, who) : refuse(404, "no-thread");
+  }
+  const ruling = /^\/threads\/api\/threads\/([^/]+)\/comments\/([^/]+)$/.exec(url.pathname);
+  if (ruling !== null) {
+    if (request.method !== "POST") return json(405, { reason: "method" }, { Allow: "POST" });
+    // A ruling on a note is the owner's alone, refused before anything is read, and only from his own page.
+    if (who.caller !== "owner") return refuse(403, "owner-only");
+    if (!sameOrigin(request)) return refuse(403, "origin");
+    const [, number = "", noteId = ""] = ruling;
+    return NUMBER_SHAPE.test(number) ? judge(request, Number(number), noteId, env, who) : refuse(404, "no-thread");
   }
   const route = /^\/threads\/api\/threads\/([^/]+)(?:\/(comments|text|pages|link|people))?$/.exec(url.pathname);
   if (route === null) return json(404, { reason: "not-found" });
