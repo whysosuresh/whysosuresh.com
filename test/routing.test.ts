@@ -1,7 +1,8 @@
 // Which paths reach the Worker's code and which are the site's own files, sent through the same routing the deploy
 // uses: the harness serves site/ with wrangler.jsonc's `run_worker_first`, `html_handling` and
 // `not_found_handling`, and the assets binding the code hands files over through (test/harness.ts). What it
-// holds: the three doors (/api/, /inbox/api/, /threads/api/) answer the Worker's JSON; the pages come from site/;
+// holds: the two doors (/api/, /threads/api/) answer the Worker's JSON; the pages come from site/; /inbox, the
+// threads' old address, and everything under it, its old calls included, redirect for good to /threads/;
 // a page's .html address redirects to its clean one; /threads/ and every thread's address answer the threads
 // page with the site's headers (its CSP among them) and status 200, whatever the number, with no sign-in, because
 // Access guards only the threads' calls, never a thread's page; and any other path under /threads/ is what the
@@ -36,7 +37,6 @@ afterAll(async () => {
 describe("the Worker's code", () => {
   it.each([
     ["/api/talk", 405],
-    ["/inbox/api/items", 401],
     ["/threads/api/threads", 401],
     ["/threads/api/anything", 401],
   ])("answers %s with its own JSON (%i)", async (path, status) => {
@@ -51,12 +51,17 @@ describe("the site's own files", () => {
   it.each([
     ["/", "index.html"],
     ["/feedback", "feedback.html"],
-    ["/inbox/", "inbox/index.html"],
   ])("serve %s from site/%s, with no code in its path", async (path, file) => {
     const response = await harness.fetch(`${SITE}${path}`, { redirect: "manual" });
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/html");
     expect(await response.text()).toContain(`<title>${titleOf(file)}</title>`);
+  });
+
+  it.each(["/inbox", "/inbox/", "/inbox/api/items?tab=look", "/inbox/anything/else"])("redirect %s to /threads/ for good", async (path) => {
+    const response = await harness.fetch(`${SITE}${path}`, { redirect: "manual" });
+    expect(response.status).toBe(301);
+    expect(new URL(response.headers.get("location") ?? "", SITE).pathname).toBe("/threads/");
   });
 
   it("redirect a page's .html address to its clean one", async () => {

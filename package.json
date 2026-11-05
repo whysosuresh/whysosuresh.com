@@ -2,7 +2,7 @@
   "name": "whysosuresh-com",
   "private": true,
   "type": "module",
-  "description": "whysosuresh.com's checks: the type checks, the site tests, and the Worker tests on the bundle wrangler's dry run writes. The site is the static folder site/, served by one Cloudflare Worker (wrangler.jsonc) that runs code only for /api/*, /inbox/api/* and /threads/api/* (src/).",
+  "description": "whysosuresh.com's checks: the type checks, the site tests, and the Worker tests on the bundle wrangler's dry run writes. The site is the static folder site/, served by one Cloudflare Worker (wrangler.jsonc) that runs code only for /api/* and /threads/* (src/).",
   "license": "MIT",
   "engines": {
     "node": ">=22.22.0 <23"

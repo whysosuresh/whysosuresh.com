@@ -1,13 +1,12 @@
-// The inbox's calls, run as production runs them: the Worker's bundle in workerd (test/harness.ts), with a local
-// D1 and Cloudflare Access played (its keys, and tokens signed with them). What it holds: each tab lists its
-// own notes newest first, 50 at a time, with a cursor to the rest and every tab's count; the owner and the sync
-// may both move a note, the owner alone from his own page and alone to mark his mail opened, the sync alone
-// to add an item or file one; exactly two callers get in, and every other token is refused, whatever check it
-// fails; the keys are fetched once, again for a rotated key, and not again for a made-up key within the
-// minute; every add, every move the inbox allows, every one it refuses, and the row exactly as it is after,
-// with every move stamping when; the request checks on an add and a change; and that the Worker reaches
-// nothing but Access's keys. Every item is a thread now (src/store.ts): the helpers below stage and read the
-// threads' table under the item's old names, so each assertion still says what the inbox's page reads.
+// The threads' door (src/threads.ts, src/access.ts) held to the rules the inbox's door held before it retired,
+// run as production runs it: the Worker's bundle in workerd (test/harness.ts), with a local D1 and Cloudflare
+// Access played (its keys, and tokens signed with them). What it holds: exactly two callers get in, and every
+// other token is refused, whatever check it fails; the keys are fetched once, again for a rotated key, and not
+// again for a made-up key within the minute, and the door fails closed when they or the owner's address are
+// missing; the Worker reaches nothing but Access's keys; every move the store allows leaves the row exactly as it
+// should, every one it refuses leaves it as it was, and every move stamps when; filing is the sync's and marking
+// his mail opened the owner's; and every add the sync sends is kept, or refused by its first wrong field. The
+// helpers stage and read the threads' table under short names; test/threads.test.ts holds the calls' answers.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ACCESS_TEAM_DOMAIN, INBOX_SYNC_CLIENT_ID, OWNER, SITE, startHarness, type Claims, type Harness, type TokenOptions } from "./harness.ts";
@@ -33,21 +32,23 @@ interface Row {
 }
 
 interface ListAnswer {
-  items: { id: string; status: string; receivedAt: string; kind: string | null; dropReason: string | null; email: string | null; body: string }[];
+  threads: { id: string; number: number; status: string }[];
   counts: Record<string, number>;
-  next: string | null;
+  next: number | null;
   me: string | null;
 }
 
 let harness: Harness;
 let serial = 0;
+/** Each staged thread's number, by its id: the door names a thread by its number. */
+const numbers = new Map<string, number>();
 
 /** A UUID-shaped id that sorts by `n`, so ties on the received time still order predictably. */
 function idFor(n: number): string {
   return `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 }
 
-/** Each of the item's old names, as the threads' table calls it. */
+/** Each short name, as the threads' table calls it. */
 const COLUMN: Record<keyof Row, string> = {
   id: "id",
   received_at: "created_at",
@@ -64,10 +65,10 @@ const COLUMN: Record<keyof Row, string> = {
   ref: "origin_ref",
   filed_link: "filed_link",
 };
-/** The threads' columns, read back under the item's old names. */
+/** The threads' columns, read back under the short names. */
 const AS_ITEM = (Object.keys(COLUMN) as (keyof Row)[]).map((name) => `${COLUMN[name]} AS ${name}`).join(", ");
 
-/** Puts one note in the inbox as the note flow (or a later move) would have left it, numbered after the last. */
+/** Puts one thread in the table as the note flow (or a later move) would have left it, numbered after the last. */
 async function seed(fields: Partial<Row> = {}, target: Harness = harness): Promise<Row> {
   serial += 1;
   const row: Row = {
@@ -95,6 +96,8 @@ async function seed(fields: Partial<Row> = {}, target: Harness = harness): Promi
     )
     .bind(...names.map((name) => row[name]))
     .run();
+  const kept = await (await target.db()).prepare("SELECT number FROM threads WHERE id = ?1").bind(row.id).first<{ number: number }>();
+  numbers.set(row.id, kept?.number ?? 0);
   return row;
 }
 
@@ -115,11 +118,11 @@ interface Ask {
 
 function assertion(ask: Ask, target: Harness): Record<string, string> {
   if (ask.token === null) return {};
-  return { "Cf-Access-Jwt-Assertion": ask.token ?? target.access.token(ask.claims, ask.options) };
+  return { "Cf-Access-Jwt-Assertion": ask.token ?? target.access.token(ask.claims, ask.options ?? {}) };
 }
 
 async function getList(query: string, ask: Ask = {}, target: Harness = harness): Promise<Response> {
-  return target.fetch(`${SITE}/inbox/api/items${query}`, { headers: assertion(ask, target) });
+  return target.fetch(`${SITE}/threads/api/threads${query}`, { headers: assertion(ask, target) });
 }
 
 interface Post extends Ask {
@@ -129,11 +132,12 @@ interface Post extends Ask {
   contentType?: string;
 }
 
+/** A move on the thread with that id, by its number; an id never staged names a path that is no thread's. */
 async function post(id: string, request: Post = {}, target: Harness = harness): Promise<Response> {
   const headers: Record<string, string> = { "Content-Type": request.contentType ?? "application/json", ...assertion(request, target) };
   if (request.origin !== null) headers.Origin = request.origin ?? SITE;
   const text = request.rawBody ?? JSON.stringify(request.body ?? {});
-  return target.fetch(`${SITE}/inbox/api/items/${id}`, { method: "POST", headers, body: new TextEncoder().encode(text) });
+  return target.fetch(`${SITE}/threads/api/threads/${numbers.get(id) ?? id}`, { method: "POST", headers, body: new TextEncoder().encode(text) });
 }
 
 async function reasonOf(response: Response): Promise<string> {
@@ -148,10 +152,11 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   await harness.reset();
+  numbers.clear();
 });
 
 describe("a list", () => {
-  it("answers each tab with its own notes, newest first, every tab's count, and the signed-in address", async () => {
+  it("answers each tab with its own threads, newest number first, every tab's count, and the owner's address", async () => {
     const look = [await seed(), await seed()];
     const act = await seed({ status: "act", kind: "feedback" });
     const discuss = await seed({ status: "discuss", kind: "idea" });
@@ -170,53 +175,11 @@ describe("a list", () => {
       expect(response.status).toBe(200);
       expect(response.headers.get("Cache-Control")).toBe("no-store");
       const answer = (await response.json()) as ListAnswer;
-      expect(answer.items.map((item) => item.id)).toEqual(ids);
+      expect(answer.threads.map((thread) => thread.id)).toEqual(ids);
       expect(answer.counts).toEqual({ look: 2, act: 1, discuss: 1, done: 3 });
       expect(answer.next).toBeNull();
       expect(answer.me).toBe(OWNER);
     }
-  });
-
-  it("says what each note holds, in the page's names", async () => {
-    const row = await seed({ status: "dropped", kind: "idea", drop_reason: "a test", reply_opened_at: "2026-11-04T10:00:00.000Z", name: null });
-    const answer = (await (await getList("?tab=done")).json()) as { items: unknown[] };
-    expect(answer.items).toEqual([
-      {
-        id: row.id,
-        receivedAt: row.received_at,
-        source: "talk",
-        topic: "stigmer",
-        title: null,
-        body: row.body,
-        name: null,
-        email: "asha@example.com",
-        status: "dropped",
-        kind: "idea",
-        dropReason: "a test",
-        replyOpenedAt: "2026-11-04T10:00:00.000Z",
-        ref: null,
-        filedLink: null,
-        movedAt: null,
-      },
-    ]);
-  });
-
-  it("answers at most 50, with a cursor that pages through the rest, ties included, and no more", async () => {
-    const same = new Date(Date.UTC(2026, 10, 4, 12)).toISOString();
-    const rows = [];
-    for (let i = 0; i < PAGE + 7; i += 1) rows.push(await seed(i % 3 === 0 ? { received_at: same } : {}));
-    await seed({ status: "act", kind: "feedback" });
-
-    const first = (await (await getList("?tab=look")).json()) as ListAnswer;
-    expect(first.items).toHaveLength(PAGE);
-    expect(first.next).not.toBeNull();
-    const second = (await (await getList(`?tab=look&before=${encodeURIComponent(first.next ?? "")}`)).json()) as ListAnswer;
-    expect(second.items).toHaveLength(7);
-    expect(second.next).toBeNull();
-    expect(second.counts.look).toBe(PAGE + 7);
-
-    const sorted = [...rows].sort((a, b) => b.received_at.localeCompare(a.received_at) || b.id.localeCompare(a.id)).map((row) => row.id);
-    expect([...first.items, ...second.items].map((item) => item.id)).toEqual(sorted);
   });
 
   it("answers the sync with no address", async () => {
@@ -224,35 +187,14 @@ describe("a list", () => {
     const response = await getList("?tab=look", { claims: harness.access.syncClaims() });
     expect(response.status).toBe(200);
     const answer = (await response.json()) as ListAnswer;
-    expect(answer.items).toHaveLength(1);
+    expect(answer.threads).toHaveLength(1);
     expect(answer.me).toBeNull();
-  });
-
-  it.each([
-    ["no tab", ""],
-    ["an unknown tab", "?tab=all"],
-    ["two tabs", "?tab=look&tab=act"],
-    ["an unknown key", "?tab=look&limit=500"],
-    ["a malformed cursor", "?tab=look&before=yesterday"],
-    ["a cursor with SQL in it", "?tab=look&before=2026-11-04T00:00:00Z~' OR 1=1 --"],
-  ])("refuses %s with 400", async (_, query) => {
-    const response = await getList(query);
-    expect(response.status).toBe(400);
-    expect(await reasonOf(response)).toBe("query");
-  });
-
-  it("is GET or POST only, and nothing else under /inbox/api/ answers", async () => {
-    const put = await harness.fetch(`${SITE}/inbox/api/items`, { method: "PUT", headers: assertion({}, harness) });
-    expect(put.status).toBe(405);
-    expect(put.headers.get("Allow")).toBe("GET, POST");
-    expect((await harness.fetch(`${SITE}/inbox/api/other`, { headers: assertion({}, harness) })).status).toBe(404);
-    expect((await harness.fetch(`${SITE}/inbox/api/items/${idFor(1)}`, { headers: assertion({}, harness) })).status).toBe(405);
   });
 });
 
 describe("who gets in", () => {
   it("refuses a request with no token with 401, before anything else, even an unknown route", async () => {
-    for (const path of ["/inbox/api/items?tab=look", "/inbox/api/other"]) {
+    for (const path of ["/threads/api/threads?tab=look", "/threads/api/other"]) {
       const response = await harness.fetch(`${SITE}${path}`);
       expect(response.status).toBe(401);
       expect(await reasonOf(response)).toBe("sign-in");
@@ -397,8 +339,8 @@ describe("a move", () => {
     expect(response.status).toBe(200);
     const expected = { ...row, ...after };
     expect(await rowOf(row.id)).toEqual(expected);
-    const answer = (await response.json()) as { item: { id: string; status: string; kind: string | null } };
-    expect(answer.item).toMatchObject({ id: row.id, status: expected.status, kind: expected.kind });
+    const answer = (await response.json()) as { thread: { id: string; status: string; kind: string | null } };
+    expect(answer.thread).toMatchObject({ id: row.id, status: expected.status, kind: expected.kind });
   });
 
   it.each(["received", "act", "discuss"])("drop from %s keeps the reason, trimmed, and an empty reason as none", async (status) => {
@@ -427,24 +369,24 @@ describe("a move", () => {
     ["drop", "discuss"],
     ["reopen", "done"],
     ["reopen", "dropped"],
-    ["topic", "dropped"],
+    ["space", "dropped"],
   ])("each move the page can undo comes back exactly: %s from %s", async (action, status) => {
     const kinds: Record<string, string | null> = { received: null, act: "feedback", discuss: "idea", done: "feedback", dropped: "idea" };
     const row = await seed({ status, kind: kinds[status] ?? null, drop_reason: status === "dropped" ? "junk" : null });
-    const there = action === "drop" ? { action, reason: "" } : action === "topic" ? { action, topic: "videos" } : { action };
+    const there = action === "drop" ? { action, reason: "" } : action === "space" ? { action, space: "videos" } : { action };
     expect((await post(row.id, { body: there })).status).toBe(200);
     const back =
       action === "act" || action === "discuss" ? { action: "unsort" }
       : action === "done" || action === "drop" ? { action: "reopen" }
       : action === "reopen" ? (status === "dropped" ? { action: "drop", reason: "junk" } : { action: "done" })
-      : { action: "topic", topic: row.topic };
+      : { action: "space", space: row.topic };
     expect((await post(row.id, { body: back })).status).toBe(200);
     expect(await rowOf(row.id)).toEqual(row);
   });
 
-  it.each(["received", "act", "done", "dropped"])("topic changes the topic from %s and nothing else", async (status) => {
+  it.each(["received", "act", "done", "dropped"])("space changes the space from %s and nothing else", async (status) => {
     const row = await seed({ status, topic: null });
-    expect((await post(row.id, { body: { action: "topic", topic: "capsjump" } })).status).toBe(200);
+    expect((await post(row.id, { body: { action: "space", space: "capsjump" } })).status).toBe(200);
     expect(await rowOf(row.id)).toEqual({ ...row, topic: "capsjump" });
   });
 
@@ -483,7 +425,7 @@ describe("a move", () => {
     expect(await rowOf(row.id)).toEqual(row);
   });
 
-  it("on a note that doesn't exist, or an id that can't be one, is 404", async () => {
+  it("on a thread that doesn't exist, or a number that can't be one, is 404", async () => {
     expect((await post(idFor(999_999), { body: { action: "act" } })).status).toBe(404);
     expect((await post("not-an-id", { body: { action: "act" } })).status).toBe(404);
   });
@@ -497,8 +439,8 @@ describe("a move", () => {
     ["a reason over 120 characters", { action: "drop", reason: "x".repeat(121) }],
     ["a reason with a control character", { action: "drop", reason: "junk\u0007" }],
     ["a reason with a line break", { action: "drop", reason: "junk\nmore" }],
-    ["an unknown topic", { action: "topic", topic: "Stigmer" }],
-    ["a missing topic", { action: "topic" }],
+    ["an unknown space", { action: "space", space: "Stigmer" }],
+    ["a missing space", { action: "space" }],
     ["an array", ["act"]],
     ["a string", "act"],
   ])("with %s is refused with 400, and nothing changes", async (_, body) => {
@@ -539,17 +481,17 @@ describe("a move by the sync", () => {
     const response = await post(row.id, { claims: sync(), origin: null, body: { action: "file", link } });
     expect(response.status).toBe(200);
     expect(await rowOf(row.id)).toEqual({ ...row, status: "filed", filed_link: link, kind: "feedback" });
-    const answer = (await response.json()) as { item: { status: string; filedLink: string } };
-    expect(answer.item).toMatchObject({ status: "filed", filedLink: link });
+    const answer = (await response.json()) as { thread: { status: string; filedLink: string } };
+    expect(answer.thread).toMatchObject({ status: "filed", filedLink: link });
   });
 
-  it("done closes a filed note, reopen puts it back as Filed, and topic still changes it", async () => {
+  it("done closes a filed note, reopen puts it back as Filed, and space still changes it", async () => {
     const row = await seed({ status: "filed", kind: "feedback", filed_link: link });
     expect((await post(row.id, { body: { action: "done" } })).status).toBe(200);
     expect(await rowOf(row.id)).toEqual({ ...row, status: "done" });
     expect((await post(row.id, { body: { action: "reopen" } })).status).toBe(200);
     expect(await rowOf(row.id)).toEqual(row);
-    expect((await post(row.id, { claims: sync(), origin: null, body: { action: "topic", topic: "videos" } })).status).toBe(200);
+    expect((await post(row.id, { claims: sync(), origin: null, body: { action: "space", space: "videos" } })).status).toBe(200);
     expect(await rowOf(row.id)).toEqual({ ...row, topic: "videos" });
   });
 
@@ -601,7 +543,7 @@ describe("the stamp", () => {
     ["done", "act", {}],
     ["drop", "discuss", { reason: "" }],
     ["reopen", "dropped", {}],
-    ["topic", "act", { topic: "videos" }],
+    ["space", "act", { space: "videos" }],
     ["reply-opened", "act", {}],
   ])("%s from %s stamps when it moved", async (action, status, extra) => {
     const row = await seed({ status, kind: status === "received" ? null : "feedback" });
@@ -619,13 +561,14 @@ describe("the stamp", () => {
 
 describe("an add", () => {
   const sync = (): Claims => harness.access.syncClaims();
-  const self = { ref: "chat:2026-11-04-a-plugin", source: "self", title: "A plugin for coding agents", body: "Install once, every agent gets it.", topic: "stigmer", status: "discuss" };
-  const told = { ref: "recorder:260104_0001:2", source: "told", title: "Try these thumbnail sites", body: "He said they cost less.", topic: "videos", name: "Dev", status: "received" };
+  const self = { ref: "chat:2026-11-04-a-plugin", source: "self", title: "A plugin for coding agents", body: "Install once, every agent gets it.", space: "stigmer", status: "discuss" };
+  const told = { ref: "recorder:260104_0001:2", source: "told", title: "Try these thumbnail sites", body: "He said they cost less.", space: "videos", name: "Dev", status: "received" };
 
   async function addItem(body: unknown, ask: Post = {}): Promise<Response> {
     const headers: Record<string, string> = { "Content-Type": ask.contentType ?? "application/json", ...assertion({ claims: sync(), ...ask }, harness) };
     const text = ask.rawBody ?? JSON.stringify(body);
-    return harness.fetch(`${SITE}/inbox/api/items`, { method: "POST", headers, body: new TextEncoder().encode(text) });
+    if (ask.origin !== undefined && ask.origin !== null) headers.Origin = ask.origin;
+    return harness.fetch(`${SITE}/threads/api/threads`, { method: "POST", headers, body: new TextEncoder().encode(text) });
   }
 
   async function byRef(ref: string): Promise<(Row & { moved_at: string | null })[]> {
@@ -635,11 +578,11 @@ describe("an add", () => {
   it("keeps his own item, sorted where he put it, with its title and where it came from", async () => {
     const response = await addItem(self);
     expect(response.status).toBe(201);
-    const { item } = (await response.json()) as { item: { id: string; receivedAt: string } };
+    const { thread: item } = (await response.json()) as { thread: { id: string; createdAt: string } };
     expect(await byRef(self.ref)).toEqual([
       {
         id: item.id,
-        received_at: item.receivedAt,
+        received_at: item.createdAt,
         source: "self",
         topic: "stigmer",
         body: self.body,
@@ -656,22 +599,22 @@ describe("an add", () => {
       },
     ]);
     const look = (await (await getList("?tab=discuss", { claims: sync() })).json()) as ListAnswer;
-    expect(look.items.map((one) => one.id)).toEqual([item.id]);
+    expect(look.threads.map((one) => one.id)).toEqual([item.id]);
   });
 
-  it("keeps a thing told to him with the teller's name, and no topic when it has none", async () => {
-    expect((await addItem({ ...told, topic: null })).status).toBe(201);
+  it("keeps a thing told to him with the teller's name, and no space when it has none", async () => {
+    expect((await addItem({ ...told, space: null })).status).toBe(201);
     expect(await byRef(told.ref)).toMatchObject([{ source: "told", name: "Dev", topic: null, status: "received", kind: null, email: null }]);
     expect((await addItem({ ...told, ref: "recorder:260104_0001:3", status: "act" })).status).toBe(201);
     expect(await byRef("recorder:260104_0001:3")).toMatchObject([{ status: "act", kind: "feedback" }]);
   });
 
   it("answers the item already there, unchanged, when the same ref comes again", async () => {
-    const first = (await (await addItem(self)).json()) as { item: { id: string } };
+    const first = (await (await addItem(self)).json()) as { thread: { id: string } };
     const again = await addItem({ ...self, title: "Something else", status: "act" });
     expect(again.status).toBe(200);
-    const second = (await again.json()) as { item: { id: string; title: string; status: string } };
-    expect(second.item).toMatchObject({ id: first.item.id, title: self.title, status: "discuss" });
+    const second = (await again.json()) as { thread: { id: string; title: string; status: string } };
+    expect(second.thread).toMatchObject({ id: first.thread.id, title: self.title, status: "discuss" });
     expect(await byRef(self.ref)).toHaveLength(1);
   });
 
@@ -682,10 +625,10 @@ describe("an add", () => {
     expect(await byRef(self.ref)).toMatchObject([{ title: "Spaced", body }]);
   });
 
-  it("is the sync's alone: the owner is refused with 403, from his own page too", async () => {
-    const response = await addItem(self, { claims: harness.access.ownerClaims() });
-    expect(response.status).toBe(403);
-    expect(await reasonOf(response)).toBe("sync-only");
+  it("in the sync's shape is the sync's alone: the owner's, from his own page, is refused as not his shape", async () => {
+    const response = await addItem(self, { claims: harness.access.ownerClaims(), origin: SITE });
+    expect(response.status).toBe(400);
+    expect(await reasonOf(response)).toBe("keys");
     expect(await byRef(self.ref)).toEqual([]);
   });
 
@@ -694,7 +637,7 @@ describe("an add", () => {
     ["no source", { ...self, source: undefined }, "source"],
     ["a source of the site's", { ...self, source: "talk" }, "source"],
     ["an extra key", { ...self, email: "a@example.com" }, "keys"],
-    ["a missing key", { ...self, topic: undefined }, "keys"],
+    ["a missing key", { ...self, space: undefined }, "keys"],
     ["a name on his own item", { ...self, name: "Suresh" }, "keys"],
     ["a told item with no name", { ...told, name: undefined }, "keys"],
     ["a ref with no kind", { ...self, ref: "42" }, "ref"],
@@ -707,7 +650,7 @@ describe("an add", () => {
     ["a body over 32,000", { ...self, body: "x".repeat(32_001) }, "body"],
     ["a body with a control character", { ...self, body: "a\u0007b" }, "body"],
     ["a body that isn't text", { ...self, body: 7 }, "body"],
-    ["an unknown topic", { ...self, topic: "company" }, "topic"],
+    ["an unknown space", { ...self, space: "elsewhere" }, "space"],
     ["an empty name", { ...told, name: " " }, "name"],
     ["a name over 80", { ...told, name: "x".repeat(81) }, "name"],
     ["a closed status", { ...self, status: "done" }, "status"],

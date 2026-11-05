@@ -2,7 +2,7 @@
 // migrations left it, then the next one applied. What it holds for 0006, which makes every inbox row a thread:
 // every row is copied with its id, fields and status, numbered from 1 by when it arrived; each copied thread's
 // history begins with a `created` event at its arrival, by the visitor or the sync, then an `imported` event
-// with where it stood; the inbox's door answers each row as the item it was, in its old names and order; and the
+// with where it stood; the threads' list answers each row in its tab with the fields it had; and the
 // next new thread is numbered after the copies. For 0007, which retires the inbox's table a deploy later: a row
 // the old code added between 0006 and its deploy is copied with its history and numbered after the last thread;
 // a move the old code made in that gap wins, with an `imported` event; a thread moved later on the new code
@@ -64,10 +64,10 @@ async function stage(rows: InboxRow[]): Promise<Harness> {
   return staged;
 }
 
-async function inboxTab(target: Harness, tab: string): Promise<unknown> {
-  const response = await target.fetch(`${SITE}/inbox/api/items?tab=${tab}`, { headers: { "Cf-Access-Jwt-Assertion": target.access.token() } });
+async function threadsTab(target: Harness, tab: string): Promise<{ threads: Record<string, unknown>[]; counts: Record<string, number>; next: number | null; me: string | null }> {
+  const response = await target.fetch(`${SITE}/threads/api/threads?tab=${tab}`, { headers: { "Cf-Access-Jwt-Assertion": target.access.token() } });
   expect(response.status).toBe(200);
-  return response.json();
+  return (await response.json()) as { threads: Record<string, unknown>[]; counts: Record<string, number>; next: number | null; me: string | null };
 }
 
 describe("0006, every inbox row a thread", () => {
@@ -120,24 +120,24 @@ describe("0006, every inbox row a thread", () => {
     }
   });
 
-  it("leaves the inbox's door answering each row as the item it always was, in its tab, newest first", async () => {
+  it("leaves each row on the threads' list in its tab with the fields it had, newest number first", async () => {
     harness = await stage(ROWS);
     // The code that runs now reads what later migrations add, so they are applied too; they move no copied row.
     await harness.migrate();
     const tabs: Record<string, string[]> = { look: ["received"], act: ["act"], discuss: ["discuss"], done: ["done", "dropped", "filed"] };
     const counts = Object.fromEntries(Object.entries(tabs).map(([tab, statuses]) => [tab, ROWS.filter((row) => statuses.includes(row.status)).length]));
     for (const [tab, statuses] of Object.entries(tabs)) {
-      const items = ROWS.filter((row) => statuses.includes(row.status))
+      const expected = ROWS.filter((row) => statuses.includes(row.status))
         .sort((a, b) => (a.received_at === b.received_at ? b.id.localeCompare(a.id) : b.received_at.localeCompare(a.received_at)))
         .map((row) => ({
           id: row.id,
-          receivedAt: row.received_at,
+          createdAt: row.received_at,
           source: row.source,
-          topic: row.topic,
+          space: row.topic,
           title: row.title,
           body: row.body,
-          name: row.name,
-          email: row.email,
+          senderName: row.name,
+          senderEmail: row.email,
           status: row.status,
           kind: row.kind,
           dropReason: row.drop_reason,
@@ -146,7 +146,9 @@ describe("0006, every inbox row a thread", () => {
           filedLink: row.filed_link,
           movedAt: row.moved_at,
         }));
-      expect(await inboxTab(harness, tab)).toEqual({ items, counts, next: null, me: OWNER });
+      const answer = await threadsTab(harness, tab);
+      expect(answer.threads).toEqual(expected.map((thread) => expect.objectContaining(thread)));
+      expect([answer.counts, answer.next, answer.me]).toEqual([counts, null, OWNER]);
     }
   });
 
@@ -155,7 +157,7 @@ describe("0006, every inbox row a thread", () => {
     await harness.migrate();
     const response = await harness.fetch(`${SITE}/threads/api/threads`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.syncClaims("threads"), { app: "threads" }) },
+      headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.syncClaims()) },
       body: new TextEncoder().encode(JSON.stringify({ ref: "chat:after-the-copy", source: "self", title: "After", body: "After the copy.", space: "company", status: "received" })),
     });
     expect(response.status).toBe(201);

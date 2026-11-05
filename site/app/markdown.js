@@ -2,7 +2,7 @@
 // The small part of GitHub's Markdown the threads read, as plain data: what the recorder sync and Suresh write
 // (a moved issue with its comments, an idea written up, a comment, a living summary) is Markdown, and showing
 // its `##` and `**` raw makes it hard to read. This module only parses: it returns blocks and inline runs, never
-// HTML, and the pages (site/app/threads.js, and site/inbox/inbox.js until it retires) build them with DOM calls,
+// HTML, and the threads page (site/app/threads.js) builds them with DOM calls,
 // so nothing in anyone's words can become markup. What it knows: headings, paragraphs (their line breaks kept),
 // quotes, bullet and numbered lists (task boxes shown as ☐ and ☑), fenced code, rules, and tables kept as
 // preformatted text, as typed; inline code, bold, italic with `*`, links to http(s) addresses, and a thread's

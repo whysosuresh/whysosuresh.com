@@ -8,11 +8,11 @@
 // each from either caller, an edit keeping the text it replaced and leaving `moved_at` alone, and a visitor's own
 // words never rewritten; every write stamps the thread's last activity; a search answers a number or words; the
 // sign-in sends the owner back only to a threads page; the owner's writes only from his own page, the sync alone
-// filing, the owner alone marking his mail opened; each door refuses the other's token; and the inbox's moves are
-// in the same history.
+// filing, the owner alone marking his mail opened. The checks of who gets in (every token Access might be handed,
+// the keys) and each move's exact row are test/threads-door.test.ts's.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { SITE, startHarness, type App, type Harness } from "./harness.ts";
+import { SITE, startHarness, type Harness } from "./harness.ts";
 
 /** The most a list answers, and the most comments or events a thread's call answers: the contract, stated here. */
 const PAGE = 50;
@@ -73,8 +73,6 @@ type Who = "owner" | "sync";
 
 interface Call {
   as?: Who;
-  /** The application whose tag the token carries; the threads' by default. */
-  app?: App;
   /** No token at all. */
   noToken?: boolean;
   method?: string;
@@ -86,11 +84,10 @@ interface Call {
 
 async function call(path: string, request: Call = {}): Promise<Response> {
   const as = request.as ?? "sync";
-  const app = request.app ?? "threads";
   const headers: Record<string, string> = {};
   if (!request.noToken) {
-    const claims = as === "sync" ? harness.access.syncClaims(app) : harness.access.ownerClaims(app);
-    headers["Cf-Access-Jwt-Assertion"] = harness.access.token(claims, { app });
+    const claims = as === "sync" ? harness.access.syncClaims() : harness.access.ownerClaims();
+    headers["Cf-Access-Jwt-Assertion"] = harness.access.token(claims);
   }
   const method = request.method ?? (request.body === undefined && request.rawBody === undefined ? "GET" : "POST");
   if (method === "GET") return harness.fetch(`${THREADS}${path}`, { headers });
@@ -190,7 +187,7 @@ describe("an add", () => {
   });
 
   it.each([
-    ["the inbox's topic key", { topic: "stigmer", space: undefined }, "keys"],
+    ["a topic key instead of a space", { topic: "stigmer", space: undefined }, "keys"],
     ["a space that isn't one", { space: "elsewhere" }, "space"],
     ["a closed status", { status: "done" }, "status"],
   ])("with %s is refused with 400, and nothing is kept", async (_, fields, reason) => {
@@ -370,7 +367,7 @@ describe("a move by number", () => {
   });
 
   it.each([
-    ["the inbox's topic move", { action: "topic", topic: "stigmer" }],
+    ["a topic move instead of a space move", { action: "topic", topic: "stigmer" }],
     ["a space that isn't one", { action: "space", space: "elsewhere" }],
     ["an unknown move", { action: "archive" }],
   ])("with %s is refused with 400", async (_, body) => {
@@ -497,7 +494,7 @@ describe("the last activity", () => {
 describe("a search", () => {
   async function found(words: string, as: Who = "owner"): Promise<number[]> {
     const response = await harness.fetch(`${SITE}/threads/api/search?${new URLSearchParams({ q: words }).toString()}`, {
-      headers: { "Cf-Access-Jwt-Assertion": harness.access.token(as === "owner" ? harness.access.ownerClaims("threads") : harness.access.syncClaims("threads"), { app: "threads" }) },
+      headers: { "Cf-Access-Jwt-Assertion": harness.access.token(as === "owner" ? harness.access.ownerClaims() : harness.access.syncClaims()) },
     });
     expect(response.status).toBe(200);
     return ((await response.json()) as { threads: Thread[] }).threads.map((thread) => thread.number);
@@ -533,7 +530,7 @@ describe("a search", () => {
 
   it.each(["", "q=", "q=a&q=b", "q=x&tab=look", `q=${"x".repeat(101)}`])("refuses %j with 400", async (query) => {
     const response = await harness.fetch(`${SITE}/threads/api/search?${query}`, {
-      headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims("threads"), { app: "threads" }) },
+      headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()) },
     });
     expect([response.status, await reasonOf(response)]).toEqual([400, "query"]);
   });
@@ -544,7 +541,7 @@ describe("the sign-in", () => {
     const query = next === null ? "" : `?${new URLSearchParams({ next }).toString()}`;
     return harness.fetch(`${SITE}/threads/api/sign-in${query}`, {
       redirect: "manual",
-      headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims("threads"), { app: "threads" }) },
+      headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()) },
     });
   }
 
@@ -573,15 +570,6 @@ describe("who gets in", () => {
     expect([response.status, await reasonOf(response)]).toEqual([401, "sign-in"]);
   });
 
-  it("refuses a token Access signed for the inbox, and the inbox refuses one signed for the threads", async () => {
-    const threads = await call("?tab=look", { app: "inbox" });
-    expect([threads.status, await reasonOf(threads)]).toEqual([403, "token"]);
-    const inbox = await harness.fetch(`${SITE}/inbox/api/items?tab=look`, {
-      headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims("threads"), { app: "threads" }) },
-    });
-    expect([inbox.status, await reasonOf(inbox)]).toEqual([403, "token"]);
-  });
-
   it("admits the owner and the sync to read", async () => {
     for (const as of ["owner", "sync"] as const) expect((await call("?tab=look", { as })).status).toBe(200);
   });
@@ -604,21 +592,8 @@ describe("who gets in", () => {
 
   it("answers an unknown route 404 and a wrong method 405", async () => {
     expect((await call("/1/history")).status).toBe(404);
-    expect((await harness.fetch(`${SITE}/threads/api/elsewhere`, { headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.syncClaims("threads"), { app: "threads" }) } })).status).toBe(404);
+    expect((await harness.fetch(`${SITE}/threads/api/elsewhere`, { headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.syncClaims()) } })).status).toBe(404);
     expect((await call("", { method: "PUT", body: {} })).status).toBe(405);
     expect((await call("/1/comments", { method: "GET" })).status).toBe(405);
-  });
-});
-
-describe("the inbox's door", () => {
-  it("writes its moves into the same history, by the item's id", async () => {
-    const thread = await added();
-    const response = await harness.fetch(`${SITE}/inbox/api/items/${thread.id}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Origin: SITE, "Cf-Access-Jwt-Assertion": harness.access.token() },
-      body: new TextEncoder().encode(JSON.stringify({ action: "topic", topic: "videos" })),
-    });
-    expect(response.status).toBe(200);
-    expect((await shown(thread.number)).events[1]).toMatchObject({ actor: "owner", type: "space", data: { from: "company", to: "videos" } });
   });
 });

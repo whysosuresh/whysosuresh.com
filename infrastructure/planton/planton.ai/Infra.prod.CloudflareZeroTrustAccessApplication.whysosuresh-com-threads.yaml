@@ -4,8 +4,8 @@
 # thread made public opens without a sign-in.
 #
 # `status.outputs.aud` is the application's tag, which Access signs into every request it lets through. The
-# Worker checks it on every call under /threads/api/ (`THREADS_ACCESS_AUD` in ../../../wrangler.jsonc), and only
-# there: the inbox's calls take only the inbox's tag, so a token signed for one door never opens the other.
+# Worker checks it on every call under /threads/api/ (`THREADS_ACCESS_AUD` in ../../../wrangler.jsonc), so a token
+# Access signed for any other application never opens the door.
 #
 #   planton apply -f Infra.prod.CloudflareZeroTrustAccessApplication.whysosuresh-com-threads.yaml --instance planton.ai --org why-so-suresh
 apiVersion: cloudflare.planton.dev/v1alpha1
@@ -32,7 +32,7 @@ spec:
         fieldPath: status.outputs.identity_provider_id
   autoRedirectToIdentity: true
   appLauncherVisible: false
-  # The inbox's two reusable policies, owner first: the same two callers pass here as there.
+  # The two reusable policies, owner first (first made for the inbox's door, which /threads replaced).
   policies:
     - policy:
         valueFrom:

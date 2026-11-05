@@ -1,0 +1,5 @@
+# /inbox was Suresh's private inbox; its threads live at /threads/ now, so every old address lands there.
+# test/site.test.ts checks this file, and test/routing.test.ts sends the requests.
+/inbox /threads/ 301
+/inbox/ /threads/ 301
+/inbox/* /threads/ 301

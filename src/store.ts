@@ -1,8 +1,8 @@
 // The store: every thread Suresh keeps, whatever door it came through. A thread is one row in `threads` with a
 // number people can say out loud (#42); its history is its rows in `events`, and the words added to it are its
-// rows in `comments` (migrations/0006_threads.sql). Three doors write here: the note flow (src/talk.ts), the
-// inbox's page and the sync through the inbox's calls (src/inbox.ts), and the threads' calls (src/threads.ts).
-// Each door turns its own wire into the intents below, so the rules live here once, whatever a door names them.
+// rows in `comments` (migrations/0006_threads.sql). Two doors write here: the note flow (src/talk.ts), and the
+// threads' calls (src/threads.ts), which the owner's page and the recorder sync use. Each door turns its own wire
+// into the intents below, so the rules live here once.
 //
 // Every write that changes a thread writes its event in the same batch, which D1 runs as one transaction: the
 // event is an INSERT ... SELECT from the row under the same guard as the change, ahead of the change, so it
@@ -98,8 +98,8 @@ export interface EventRow {
   data: string;
 }
 
-/** How a door names a thread: the inbox by its id, the threads' calls by its number. */
-export type Locator = { readonly id: string } | { readonly number: number };
+/** How the threads' calls name a thread: by its number. */
+export type Locator = { readonly number: number };
 
 type Value = string | number | null;
 
@@ -118,7 +118,7 @@ class Params {
 }
 
 function locate(locator: Locator, p: Params): string {
-  return "id" in locator ? `id = ${p.add(locator.id)}` : `number = ${p.add(locator.number)}`;
+  return `number = ${p.add(locator.number)}`;
 }
 
 function statement(db: D1Database, sql: string, p: Params): D1PreparedStatement {
@@ -209,14 +209,6 @@ async function listed(db: D1Database, page: D1PreparedStatement): Promise<Listed
     for (const status of TABS[name]) tally[name] += byStatus.get(status) ?? 0;
   }
   return { rows: (rows?.results ?? []) as ThreadRow[], counts: tally };
-}
-
-/** Up to `limit` threads of a tab, newest first by when they arrived, after the cursor's thread when given. */
-export async function listByTime(db: D1Database, tab: Tab, after: { at: string; id: string } | null, limit: number): Promise<Listed> {
-  const p = new Params();
-  const statuses = p.list(TABS[tab]);
-  const cursor = after === null ? "" : ` AND (created_at < ${p.add(after.at)} OR (created_at = ?${p.values.length} AND id < ${p.add(after.id)}))`;
-  return listed(db, statement(db, `SELECT ${COLUMNS} FROM threads WHERE status IN (${statuses})${cursor} ORDER BY created_at DESC, id DESC LIMIT ${limit}`, p));
 }
 
 /** Up to `limit` threads of a tab, newest number first, below `before` when given. */
