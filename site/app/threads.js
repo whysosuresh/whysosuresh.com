@@ -39,7 +39,7 @@
 import { SPACES } from '../spaces.js';
 import { MEMBER_COMMANDS, MEMBER_SHEET, SHEET, commandFor } from './keys.js';
 import { parse, summaryLines } from './markdown.js';
-import { invitation, invitationProblem, listed, seatsLine, seesLines } from './share.js';
+import { addressOf, invitation, invitationProblem, listed, seatsLine, seesLines } from './share.js';
 import {
   Failed,
   Missing,
@@ -2064,7 +2064,7 @@ class Threads {
       focusIn(this.dialog, problem.startsWith('Add') || problem.startsWith('Keep') ? '#share-name' : '#share-email');
       return;
     }
-    const person = { name: sharing.name.trim(), email: sharing.email.trim().toLowerCase() };
+    const person = { name: sharing.name.trim(), email: addressOf(sharing.email) };
     this.sharing = { ...sharing, busy: true, problem: '' };
     this.renderShare();
     /** @type {import('./threads-store.js').People} */

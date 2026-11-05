@@ -129,10 +129,11 @@ const MAX_PERSON_NAME = 80;
 /** The longest email address. */
 const MAX_EMAIL = 254;
 /**
- * An email address as an invitation takes it: one `@`, a dot after it, and none of the characters that would split
- * or quote it in a mail draft's recipients.
+ * An email address as an invitation takes it: one `@`, a domain of two or more dot-separated parts with none empty (so
+ * no trailing dot, which a dictated address often carries and which no sign-in could ever match), and none of the
+ * characters that would split or quote it in a mail draft's recipients.
  */
-const EMAIL_SHAPE = /^[^\s@,;:<>()"\[\]\\]+@[^\s@,;:<>()"\[\]\\]+\.[^\s@,;:<>()"\[\]\\]+$/;
+const EMAIL_SHAPE = /^[^\s@,;:<>()"\[\]\\]+@(?:[^\s@,;:<>()"\[\]\\.]+\.)+[^\s@,;:<>()"\[\]\\.]+$/;
 /** A person's id, as the store gives it. */
 const PERSON_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** How invited people see the owner among a thread's people: the site is his, and so is every thread. */

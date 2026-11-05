@@ -4,16 +4,20 @@
 // `?invite` link, with no one else's address in it.
 
 import { describe, expect, it } from "vitest";
-import { SEATS, invitation, invitationProblem, listed, seatsLine, seesLines } from "../site/app/share.js";
+import { SEATS, addressOf, invitation, invitationProblem, listed, seatsLine, seesLines } from "../site/app/share.js";
 
 describe("an invitation's check", () => {
-  it("passes an address and a name", () => {
+  it("passes an address and a name, and a dictated address's closing full stop", () => {
     expect(invitationProblem(" Meera@Example.com ", "Meera", "owner@example.com", [])).toBeNull();
+    expect(invitationProblem("meera@example.com.", "Meera", "owner@example.com", [])).toBeNull();
+    expect(addressOf(" Meera@Example.com. ")).toBe("meera@example.com");
   });
 
   it.each([
     ["no address", "", "Meera", "That isn't an email address."],
     ["two addresses", "meera@example.com, dev@example.org", "Meera", "That isn't an email address."],
+    ["an empty part in its domain", "meera@example..com", "Meera", "That isn't an email address."],
+    ["a domain that starts with a dot", "meera@.example.com", "Meera", "That isn't an email address."],
     ["his own address in any case", "OWNER@example.com", "Me", "That's your own address. You're in every thread."],
     ["no name", "meera@example.com", "  ", "Add their name. People in a thread see each other by name, never by address."],
     ["a name on two lines", "meera@example.com", "Meera\nK.", "Keep the name to one short line."],
