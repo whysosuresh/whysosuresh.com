@@ -1,9 +1,11 @@
 // whysosuresh.com: one Cloudflare Worker that serves the folder ./site, and runs code only for /api/* (the
-// note flow's one public write, src/talk.ts) and /inbox/api/* (the private inbox's calls, src/inbox.ts), both
-// on the database bound below. Every page, the inbox's included, comes straight from ./site, with no code in
-// its path; Cloudflare Access guards /inbox and everything under it (infrastructure/). This file drives `wrangler dev`, the dry run in `npm run check` (whose
-// bundle the Worker tests run), and the deploy that .github/workflows/site.yaml runs on every merge to
-// main, all with the wrangler pinned in ./deploy.
+// note flow's one public write, src/talk.ts), /inbox/api/* (the private inbox's calls, src/inbox.ts) and
+// /threads/api/* (the threads' private calls, src/threads.ts), all on the database bound below. Every page, the
+// inbox's included, comes straight from ./site, with no code in its path; Cloudflare Access guards /inbox and
+// everything under it, and /threads/api and everything under it, one application each (infrastructure/). This
+// file drives `wrangler dev`, the dry run in `npm run check` (whose bundle the Worker tests run, with ./site and
+// the routing below), and the deploy that .github/workflows/site.yaml runs on every merge to main, all with the
+// wrangler pinned in ./deploy.
 //
 // The zone, its records, its redirect rule and its settings, the database and the bot check are
 // Planton's (infrastructure/); only the Worker, its route and its bindings are declared here. Routes
@@ -26,7 +28,7 @@
     // /feedback serves feedback.html; /feedback.html and /index.html redirect to the clean address.
     "html_handling": "auto-trailing-slash",
     // Only these paths reach the code; everything else is a file from ./site.
-    "run_worker_first": ["/api/*", "/inbox/api/*"]
+    "run_worker_first": ["/api/*", "/inbox/api/*", "/threads/api/*"]
   },
   // The apex is the Worker's one address, through a route on the zone, found by its name in the
   // account above. The route needs a proxied record at the apex, which Planton holds; www is the
@@ -44,14 +46,17 @@
       "migrations_dir": "migrations"
     }
   ],
-  // The inbox's Access application and its two callers' public halves, from Planton's outputs: the team's
-  // sign-in host (Infra.prod.CloudflareZeroTrustOrganization.whysosuresh, `authDomain`), the application's
-  // audience tag (…AccessApplication.whysosuresh-com-inbox, `status.outputs.aud`) and the recorder sync's
-  // client id (…AccessServiceToken.whysosuresh-com-inbox-sync, `status.outputs.client_id`). None is secret:
-  // the Worker checks that a request was signed by that team for that application (src/access.ts).
+  // The two Access applications and their callers' public halves, from Planton's outputs: the team's sign-in
+  // host (Infra.prod.CloudflareZeroTrustOrganization.whysosuresh, `authDomain`), each application's audience tag
+  // (…AccessApplication.whysosuresh-com-inbox for /inbox/api/ and …AccessApplication.whysosuresh-com-threads for
+  // /threads/api/, each `status.outputs.aud`) and the recorder sync's client id
+  // (…AccessServiceToken.whysosuresh-com-inbox-sync, `status.outputs.client_id`). None is secret: the Worker
+  // checks that a request was signed by that team for the application in front of the door called
+  // (src/access.ts).
   "vars": {
     "ACCESS_TEAM_DOMAIN": "whysosuresh.cloudflareaccess.com",
     "ACCESS_AUD": "32efcf9e0aeed31293387c1ef17a89f667452015209a207911d46c04a0a0c46d",
+    "THREADS_ACCESS_AUD": "db66d28750d3ed63363af7bba8a43d7aeba769eb6f7465ef9552e79917369435",
     "INBOX_SYNC_CLIENT_ID": "83ce8979a8ffde10177a8de5cdc2797d.access"
   },
   // The Worker's own log lines (one per refused send: its status and reason, nothing personal) are kept;

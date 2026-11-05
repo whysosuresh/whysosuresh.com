@@ -11,7 +11,7 @@ O="--instance planton.ai --org why-so-suresh"
 
 ## Environments
 
-One, `prod` (`Environment.prod.yaml`), created 2026-11-03: the zone, its records, its redirect and its settings, the database, the bot check and the inbox's Access, and everything the site runs on. Everything there lives and dies together, so there is no separate environment for the zone. The Cloudflare connection is authorized for the whole organization, so it serves `prod` without a step.
+One, `prod` (`Environment.prod.yaml`), created 2026-11-03: the zone, its records, its redirect and its settings, the database, the bot check and Access in front of the inbox and the threads' calls, and everything the site runs on. Everything there lives and dies together, so there is no separate environment for the zone. The Cloudflare connection is authorized for the whole organization, so it serves `prod` without a step.
 
 ## Contents, in apply order
 
@@ -47,5 +47,6 @@ Each row is applied with `planton apply -f <file> $O` and followed by its proof.
 | 25 | `Infra.prod.CloudflareZeroTrustAccessPolicy.whysosuresh-com-inbox-owner.yaml`, `Infra.prod.CloudflareZeroTrustAccessPolicy.whysosuresh-com-inbox-sync.yaml` | Who may pass: the owner's address (row 22), for a week per code; the sync's token (row 24), by Service Auth | `planton diff -f <file> $O` exits 0 for each |
 | 26 | `Infra.prod.CloudflareZeroTrustAccessApplication.whysosuresh-com-inbox.yaml` | The door on `whysosuresh.com/inbox` and every path under it, with row 25's policies, owner first | `planton diff -f <file> $O` exits 0; `status.outputs.aud` is the `ACCESS_AUD` in `../../../wrangler.jsonc`; `curl -sI https://whysosuresh.com/inbox/api/items` answers 302 to `whysosuresh.cloudflareaccess.com`, and the same request with the sync's token passes |
 | 27 | Row 22's value copied from Planton into the GitHub environment `production` as `INBOX_OWNER_EMAIL`, by the script in `../../vendors/cloudflare/README.md` | Nothing in Planton | The deploy job's secret step succeeds, and the owner's sign-in opens the inbox |
+| 28 | `Infra.prod.CloudflareZeroTrustAccessApplication.whysosuresh-com-threads.yaml` (applied 2026-11-05) | The door on the threads' private calls, `whysosuresh.com/threads/api` and every path under it, never a thread's own page, with row 25's policies, owner first | `planton diff -f <file> $O` exits 0; `status.outputs.aud` is the `THREADS_ACCESS_AUD` in `../../../wrangler.jsonc`; `curl -sI https://whysosuresh.com/threads/api/threads` answers 302 to `whysosuresh.cloudflareaccess.com` |
 
-The site's Worker isn't a Planton resource: Planton can't upload a repository's static files to a Worker yet, so it's deployed from the repository itself, as the root `AGENTS.md` says. Its one route, its binding to row 16 and the public halves of rows 21, 24 and 26 are declared in `wrangler.jsonc`, never in the dashboard.
+The site's Worker isn't a Planton resource: Planton can't upload a repository's static files to a Worker yet, so it's deployed from the repository itself, as the root `AGENTS.md` says. Its one route, its binding to row 16 and the public halves of rows 21, 24, 26 and 28 are declared in `wrangler.jsonc`, never in the dashboard.

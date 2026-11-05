@@ -6,7 +6,8 @@
 // fails; the keys are fetched once, again for a rotated key, and not again for a made-up key within the
 // minute; every add, every move the inbox allows, every one it refuses, and the row exactly as it is after,
 // with every move stamping when; the request checks on an add and a change; and that the Worker reaches
-// nothing but Access's keys.
+// nothing but Access's keys. Every item is a thread now (src/store.ts): the helpers below stage and read the
+// threads' table under the item's old names, so each assertion still says what the inbox's page reads.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ACCESS_TEAM_DOMAIN, INBOX_SYNC_CLIENT_ID, OWNER, SITE, startHarness, type Claims, type Harness, type TokenOptions } from "./harness.ts";
@@ -46,7 +47,27 @@ function idFor(n: number): string {
   return `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 }
 
-/** Puts one note in the inbox as the note flow (or a later move) would have left it. */
+/** Each of the item's old names, as the threads' table calls it. */
+const COLUMN: Record<keyof Row, string> = {
+  id: "id",
+  received_at: "created_at",
+  source: "source",
+  topic: "space",
+  body: "body",
+  name: "sender_name",
+  email: "sender_email",
+  status: "status",
+  kind: "kind",
+  drop_reason: "drop_reason",
+  reply_opened_at: "reply_opened_at",
+  title: "title",
+  ref: "origin_ref",
+  filed_link: "filed_link",
+};
+/** The threads' columns, read back under the item's old names. */
+const AS_ITEM = (Object.keys(COLUMN) as (keyof Row)[]).map((name) => `${COLUMN[name]} AS ${name}`).join(", ");
+
+/** Puts one note in the inbox as the note flow (or a later move) would have left it, numbered after the last. */
 async function seed(fields: Partial<Row> = {}, target: Harness = harness): Promise<Row> {
   serial += 1;
   const row: Row = {
@@ -66,24 +87,24 @@ async function seed(fields: Partial<Row> = {}, target: Harness = harness): Promi
     filed_link: null,
     ...fields,
   };
-  const columns = Object.keys(row);
+  const names = Object.keys(row) as (keyof Row)[];
   await (await target.db())
-    .prepare(`INSERT INTO inbox (${columns.join(", ")}) VALUES (${columns.map((_, i) => `?${i + 1}`).join(", ")})`)
-    .bind(...columns.map((column) => row[column as keyof Row]))
+    .prepare(
+      `INSERT INTO threads (number, ${names.map((name) => COLUMN[name]).join(", ")})
+       VALUES ((SELECT COALESCE(MAX(number), 0) + 1 FROM threads), ${names.map((_, i) => `?${i + 1}`).join(", ")})`,
+    )
+    .bind(...names.map((name) => row[name]))
     .run();
   return row;
 }
 
 /** The row as a move left it, its `moved_at` stamp aside (stampOf reads that), so a move compares by what it changed. */
 async function rowOf(id: string, target: Harness = harness): Promise<Row | null> {
-  const row = await (await target.db()).prepare("SELECT * FROM inbox WHERE id = ?1").bind(id).first<Row & { moved_at?: string | null }>();
-  if (row === null) return null;
-  delete row.moved_at;
-  return row;
+  return (await target.db()).prepare(`SELECT ${AS_ITEM} FROM threads WHERE id = ?1`).bind(id).first<Row>();
 }
 
 async function stampOf(id: string): Promise<string | null> {
-  return (await (await harness.db()).prepare("SELECT moved_at FROM inbox WHERE id = ?1").bind(id).first<{ moved_at: string | null }>())?.moved_at ?? null;
+  return (await (await harness.db()).prepare("SELECT moved_at FROM threads WHERE id = ?1").bind(id).first<{ moved_at: string | null }>())?.moved_at ?? null;
 }
 
 interface Ask {
@@ -608,7 +629,7 @@ describe("an add", () => {
   }
 
   async function byRef(ref: string): Promise<(Row & { moved_at: string | null })[]> {
-    return (await (await harness.db()).prepare("SELECT * FROM inbox WHERE ref = ?1").bind(ref).all<Row & { moved_at: string | null }>()).results;
+    return (await (await harness.db()).prepare(`SELECT ${AS_ITEM}, moved_at FROM threads WHERE origin_ref = ?1`).bind(ref).all<Row & { moved_at: string | null }>()).results;
   }
 
   it("keeps his own item, sorted where he put it, with its title and where it came from", async () => {
@@ -695,7 +716,7 @@ describe("an add", () => {
     const response = await addItem(body);
     expect(response.status).toBe(400);
     expect(await reasonOf(response)).toBe(reason);
-    const all = await (await harness.db()).prepare("SELECT COUNT(*) AS n FROM inbox").first<{ n: number }>();
+    const all = await (await harness.db()).prepare("SELECT COUNT(*) AS n FROM threads").first<{ n: number }>();
     expect(all?.n).toBe(0);
   });
 

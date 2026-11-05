@@ -1,5 +1,5 @@
 // The note flow's send, the site's one public write: a typed note about one of Suresh's topics, with an
-// optional name and email, from the site's own page, as JSON with exactly five string keys. Each refusal is
+// optional name and email, kept as a new thread (src/store.ts), from the site's own page, as JSON with exactly five string keys. Each refusal is
 // the cheapest that applies, in order: no bot-check secret (503), another origin (403), no or too large a
 // declared length (411, 413), a body that isn't JSON (415; a browser form can't send JSON, so this also
 // closes cross-site form posts), a malformed note (400), a failed bot check (403), and the daily limits
@@ -9,7 +9,7 @@
 
 import { isTopic } from "../site/talk-topics.js";
 import { networkOf, takeSend } from "./quota.ts";
-import { keep, type Note } from "./store.ts";
+import { create } from "./store.ts";
 import { verifyToken } from "./turnstile.ts";
 import { json } from "./json.ts";
 import { isJson, sameOrigin } from "./request.ts";
@@ -95,10 +95,17 @@ export async function handleTalk(request: Request, env: Bindings): Promise<Respo
 
   if (!(await takeSend(env.DB, network))) return refuse(429, "limit");
 
-  const note: Note = { topic, body, name, email };
+  // A new thread in To look at, its words the visitor's own. The answer is its id alone: a thread's number would
+  // tell a visitor how many threads there are.
   let id: string;
   try {
-    id = await keep(env.DB, note);
+    const kept = await create(
+      env.DB,
+      { source: "talk", space: topic, title: null, body, senderName: name === "" ? null : name, senderEmail: email === "" ? null : email, status: "received", originRef: null },
+      "visitor",
+    );
+    if (kept === null) return refuse(500, "store");
+    id = kept.row.id;
   } catch {
     return refuse(500, "store");
   }

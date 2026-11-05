@@ -1,12 +1,16 @@
-// The Worker in Cloudflare's own runtime, for test/talk.test.ts and test/inbox.test.ts: Miniflare (pinned to the version the pinned
-// wrangler itself runs, so the runtime and compatibility date are production's) runs the exact bundle
-// `wrangler deploy --dry-run --outdir dist` writes, with a real local D1 holding migrations/. Turnstile's
+// The Worker in Cloudflare's own runtime, for the Worker tests (test/talk.test.ts, test/inbox.test.ts,
+// test/threads.test.ts, test/routing.test.ts, test/migrations.test.ts): Miniflare (pinned to the version the
+// pinned wrangler itself runs, so the runtime and compatibility date are production's) runs the exact bundle
+// `wrangler deploy --dry-run --outdir dist` writes, in front of the site's own files with the routing
+// wrangler.jsonc declares (which paths reach the code, and how the rest are served), with a real local D1 holding
+// migrations/, all of them or up to the one a test names, so a test can stage a table as an earlier one left
+// it and then apply the rest. Turnstile's
 // verification is played here: a token of `pass` passes for the request's own host, `wrong-host` passes for
 // another host, `wrong-action` for another action, `unreachable` answers as a check that is down, and
 // anything else fails; under Cloudflare's test secret every token passes, as Cloudflare answers it. Cloudflare
 // Access is played too: the team's certs address (wrangler.jsonc's `ACCESS_TEAM_DOMAIN`) serves the harness's
-// own RSA keys, and `access.token` signs an application token with them as Access would. Every other host the
-// Worker tries is refused and recorded.
+// own RSA keys, and `access.token` signs an application token with them as Access would, for the inbox's
+// application or the threads'. Every other host the Worker tries is refused and recorded.
 
 import { createSign, generateKeyPairSync, type KeyObject } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -20,6 +24,19 @@ const WRANGLER = readFileSync(join(root, "wrangler.jsonc"), "utf8");
 /** wrangler.jsonc's date, read rather than copied, so the tests can't drift from it. */
 const COMPATIBILITY_DATE = /"compatibility_date": "(\d{4}-\d{2}-\d{2})"/.exec(WRANGLER)?.[1];
 
+/** One of wrangler.jsonc's `assets` settings, read rather than copied, so the tests route as the deploy does. */
+function wranglerAsset(name: string): string {
+  const value = new RegExp(`"${name}": "([^"]+)"`).exec(WRANGLER)?.[1];
+  if (value === undefined) throw new Error(`wrangler.jsonc names no ${name}`);
+  return value;
+}
+/** The paths that reach the code, as wrangler.jsonc lists them. */
+const RUN_WORKER_FIRST = JSON.parse(/"run_worker_first": (\[[^\]]*\])/.exec(WRANGLER)?.[1] ?? "null") as unknown;
+if (!Array.isArray(RUN_WORKER_FIRST) || !RUN_WORKER_FIRST.every((path) => typeof path === "string")) throw new Error("wrangler.jsonc names no run_worker_first list");
+const HTML_HANDLING = wranglerAsset("html_handling");
+const NOT_FOUND_HANDLING = wranglerAsset("not_found_handling");
+if (HTML_HANDLING !== "auto-trailing-slash" || NOT_FOUND_HANDLING !== "404-page") throw new Error("the harness doesn't know wrangler.jsonc's asset handling");
+
 /** One of wrangler.jsonc's `vars`, read rather than copied, so the tests run the deployed settings. */
 function wranglerVar(name: string): string {
   const value = new RegExp(`"${name}": "([^"]+)"`).exec(WRANGLER)?.[1];
@@ -28,6 +45,7 @@ function wranglerVar(name: string): string {
 }
 export const ACCESS_TEAM_DOMAIN = wranglerVar("ACCESS_TEAM_DOMAIN");
 export const ACCESS_AUD = wranglerVar("ACCESS_AUD");
+export const THREADS_ACCESS_AUD = wranglerVar("THREADS_ACCESS_AUD");
 export const INBOX_SYNC_CLIENT_ID = wranglerVar("INBOX_SYNC_CLIENT_ID");
 /** The owner's address in the harness; production's comes from the deploy and is in no file. */
 export const OWNER = "owner@example.com";
@@ -58,8 +76,13 @@ export interface Database {
 /** The claims of an application token, as Cloudflare Access signs them; a key set to undefined is left out. */
 export type Claims = Record<string, unknown>;
 
+/** The two Access applications, each with its own audience tag. */
+export type App = "inbox" | "threads";
+
 /** How a played token is made beyond its claims. */
 export interface TokenOptions {
+  /** The application whose tag the token's default claims carry; the inbox's by default. */
+  app?: App;
   /** The key id the header names; the served key's by default. */
   kid?: string;
   /** The header's algorithm; RS256 by default. */
@@ -74,9 +97,9 @@ export interface TokenOptions {
 export interface PlayedAccess {
   /** A signed application token: the owner's by default; `claims` change or (as undefined) remove claims. */
   token(claims?: Claims, options?: TokenOptions): string;
-  /** The owner's claims and the sync's claims, to build on. */
-  ownerClaims(): Claims;
-  syncClaims(): Claims;
+  /** The owner's claims and the sync's claims, for an application (the inbox's by default), to build on. */
+  ownerClaims(app?: App): Claims;
+  syncClaims(app?: App): Claims;
   /** How many times the Worker fetched the certs. */
   readonly fetches: number;
   /** Serves a second key as well, as Cloudflare does while it rotates; returns its key id. */
@@ -94,27 +117,33 @@ export interface Harness {
   outboundHosts: Set<string>;
   /** Cloudflare Access, played. */
   access: PlayedAccess;
+  /** Applies the migrations not yet applied, up to and including `through` (a four-digit number), or all of them. */
+  migrate(through?: string): Promise<void>;
   /** Empties every table, between tests. */
   reset(): Promise<void>;
   dispose(): Promise<void>;
 }
 
-/** The statements of each migration, in order, without their comments. */
-function migrations(): string[] {
+/** Each migration, in order: its four-digit number and its statements, without their comments. */
+function migrations(): { number: string; statements: string[] }[] {
   const dir = join(root, "migrations");
   return readdirSync(dir)
     .filter((file) => /^\d{4}_.+\.sql$/.test(file))
     .sort()
-    .flatMap((file) =>
-      readFileSync(join(dir, file), "utf8")
+    .map((file) => ({
+      number: file.slice(0, 4),
+      statements: readFileSync(join(dir, file), "utf8")
         .split("\n")
         .filter((line) => !line.trimStart().startsWith("--"))
         .join("\n")
         .split(/;\s*$/m)
         .map((statement) => statement.trim())
         .filter((statement) => statement !== ""),
-    );
+    }));
 }
+
+/** The tables `reset` empties, children before the tables they name, because D1 checks foreign keys. */
+const TABLES = ["events", "comments", "threads", "inbox", "talk_days", "talk_senders"];
 
 const base64Url = (bytes: Buffer): string => bytes.toString("base64url");
 
@@ -136,8 +165,8 @@ function playAccess(): PlayedAccess & { serve(request: RuntimeRequest): RuntimeR
   let down = false;
 
   const now = (): number => Math.floor(Date.now() / 1000);
-  const common = (): Claims => ({
-    aud: [ACCESS_AUD],
+  const common = (app: App = "inbox"): Claims => ({
+    aud: [app === "threads" ? THREADS_ACCESS_AUD : ACCESS_AUD],
     iss: `https://${ACCESS_TEAM_DOMAIN}`,
     iat: now(),
     nbf: now(),
@@ -146,13 +175,13 @@ function playAccess(): PlayedAccess & { serve(request: RuntimeRequest): RuntimeR
   });
 
   return {
-    ownerClaims: () => ({ ...common(), email: OWNER, sub: "7335d417-61da-459d-899c-0a01c76a2f94", identity_nonce: "nonce", country: "IN" }),
+    ownerClaims: (app) => ({ ...common(app), email: OWNER, sub: "7335d417-61da-459d-899c-0a01c76a2f94", identity_nonce: "nonce", country: "IN" }),
     // A service token's claims carry no email or identity, only the token's client id (Cloudflare's
     // application-token page); the owner's are removed so `token()` doesn't merge them in.
-    syncClaims: () => ({ ...common(), common_name: INBOX_SYNC_CLIENT_ID, sub: "", email: undefined, identity_nonce: undefined, country: undefined }),
+    syncClaims: (app) => ({ ...common(app), common_name: INBOX_SYNC_CLIENT_ID, sub: "", email: undefined, identity_nonce: undefined, country: undefined }),
     token(claims = {}, options = {}) {
       const signer = options.foreignKey ? foreign : (keys[keys.length - 1] ?? foreign);
-      const merged: Claims = { ...this.ownerClaims(), ...claims };
+      const merged: Claims = { ...this.ownerClaims(options.app), ...claims };
       for (const [key, value] of Object.entries(merged)) if (value === undefined) delete merged[key];
       const header = base64Url(Buffer.from(JSON.stringify({ alg: options.alg ?? "RS256", kid: options.kid ?? signer.kid, typ: "JWT" })));
       const payload = base64Url(Buffer.from(JSON.stringify(merged)));
@@ -179,7 +208,7 @@ function playAccess(): PlayedAccess & { serve(request: RuntimeRequest): RuntimeR
   };
 }
 
-export async function startHarness(options: { secret?: string; owner?: string } = {}): Promise<Harness> {
+export async function startHarness(options: { secret?: string; owner?: string; through?: string } = {}): Promise<Harness> {
   const bundlePath = join(root, "dist", "worker.js");
   if (!existsSync(bundlePath)) throw new Error("dist/worker.js is missing: run `npm run dry-run` first (`npm test` does)");
   if (!COMPATIBILITY_DATE) throw new Error("wrangler.jsonc names no compatibility_date");
@@ -222,12 +251,20 @@ export async function startHarness(options: { secret?: string; owner?: string } 
           name: WORKER,
           compatibilityDate: COMPATIBILITY_DATE,
           manifest: { mainModule: "worker.js", modules: { "worker.js": { type: "esm", contents: readFileSync(bundlePath, "utf8") } } },
+          assets: {
+            directory: join(root, "site"),
+            hasUserWorker: true,
+            htmlHandling: HTML_HANDLING,
+            notFoundHandling: NOT_FOUND_HANDLING,
+            runWorkerFirst: RUN_WORKER_FIRST,
+          },
           env: {
             DB: { type: "d1", id: "whysosuresh-com" },
             ...(secret === "" ? {} : { TURNSTILE_SECRET: { type: "text" as const, value: secret } }),
             ...(owner === "" ? {} : { INBOX_OWNER_EMAIL: { type: "text" as const, value: owner } }),
             ACCESS_TEAM_DOMAIN: { type: "text" as const, value: ACCESS_TEAM_DOMAIN },
             ACCESS_AUD: { type: "text" as const, value: ACCESS_AUD },
+            THREADS_ACCESS_AUD: { type: "text" as const, value: THREADS_ACCESS_AUD },
             INBOX_SYNC_CLIENT_ID: { type: "text" as const, value: INBOX_SYNC_CLIENT_ID },
           },
         },
@@ -238,8 +275,15 @@ export async function startHarness(options: { secret?: string; owner?: string } 
   await mf.ready;
 
   const db = async (): Promise<Database> => (await mf.getD1Database("DB", WORKER)) as unknown as Database;
-  const schema = await db();
-  await schema.batch(migrations().map((statement) => schema.prepare(statement)));
+  const pending = migrations();
+  async function migrate(through?: string): Promise<void> {
+    const database = await db();
+    while (pending[0] !== undefined && (through === undefined || pending[0].number <= through)) {
+      const next = pending.shift();
+      if (next !== undefined) await database.batch(next.statements.map((statement) => database.prepare(statement)));
+    }
+  }
+  await migrate(options.through);
 
   return {
     async fetch(url, init) {
@@ -248,9 +292,13 @@ export async function startHarness(options: { secret?: string; owner?: string } 
     db,
     outboundHosts,
     access,
+    migrate,
     async reset() {
       const database = await db();
-      await database.batch(["inbox", "talk_days", "talk_senders"].map((table) => database.prepare(`DELETE FROM ${table}`)));
+      const present = new Set(
+        (await database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all<{ name: string }>()).results.map((table) => table.name),
+      );
+      await database.batch(TABLES.filter((table) => present.has(table)).map((table) => database.prepare(`DELETE FROM ${table}`)));
       outboundHosts.clear();
     },
     dispose: () => mf.dispose(),

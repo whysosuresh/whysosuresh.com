@@ -2,9 +2,10 @@
 // every internal link reaches a file without a redirect, that nothing loads from elsewhere but the allowed
 // player and the scripts' allowed resources, that the headers match the pages and the scripts, that the
 // stylesheet carries no dead rules, that the "Send a note" doors open the note flow, that the topic list
-// the Worker shares is plain data and reads page addresses right, that the private inbox's page is never
-// indexed or shared, that no file names the owner's email address, and that the Worker's config routes the
-// one domain to the code only under /api/ and /inbox/api/. `wrangler deploy --dry-run` does not read
+// the Worker shares is plain data and reads page addresses right, that the spaces the Worker shares are plain
+// data and hold every topic, that the private inbox's page is never indexed or shared, that no file names the
+// owner's email address, and that the Worker's config routes the one domain to the code only under /api/,
+// /inbox/api/ and /threads/api/ (test/routing.test.ts sends the requests). `wrangler deploy --dry-run` does not read
 // site/_headers, so this file parses it. The Worker itself is test/talk.test.ts's and
 // test/inbox.test.ts's.
 
@@ -32,6 +33,7 @@ const SERVED = [
   "inbox/markdown.js",
   "index.html",
   "robots.txt",
+  "spaces.js",
   "style.css",
   "talk-send.js",
   "talk-topics.js",
@@ -328,6 +330,50 @@ describe("talk-topics.js, which the Worker imports too", () => {
   });
 });
 
+interface SpacesModule {
+  SPACES: { slug: string; label: string }[];
+  isSpace(slug: string): boolean;
+}
+
+function isSpacesModule(value: unknown): value is SpacesModule {
+  if (typeof value !== "object" || value === null) return false;
+  const module = value as Record<string, unknown>;
+  return Array.isArray(module.SPACES) && typeof module.isSpace === "function";
+}
+
+describe("spaces.js, which the Worker imports too", () => {
+  const loading = Promise.all([
+    import(pathToFileURL(join(siteDir, "spaces.js")).href),
+    import(pathToFileURL(join(siteDir, "talk-topics.js")).href),
+  ]).then(([spaces, topics]: unknown[]) => {
+    if (!isSpacesModule(spaces)) throw new Error("spaces.js lacks SPACES or isSpace");
+    if (!isTopicsModule(topics)) throw new Error("talk-topics.js lacks TOPICS, isTopic or topicFromHash");
+    return { ...spaces, TOPICS: topics.TOPICS };
+  });
+
+  it("is plain data and pure functions: it imports nothing, touches no page, and only declares exports", () => {
+    const code = read("spaces.js").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code).not.toMatch(/^import /m);
+    expect(code).not.toMatch(/\b(document|window|location|navigator|globalThis|fetch|localStorage|sessionStorage|addEventListener|setTimeout)\b/);
+    const topLevel = code.split("\n").filter((line) => /^\S/.test(line));
+    expect(topLevel.filter((line) => !/^(export |\}|\]\);)/.test(line))).toEqual([]);
+  });
+
+  it("holds every topic, under the topic's own label, and the company, each slug once with a label", async () => {
+    const { SPACES, TOPICS } = await loading;
+    for (const topic of TOPICS) expect(SPACES.find((space) => space.slug === topic.slug)?.label).toBe(topic.label);
+    expect(SPACES.map((space) => space.slug)).toContain("company");
+    expect(new Set(SPACES.map((space) => space.slug)).size).toBe(SPACES.length);
+    for (const space of SPACES) expect(space.label).not.toBe("");
+  });
+
+  it("knows a space only by its exact slug", async () => {
+    const { isSpace } = await loading;
+    expect(["stigmer", "company", "videos", "capsjump", "other"].every((slug) => isSpace(slug))).toBe(true);
+    expect(["Company", "", "inbox", "company "].some((slug) => isSpace(slug))).toBe(false);
+  });
+});
+
 describe.each(SHARED_PAGES)("%s, as a shared link", (page) => {
   it("carries a description, a canonical address and a preview picture that exists", async () => {
     const doc = await parse(page);
@@ -441,8 +487,8 @@ describe("wrangler.jsonc", () => {
     expect(text).not.toContain("custom_domain");
   });
 
-  it("runs the code only under /api/ and /inbox/api/, and every page comes straight from site/", () => {
-    expect(text).toContain('"run_worker_first": ["/api/*", "/inbox/api/*"]');
+  it("runs the code only under /api/, /inbox/api/ and /threads/api/, and every page comes straight from site/", () => {
+    expect(text).toContain('"run_worker_first": ["/api/*", "/inbox/api/*", "/threads/api/*"]');
     expect(text.match(/"run_worker_first"/g)).toHaveLength(1);
   });
 
