@@ -1,0 +1,50 @@
+# The threads' private calls: every request to whysosuresh.com/threads/api and everything under it meets Access
+# first. The owner signs in with an email code, the recorder sync with its service token; anyone else is stopped
+# at Cloudflare's edge and never reaches the site. Only the calls are guarded, never a thread's own page, so a
+# thread made public opens without a sign-in.
+#
+# `status.outputs.aud` is the application's tag, which Access signs into every request it lets through. The
+# Worker checks it on every call under /threads/api/ (`THREADS_ACCESS_AUD` in ../../../wrangler.jsonc), and only
+# there: the inbox's calls take only the inbox's tag, so a token signed for one door never opens the other.
+#
+#   planton apply -f Infra.prod.CloudflareZeroTrustAccessApplication.whysosuresh-com-threads.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareZeroTrustAccessApplication
+metadata:
+  name: whysosuresh-com-threads # permanent
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  accountId: $var/cloudflare-whysosuresh-account-id
+  name: whysosuresh.com threads
+  type: self_hosted
+  # A path: Access guards /threads/api and every path under it, and nothing else on the site.
+  domain: whysosuresh.com/threads/api
+  sessionDuration: 168h
+  # Only the email code: the sign-in page goes straight to it, without a list of methods.
+  allowedIdps:
+    - valueFrom:
+        kind: CloudflareZeroTrustAccessIdentityProvider
+        env: prod # Planton stores the environment it resolved; declared to keep the diff empty
+        name: one-time-pin
+        fieldPath: status.outputs.identity_provider_id
+  autoRedirectToIdentity: true
+  appLauncherVisible: false
+  # The inbox's two reusable policies, owner first: the same two callers pass here as there.
+  policies:
+    - policy:
+        valueFrom:
+          kind: CloudflareZeroTrustAccessPolicy
+          env: prod
+          name: whysosuresh-com-inbox-owner
+          fieldPath: status.outputs.policy_id
+      precedence: 1
+    - policy:
+        valueFrom:
+          kind: CloudflareZeroTrustAccessPolicy
+          env: prod
+          name: whysosuresh-com-inbox-sync
+          fieldPath: status.outputs.policy_id
+      precedence: 2

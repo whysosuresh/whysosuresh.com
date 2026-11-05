@@ -1,9 +1,11 @@
-// Who is calling the inbox. Cloudflare Access stands in front of whysosuresh.com/inbox and signs every request
-// it lets through (the `Cf-Access-Jwt-Assertion` header, RS256, with the team's keys). This module checks that
-// signature itself, with the runtime's WebCrypto and no library, and then admits exactly two callers: the
-// owner, by the email the sign-in proved, and the recorder sync, by its service token's client id. Anything
-// Access didn't sign for this application, or signed for someone else, is refused, so a request that slipped
-// past the edge's path match (a changed case, an encoded slash) still meets this check.
+// Who is calling a private door. Cloudflare Access stands in front of whysosuresh.com/inbox and of
+// whysosuresh.com/threads/api, one application each, and signs every request it lets through (the
+// `Cf-Access-Jwt-Assertion` header, RS256, with the team's keys). This module checks that signature itself, with
+// the runtime's WebCrypto and no library, and then admits exactly two callers: the owner, by the email the
+// sign-in proved, and the recorder sync, by its service token's client id. Each door names its own
+// application's audience tag, so a token Access signed for one door never opens the other. Anything Access
+// didn't sign for that application, or signed for someone else, is refused, so a request that slipped past the
+// edge's path match (a changed case, an encoded slash) still meets this check.
 //
 // The keys are fetched from the team's certs address and kept in the isolate. A token naming a key the
 // isolate doesn't hold fetches them again, which is how Cloudflare's key rotation arrives, but at most once a
@@ -16,8 +18,6 @@
 export interface AccessSettings {
   /** The team's sign-in host, `<team>.cloudflareaccess.com`: the issuer and where the keys live. */
   readonly ACCESS_TEAM_DOMAIN: string;
-  /** The inbox application's audience tag, which Access signs into every token for it. */
-  readonly ACCESS_AUD: string;
   /** The recorder sync's service token, by its client id. */
   readonly INBOX_SYNC_CLIENT_ID: string;
   /** The one email address admitted as the owner. */
@@ -137,7 +137,7 @@ function base64UrlJson(part: string): Record<string, unknown> | null {
 }
 
 /** The token's claims when its signature, issuer, audience, times and type all hold; null otherwise. */
-async function verifiedClaims(token: string, settings: AccessSettings): Promise<Record<string, unknown> | null> {
+async function verifiedClaims(token: string, settings: AccessSettings, aud: string): Promise<Record<string, unknown> | null> {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [headerPart = "", payloadPart = "", signaturePart = ""] = parts;
@@ -154,7 +154,7 @@ async function verifiedClaims(token: string, settings: AccessSettings): Promise<
 
   if (claims.iss !== `https://${settings.ACCESS_TEAM_DOMAIN}`) return null;
   const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-  if (!audiences.includes(settings.ACCESS_AUD)) return null;
+  if (!audiences.includes(aud)) return null;
   const now = Date.now() / 1000;
   if (typeof claims.exp !== "number" || claims.exp + LEEWAY_S < now) return null;
   if (claims.nbf !== undefined && (typeof claims.nbf !== "number" || claims.nbf - LEEWAY_S > now)) return null;
@@ -164,18 +164,19 @@ async function verifiedClaims(token: string, settings: AccessSettings): Promise<
 
 /**
  * Who the request is from, or why it is refused: 401 with no token, 403 for a token that fails any check or
- * names anyone but the two callers, 503 when the owner's address isn't configured or the keys can't be read.
+ * names anyone but the two callers, 503 when the owner's address or the door's tag isn't configured or the keys
+ * can't be read. `aud` is the audience tag of the application in front of the door being called.
  */
-export async function identify(request: Request, settings: AccessSettings): Promise<Caller | Refusal> {
+export async function identify(request: Request, settings: AccessSettings, aud: string): Promise<Caller | Refusal> {
   const owner = (settings.INBOX_OWNER_EMAIL ?? "").trim().toLowerCase();
-  if (owner === "") return { status: 503, reason: "not-configured" };
+  if (owner === "" || aud === "") return { status: 503, reason: "not-configured" };
   const token = request.headers.get(ASSERTION) ?? "";
   if (token === "") return { status: 401, reason: "sign-in" };
   if (token.length > MAX_TOKEN) return { status: 403, reason: "token" };
 
   let claims: Record<string, unknown> | null;
   try {
-    claims = await verifiedClaims(token, settings);
+    claims = await verifiedClaims(token, settings, aud);
   } catch (error) {
     if (error instanceof KeysUnavailable) return { status: 503, reason: "keys" };
     throw error;

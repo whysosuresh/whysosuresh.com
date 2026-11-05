@@ -1,5 +1,6 @@
 // The note flow's send, run as production runs it: the Worker's bundle in workerd (test/harness.ts), with a
-// local D1 and a played Turnstile. What it holds: a good note is stored as one inbox row, for every topic;
+// local D1 and a played Turnstile. What it holds: a good note is kept as one new thread with its `created`
+// event, for every topic, and answers only its id;
 // the note's bounds (4,000 code units, Telugu at the byte bound, no blank note, no control character, no
 // lone surrogate); the wire's shape (JSON only, exactly five string keys, 16 KiB); the bot check; both daily
 // limits, under concurrency and for IPv6 networks; the refusals for no length, no secret, another origin
@@ -75,50 +76,57 @@ beforeEach(async () => {
 });
 
 describe("a good note", () => {
-  it("is stored as one inbox row that says what was sent", async () => {
+  it("is kept as one new thread that says what was sent, with the event that says who brought it", async () => {
     const before = new Date().toISOString();
     const response = await send();
     expect(response.status).toBe(201);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-    const { id } = (await response.json()) as { id: string };
-    const [row, ...others] = await rows("inbox");
+    const answer = (await response.json()) as { id: string };
+    expect(Object.keys(answer)).toEqual(["id"]);
+    const { id } = answer;
+    const [row, ...others] = await rows("threads");
     expect(others).toEqual([]);
     expect(row).toEqual({
       id,
-      received_at: expect.any(String),
+      number: 1,
+      created_at: expect.any(String),
       source: "talk",
-      topic: "stigmer",
+      space: "stigmer",
+      title: null,
       body: "I got lost at the install.",
-      name: "Asha",
-      email: "asha@example.com",
+      summary: null,
       status: "received",
       kind: null,
+      sender_name: "Asha",
+      sender_email: "asha@example.com",
       drop_reason: null,
       reply_opened_at: null,
-      title: null,
-      ref: null,
+      origin_ref: null,
       filed_link: null,
       moved_at: null,
     });
-    expect(String(row?.received_at) >= before).toBe(true);
+    expect(String(row?.created_at) >= before).toBe(true);
+    expect(await rows("events")).toEqual([
+      { id: 1, thread_id: id, at: row?.created_at, actor: "visitor", type: "created", data: JSON.stringify({ source: "talk", status: "received" }) },
+    ]);
   });
 
   it.each(TOPICS)("is taken about %s", async (topic) => {
     expect((await send({ note: { topic } })).status).toBe(201);
-    expect((await rows("inbox")).map((row) => row.topic)).toEqual([topic]);
+    expect((await rows("threads")).map((row) => row.space)).toEqual([topic]);
   });
 
   it("keeps an empty name and email as nothing, and trims both", async () => {
     expect((await send({ note: { name: "  ", email: "" } })).status).toBe(201);
     expect((await send({ note: { name: " సురేష్ ", email: " a@b " }, ip: "203.0.113.8" })).status).toBe(201);
-    const stored = (await rows("inbox")).map((row) => [row.name, row.email]);
+    const stored = (await rows("threads")).map((row) => [row.sender_name, row.sender_email]);
     expect(stored).toEqual(expect.arrayContaining([[null, null], ["సురేష్", "a@b"]]));
   });
 
   it("trims the note and keeps its line breaks and tabs", async () => {
     expect((await send({ note: { body: "  First line\n\n\tthen this  \n" } })).status).toBe(201);
-    expect((await rows("inbox")).map((row) => row.body)).toEqual(["First line\n\n\tthen this"]);
+    expect((await rows("threads")).map((row) => row.body)).toEqual(["First line\n\n\tthen this"]);
   });
 
   it("takes a JSON type with a charset", async () => {
@@ -141,7 +149,7 @@ describe("the note's bounds", () => {
     expect(new TextEncoder().encode(body).length).toBe(3 * MAX_BODY);
     expect((await send({ note: { body, token: "p".repeat(2048) } })).status).not.toBe(413);
     expect((await send({ note: { body } })).status).toBe(201);
-    expect((await rows("inbox")).map((row) => row.body)).toEqual([body]);
+    expect((await rows("threads")).map((row) => row.body)).toEqual([body]);
   });
 
   it.each([
@@ -155,7 +163,7 @@ describe("the note's bounds", () => {
     const response = await send({ note: { body } });
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ reason: "body" });
-    expect(await rows("inbox")).toEqual([]);
+    expect(await rows("threads")).toEqual([]);
   });
 
   it.each(["nope", "", "Stigmer", "stigmer "])("refuses the topic %j", async (topic) => {
@@ -209,7 +217,7 @@ describe("the wire", () => {
     const rawBody = new Uint8Array(await encoded.arrayBuffer());
     const response = await send({ rawBody, contentType: encoded.headers.get("content-type") ?? "" });
     expect(response.status).toBe(415);
-    expect(await rows("inbox")).toEqual([]);
+    expect(await rows("threads")).toEqual([]);
     expect(harness.outboundHosts.size).toBe(0);
   });
 
@@ -237,7 +245,7 @@ describe("the wire", () => {
     const response = await harness.fetch(`${SITE}/api/talk`, init);
     hold();
     expect(response.status).toBe(413);
-    expect(await rows("inbox")).toEqual([]);
+    expect(await rows("threads")).toEqual([]);
   });
 });
 
@@ -246,7 +254,7 @@ describe("the bot check", () => {
     const response = await send({ note: { token } });
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ reason: "bot-check" });
-    expect(await rows("inbox")).toEqual([]);
+    expect(await rows("threads")).toEqual([]);
   });
 
   it("is refused before it counts towards the limits", async () => {
@@ -269,7 +277,7 @@ describe("the daily limits", () => {
       for (let i = 0; i < 20; i += 1) expect((await send({ ip })).status).toBe(201);
     }
     expect((await send({ ip: "192.0.2.4" })).status).toBe(429);
-    expect(await rows("inbox")).toHaveLength(60);
+    expect(await rows("threads")).toHaveLength(60);
   });
 
   it("lets exactly 20 of 25 concurrent sends from one address through", async () => {
@@ -299,7 +307,7 @@ describe("privacy", () => {
     const tables = (
       await database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'").all<{ name: string }>()
     ).results.map((t) => t.name);
-    expect(tables.sort()).toEqual(["inbox", "talk_days", "talk_senders"]);
+    expect(tables.sort()).toEqual(["comments", "events", "inbox", "talk_days", "talk_senders", "threads"]);
     const everything = JSON.stringify(await Promise.all(tables.map((table) => rows(table))));
     for (const needle of ["203.0.113.77", "2001:db8:aa:bb", "2001:0db8:00aa:00bb"]) expect(everything).not.toContain(needle);
   });
@@ -350,7 +358,7 @@ describe("with no bot-check secret", () => {
   it("refuses every send with 503 and stores nothing", async () => {
     const response = await send({}, bare);
     expect(response.status).toBe(503);
-    expect(await rows("inbox", bare)).toEqual([]);
+    expect(await rows("threads", bare)).toEqual([]);
     expect(bare.outboundHosts.size).toBe(0);
   });
 });
@@ -386,15 +394,15 @@ describe("routes", () => {
 
   it("answers 500 and keeps nothing when the row can't be written", async () => {
     const database = await harness.db();
-    await database.prepare("ALTER TABLE inbox RENAME TO inbox_away").run();
+    await database.prepare("ALTER TABLE threads RENAME TO threads_away").run();
     try {
       const response = await send();
       expect(response.status).toBe(500);
       expect(await response.json()).toEqual({ reason: "store" });
     } finally {
-      await database.prepare("ALTER TABLE inbox_away RENAME TO inbox").run();
+      await database.prepare("ALTER TABLE threads_away RENAME TO threads").run();
     }
-    expect(await rows("inbox")).toEqual([]);
+    expect(await rows("threads")).toEqual([]);
   });
 });
 
