@@ -10,10 +10,19 @@ export const SEATS = 50;
 /** The longest name, as the Worker takes it. */
 const MAX_NAME = 80;
 /**
- * An email address as an invitation takes it, the Worker's own shape: one `@`, a dot after it, and none of the
- * characters that would split or quote it in a mail draft's recipients.
+ * An email address as an invitation takes it, the Worker's own shape: one `@`, a domain of two or more dot-separated
+ * parts with none empty, and none of the characters that would split or quote it in a mail draft's recipients.
  */
-const EMAIL_SHAPE = /^[^\s@,;:<>()"[\]\\]+@[^\s@,;:<>()"[\]\\]+\.[^\s@,;:<>()"[\]\\]+$/;
+const EMAIL_SHAPE = /^[^\s@,;:<>()"[\]\\]+@(?:[^\s@,;:<>()"[\]\\.]+\.)+[^\s@,;:<>()"[\]\\.]+$/;
+
+/**
+ * An address as typed, as the invitation sends it: trimmed, lower case, and without the full stop dictation leaves at
+ * its end, which no address carries.
+ * @param {string} email
+ */
+export function addressOf(email) {
+  return email.trim().replace(/\.+$/, '').toLowerCase();
+}
 
 /**
  * Why an invitation can't be sent yet, in words for the sheet, or null when it can.
@@ -24,7 +33,7 @@ const EMAIL_SHAPE = /^[^\s@,;:<>()"[\]\\]+@[^\s@,;:<>()"[\]\\]+\.[^\s@,;:<>()"[\
  * @returns {string | null}
  */
 export function invitationProblem(email, name, owner, people) {
-  const address = email.trim().toLowerCase();
+  const address = addressOf(email);
   if (!EMAIL_SHAPE.test(address) || address.length > 254) return "That isn't an email address.";
   if (owner !== '' && address === owner.trim().toLowerCase()) return "That's your own address. You're in every thread.";
   if (name.trim() === '') return 'Add their name. People in a thread see each other by name, never by address.';

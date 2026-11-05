@@ -144,6 +144,8 @@ describe("inviting", () => {
     ["a name on two lines", { add: { email: MEERA, name: "Meera\nK." } }],
     ["no address", { add: { name: "Meera" } }],
     ["an address with no @", { add: { email: "meera.example.com", name: "Meera" } }],
+    ["an address ending in a full stop", { add: { email: "meera@example.com.", name: "Meera" } }],
+    ["an address with an empty part in its domain", { add: { email: "meera@example..com", name: "Meera" } }],
     ["two addresses", { add: { email: `${MEERA}, ${DEV}`, name: "Meera" } }],
     ["another key", { add: { email: MEERA, name: "Meera", role: "view" } }],
     ["both add and remove", { add: { email: MEERA, name: "Meera" }, remove: "x" }],
