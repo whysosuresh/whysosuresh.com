@@ -7,6 +7,9 @@
 # request (`ACCESS_TEAM_DOMAIN` in ../../../wrangler.jsonc). Changing it ends every session and breaks the
 # Worker's check until wrangler.jsonc follows, so it changes only with both, in one PR.
 #
+# A seat (the Free plan has 50) is taken by everyone who signs in, invited people included, and given back after a
+# month without a sign-in, Cloudflare's shortest; someone who comes back after that simply signs in again.
+#
 #   planton apply -f Infra.prod.CloudflareZeroTrustOrganization.whysosuresh.yaml --instance planton.ai --org why-so-suresh
 apiVersion: cloudflare.planton.dev/v1alpha1
 kind: CloudflareZeroTrustOrganization
@@ -20,3 +23,4 @@ spec:
   accountId: $var/cloudflare-whysosuresh-account-id
   authDomain: whysosuresh.cloudflareaccess.com # required on every write, even when unchanged
   name: whysosuresh # Cloudflare echoes the name on every read, so it is declared to keep the diff empty
+  userSeatExpirationInactiveTime: 730h # a month, the least Cloudflare allows

@@ -16,11 +16,27 @@
 // A thread's main section (`main`, migrations/0009_pages.sql) is its text, a page or a link, whichever was attached
 // last. A page's versions are rows in `pages`, each naming its object in the private bucket by a fresh key; the
 // bucket is the threads' calls' to write (src/threads.ts), before the row, and this file only keeps the rows.
+//
+// A thread may be shared with people Suresh invites (`people` and `members`, migrations/0010_members.sql). Every
+// read and the one write an invited person may make (a comment) take a `Reader`: the owner and the sync see every
+// thread, and an invited person only the threads they have an invitation to that stands, by one SQL condition
+// (`readable`) on the query itself. A thread they aren't in is a row the query can't see, so a door answers it
+// exactly as a number never used. Their comments see only what everyone in the thread may (`audience`), so the
+// owner's "Only me" comments never reach them. Who may call at all is asked of the same tables (`isInvited`), by
+// the threads' door and by the answer Cloudflare Access is given at sign-in (src/evaluate.ts), so the two can't
+// disagree about who is invited.
 
 /** Where a thread came from: the site's note flow, something told to him in person, or his own. */
 export type Source = "talk" | "told" | "self";
-/** Who wrote a comment or made a change through a private door. */
+/** Who made a change through a private door. */
 export type Author = "owner" | "sync";
+/**
+ * Who is reading: the owner and the sync read every thread; an invited person, named by the address they signed
+ * in with (lowercased), reads only the threads they are in.
+ */
+export type Reader = { readonly caller: "owner" | "sync" } | { readonly caller: "member"; readonly email: string };
+/** Who may read a comment: everyone in the thread, or the owner and the sync only ("Only me"). */
+export type Audience = "thread" | "owner";
 /** Who an event names: a private door's caller, the visitor who sent a note, or the copy from the inbox. */
 export type Actor = Author | "visitor" | "import";
 export type Status = "received" | "act" | "discuss" | "done" | "dropped" | "filed";
@@ -84,9 +100,22 @@ export interface PageRow {
 export interface CommentRow {
   id: string;
   thread_id: string;
+  /** `owner`, `sync`, or `member` for an invited person. */
   author: string;
   body: string;
   created_at: string;
+  audience: string;
+  /** The invited person who wrote it, and their name as it stands; null for the owner's and the sync's. */
+  person_id: string | null;
+  person_name: string | null;
+}
+
+/** A person a thread is shared with, as the owner sees them. */
+export interface PersonRow {
+  id: string;
+  email: string;
+  name: string | null;
+  added_at: string;
 }
 
 export interface EventRow {
@@ -119,6 +148,23 @@ class Params {
 
 function locate(locator: Locator, p: Params): string {
   return `number = ${p.add(locator.number)}`;
+}
+
+/** Every thread: how the store itself looks a thread up after a write it made as the owner or the sync. */
+const EVERY_THREAD: Reader = { caller: "owner" };
+
+/** An invitation that stands, to the thread `thread` names (an SQL expression for its id), for the address bound in. */
+function standing(thread: string, email: string, p: Params): string {
+  return `EXISTS (SELECT 1 FROM members JOIN people ON people.id = members.person_id
+    WHERE members.thread_id = ${thread} AND members.removed_at IS NULL AND people.email = ${p.add(email)})`;
+}
+
+/**
+ * The condition a reader adds to a query on `threads`, as ` AND …`: nothing for the owner and the sync, and for an
+ * invited person, an invitation that stands to that thread.
+ */
+function readable(reader: Reader, p: Params): string {
+  return reader.caller === "member" ? ` AND ${standing("threads.id", reader.email, p)}` : "";
 }
 
 function statement(db: D1Database, sql: string, p: Params): D1PreparedStatement {
@@ -185,9 +231,10 @@ export async function create(db: D1Database, thread: NewThread, actor: Actor): P
   return there === null ? null : { row: there, created: false };
 }
 
-export async function find(db: D1Database, locator: Locator): Promise<ThreadRow | null> {
+/** A thread by its number, when the reader may read it. */
+export async function find(db: D1Database, locator: Locator, reader: Reader): Promise<ThreadRow | null> {
   const p = new Params();
-  return statement(db, `SELECT ${COLUMNS} FROM threads WHERE ${locate(locator, p)}`, p).first<ThreadRow>();
+  return statement(db, `SELECT ${COLUMNS} FROM threads WHERE ${locate(locator, p)}${readable(reader, p)}`, p).first<ThreadRow>();
 }
 
 /** How many threads have each status, every status there is. */
@@ -219,11 +266,42 @@ export async function listByNumber(db: D1Database, tab: Tab, before: number | nu
   return listed(db, statement(db, `SELECT ${COLUMNS} FROM threads WHERE status IN (${statuses})${cursor} ORDER BY number DESC LIMIT ${limit}`, p));
 }
 
-/** A thread's comments and events, oldest first, up to `limit` of each. */
-export async function history(db: D1Database, threadId: string, limit: number): Promise<{ comments: CommentRow[]; events: EventRow[] }> {
+/** Up to `limit` of the threads an invited person is in, most recently active first. */
+export async function listShared(db: D1Database, email: string, limit: number): Promise<ThreadRow[]> {
+  const p = new Params();
+  return (
+    await statement(
+      db,
+      `SELECT ${COLUMNS} FROM threads WHERE ${standing("threads.id", email, p)} ORDER BY COALESCE(activity_at, created_at) DESC, number DESC LIMIT ${limit}`,
+      p,
+    ).all<ThreadRow>()
+  ).results;
+}
+
+/** The columns a comment is read with: its own, and the name of the invited person who wrote it. */
+const COMMENT_COLUMNS =
+  "comments.id, comments.thread_id, comments.author, comments.body, comments.created_at, comments.audience, comments.person_id, people.name AS person_name";
+
+/** Events an invited person never sees: the owner's mail opening, and the copy from the old inbox. */
+const OWNERS_EVENTS = "'reply-opened', 'imported'";
+
+/**
+ * A thread's comments and events, oldest first, up to `limit` of each. An invited person reads only the comments
+ * everyone in the thread may, and not the events that are the owner's own business; the door shapes the rest of
+ * what they see (src/threads.ts).
+ */
+export async function history(db: D1Database, threadId: string, limit: number, reader: Reader): Promise<{ comments: CommentRow[]; events: EventRow[] }> {
+  const member = reader.caller === "member";
   const [comments, events] = await db.batch<CommentRow | EventRow>([
-    db.prepare(`SELECT id, thread_id, author, body, created_at FROM comments WHERE thread_id = ?1 ORDER BY created_at, id LIMIT ${limit}`).bind(threadId),
-    db.prepare(`SELECT id, thread_id, at, actor, type, data FROM events WHERE thread_id = ?1 ORDER BY id LIMIT ${limit}`).bind(threadId),
+    db
+      .prepare(
+        `SELECT ${COMMENT_COLUMNS} FROM comments LEFT JOIN people ON people.id = comments.person_id
+         WHERE comments.thread_id = ?1${member ? " AND comments.audience = 'thread'" : ""} ORDER BY comments.created_at, comments.id LIMIT ${limit}`,
+      )
+      .bind(threadId),
+    db
+      .prepare(`SELECT id, thread_id, at, actor, type, data FROM events WHERE thread_id = ?1${member ? ` AND type NOT IN (${OWNERS_EVENTS})` : ""} ORDER BY id LIMIT ${limit}`)
+      .bind(threadId),
   ]);
   return { comments: (comments?.results ?? []) as CommentRow[], events: (events?.results ?? []) as EventRow[] };
 }
@@ -339,7 +417,7 @@ export async function makeMove(db: D1Database, locator: Locator, move: Move, act
   const [, updated] = await db.batch<ThreadRow>([statement(db, event, e), statement(db, update, u)]);
   const row = updated?.results[0];
   if (row !== undefined) return row;
-  return (await find(db, locator)) === null ? "no-thread" : "not-from-here";
+  return (await find(db, locator, EVERY_THREAD)) === null ? "no-thread" : "not-from-here";
 }
 
 /** The texts of a thread that can be rewritten: its title, the living summary on top, and the main text. */
@@ -362,23 +440,36 @@ export async function edit(db: D1Database, locator: Locator, field: TextField, t
   const [, updated] = await db.batch<ThreadRow>([statement(db, event, e), statement(db, update, u)]);
   const row = updated?.results[0];
   if (row !== undefined) return row;
-  return (await find(db, locator)) === null ? "no-thread" : "visitor-words";
+  return (await find(db, locator, EVERY_THREAD)) === null ? "no-thread" : "visitor-words";
 }
 
-/** Adds a comment to a thread, which is activity on it; null when there is no such thread. */
-export async function comment(db: D1Database, locator: Locator, author: Author, body: string): Promise<CommentRow | null> {
+/**
+ * Adds a comment to a thread the reader may read, which is activity on it; null when there is no such thread, or
+ * none they may read. An invited person's comment names them, and is always for everyone in the thread; the door
+ * keeps `owner` to the owner and the sync.
+ */
+export async function comment(db: D1Database, locator: Locator, reader: Reader, body: string, audience: Audience): Promise<CommentRow | null> {
   const now = new Date().toISOString();
+  const id = crypto.randomUUID();
   const p = new Params();
-  const columns = `${p.add(crypto.randomUUID())}, id, ${p.add(author)}, ${p.add(body)}, ${p.add(now)}`;
+  const person = reader.caller === "member" ? `(SELECT id FROM people WHERE email = ${p.add(reader.email)})` : "NULL";
+  const columns = `${p.add(id)}, id, ${p.add(reader.caller)}, ${p.add(body)}, ${p.add(now)}, ${p.add(audience)}, ${person}`;
   const insert = statement(
     db,
-    `INSERT INTO comments (id, thread_id, author, body, created_at) SELECT ${columns} FROM threads WHERE ${locate(locator, p)}
-     RETURNING id, thread_id, author, body, created_at`,
+    `INSERT INTO comments (id, thread_id, author, body, created_at, audience, person_id)
+     SELECT ${columns} FROM threads WHERE ${locate(locator, p)}${readable(reader, p)}`,
     p,
   );
+  // Only the thread the comment above went into is touched, so a refused comment changes nothing.
   const u = new Params();
-  const touch = statement(db, `UPDATE threads SET activity_at = ${u.add(now)} WHERE ${locate(locator, u)}`, u);
-  const [added] = await db.batch<CommentRow>([insert, touch]);
+  const touch = statement(db, `UPDATE threads SET activity_at = ${u.add(now)} WHERE id = (SELECT thread_id FROM comments WHERE id = ${u.add(id)})`, u);
+  const r = new Params();
+  const read = statement(
+    db,
+    `SELECT ${COMMENT_COLUMNS} FROM comments LEFT JOIN people ON people.id = comments.person_id WHERE comments.id = ${r.add(id)}`,
+    r,
+  );
+  const [, , added] = await db.batch<CommentRow>([insert, touch, read]);
   return added?.results[0] ?? null;
 }
 
@@ -390,18 +481,19 @@ export const SEARCH_LIMIT = 20;
  * (`42` or `#42`), else every thread whose title, summary or main text holds the words as typed, ignoring case
  * for ASCII letters. `%` and `_` in the words match only themselves. Up to `SEARCH_LIMIT`.
  */
-export async function search(db: D1Database, words: string): Promise<ThreadRow[]> {
+export async function search(db: D1Database, words: string, reader: Reader): Promise<ThreadRow[]> {
   const number = /^#?([1-9]\d{0,8})$/.exec(words);
   const p = new Params();
   if (number !== null) {
-    return (await statement(db, `SELECT ${COLUMNS} FROM threads WHERE number = ${p.add(Number(number[1]))}`, p).all<ThreadRow>()).results;
+    return (await statement(db, `SELECT ${COLUMNS} FROM threads WHERE number = ${p.add(Number(number[1]))}${readable(reader, p)}`, p).all<ThreadRow>()).results;
   }
   const pattern = p.add(`%${words.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
   const like = (column: string): string => `${column} LIKE ${pattern} ESCAPE '\\'`;
+  // The three matches are one condition, in parentheses, so the reader's condition holds for all of them.
   return (
     await statement(
       db,
-      `SELECT ${COLUMNS} FROM threads WHERE ${like("title")} OR ${like("summary")} OR ${like("body")}
+      `SELECT ${COLUMNS} FROM threads WHERE (${like("title")} OR ${like("summary")} OR ${like("body")})${readable(reader, p)}
        ORDER BY COALESCE(activity_at, created_at) DESC, number DESC LIMIT ${SEARCH_LIMIT}`,
       p,
     ).all<ThreadRow>()
@@ -454,15 +546,16 @@ export async function savePage(db: D1Database, number: number, page: NewPage, ac
   return row === undefined || kept === undefined ? null : { row, version: kept.version };
 }
 
-/** One version of a thread's page, by the thread's number; null when either isn't there. */
-export async function findPage(db: D1Database, number: number, version: number): Promise<PageRow | null> {
-  return db
-    .prepare(
-      `SELECT pages.version, pages.object_key, pages.created_at, pages.actor, pages.bytes, pages.source_url
-       FROM pages JOIN threads ON threads.id = pages.thread_id WHERE threads.number = ?1 AND pages.version = ?2`,
-    )
-    .bind(number, version)
-    .first<PageRow>();
+/** One version of a thread's page, by the thread's number; null when either isn't there, or the reader may not read it. */
+export async function findPage(db: D1Database, number: number, version: number, reader: Reader): Promise<PageRow | null> {
+  const p = new Params();
+  return statement(
+    db,
+    `SELECT pages.version, pages.object_key, pages.created_at, pages.actor, pages.bytes, pages.source_url
+     FROM pages JOIN threads ON threads.id = pages.thread_id
+     WHERE threads.number = ${p.add(number)} AND pages.version = ${p.add(version)}${readable(reader, p)}`,
+    p,
+  ).first<PageRow>();
 }
 
 /** Every version of a thread's page, oldest first. */
@@ -501,4 +594,112 @@ export async function setLink(db: D1Database, number: number, url: string | null
   );
   const [, updated] = await db.batch<ThreadRow>([event, update]);
   return updated?.results[0] ?? null;
+}
+
+/**
+ * Whether an address has an invitation that stands, to any thread: who the threads' door admits besides the owner
+ * and the sync, and what Cloudflare Access is told at sign-in (src/evaluate.ts). One indexed query.
+ */
+export async function isInvited(db: D1Database, email: string): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT 1 AS yes FROM members JOIN people ON people.id = members.person_id WHERE people.email = ?1 AND members.removed_at IS NULL LIMIT 1")
+    .bind(email)
+    .first<{ yes: number }>();
+  return row !== null;
+}
+
+/** The people a thread is shared with now, in the order they were invited. */
+export async function peopleOf(db: D1Database, threadId: string): Promise<PersonRow[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT people.id, people.email, people.name, members.added_at FROM members JOIN people ON people.id = members.person_id
+         WHERE members.thread_id = ?1 AND members.removed_at IS NULL ORDER BY members.added_at, people.id`,
+      )
+      .bind(threadId)
+      .all<PersonRow>()
+  ).results;
+}
+
+/** How many people have an invitation that stands, to any thread: each person once. */
+export async function invitedCount(db: D1Database): Promise<number> {
+  return (await db.prepare("SELECT COUNT(DISTINCT person_id) AS n FROM members WHERE removed_at IS NULL").first<{ n: number }>())?.n ?? 0;
+}
+
+/** A person to invite, as the door checked them: the address lowercased, and the name he typed. */
+export interface Invitee {
+  readonly email: string;
+  readonly name: string;
+}
+
+/**
+ * Invites a person to a thread, by the owner, in one batch: the person (kept once per address, their name the one
+ * typed now), the `invited` event (only when they weren't already in it), the invitation (a new one, or a
+ * removed one standing again) and the thread's last activity. Inviting someone already in the thread changes
+ * nothing but their name. Null when there is no such thread, and then nothing is written, the person included.
+ */
+export async function invite(db: D1Database, number: number, invitee: Invitee): Promise<ThreadRow | null> {
+  const now = new Date().toISOString();
+  const p = new Params();
+  const person = statement(
+    db,
+    `INSERT INTO people (id, email, name, created_at)
+     SELECT ${p.list([crypto.randomUUID(), invitee.email, invitee.name, now])} WHERE EXISTS (SELECT 1 FROM threads WHERE number = ${p.add(number)})
+     ON CONFLICT (email) DO UPDATE SET name = excluded.name`,
+    p,
+  );
+  const e = new Params();
+  const event = statement(
+    db,
+    `INSERT INTO events (thread_id, at, actor, type, data)
+     SELECT threads.id, ${e.add(now)}, 'owner', 'invited', json_object('person', people.id, 'name', people.name)
+     FROM threads JOIN people ON people.email = ${e.add(invitee.email)}
+     WHERE threads.number = ${e.add(number)} AND NOT ${standing("threads.id", invitee.email, e)}`,
+    e,
+  );
+  const m = new Params();
+  const member = statement(
+    db,
+    `INSERT INTO members (thread_id, person_id, added_at)
+     SELECT threads.id, people.id, ${m.add(now)} FROM threads JOIN people ON people.email = ${m.add(invitee.email)} WHERE threads.number = ${m.add(number)}
+     ON CONFLICT (thread_id, person_id) DO UPDATE SET added_at = excluded.added_at, removed_at = NULL WHERE members.removed_at IS NOT NULL`,
+    m,
+  );
+  const u = new Params();
+  const touch = statement(db, `UPDATE threads SET activity_at = ${u.add(now)} WHERE number = ${u.add(number)} RETURNING ${COLUMNS}`, u);
+  const [, , , touched] = await db.batch<ThreadRow>([person, event, member, touch]);
+  return touched?.results[0] ?? null;
+}
+
+/**
+ * Takes back a person's invitation to a thread, by the owner, with its `removed` event and the thread's last
+ * activity: one batch. `no-thread` when there is no such thread, `not-invited` when the person has no invitation
+ * there that stands; either way nothing is written.
+ */
+export async function uninvite(db: D1Database, number: number, personId: string): Promise<ThreadRow | "no-thread" | "not-invited"> {
+  const now = new Date().toISOString();
+  const guard = (p: Params): string =>
+    `threads.number = ${p.add(number)} AND EXISTS (SELECT 1 FROM members WHERE members.thread_id = threads.id AND members.person_id = ${p.add(personId)} AND members.removed_at IS NULL)`;
+  const e = new Params();
+  const event = statement(
+    db,
+    `INSERT INTO events (thread_id, at, actor, type, data)
+     SELECT threads.id, ${e.add(now)}, 'owner', 'removed', json_object('person', people.id, 'name', people.name)
+     FROM threads JOIN people ON people.id = ${e.add(personId)} WHERE ${guard(e)}`,
+    e,
+  );
+  const m = new Params();
+  const member = statement(
+    db,
+    `UPDATE members SET removed_at = ${m.add(now)}
+     WHERE person_id = ${m.add(personId)} AND removed_at IS NULL AND thread_id = (SELECT id FROM threads WHERE number = ${m.add(number)})`,
+    m,
+  );
+  // The touch runs before the invitation ends, in the same batch, because its guard reads the invitation.
+  const u = new Params();
+  const touch = statement(db, `UPDATE threads SET activity_at = ${u.add(now)} WHERE ${guard(u)} RETURNING ${COLUMNS}`, u);
+  const [, touched] = await db.batch<ThreadRow>([event, touch, member]);
+  const row = touched?.results[0];
+  if (row !== undefined) return row;
+  return (await find(db, { number }, EVERY_THREAD)) === null ? "no-thread" : "not-invited";
 }

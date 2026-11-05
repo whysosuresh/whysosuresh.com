@@ -34,11 +34,12 @@ export const USAGE = `Usage: inbox <verb> [arguments]
   add                             threads from stdin, one JSON object per line; one result line each
   move <number> <action> [--reason <text>] [--space <space>] [--link <issue address>]
                                   one move: act, discuss, unsort, done, drop, reopen, space, file
-  comment <number>                a comment from stdin (Markdown), added to the thread
+  comment <number> [--only-me]    a comment from stdin (Markdown), added to the thread; --only-me keeps it
+                                  from the people the thread is shared with
   edit <number> <summary|body>    the thread's living summary or main text, replaced by stdin;
                                   an empty summary clears it
-  show <number>                   the thread with its comments and history, its page's versions and its
-                                  link, as one JSON line
+  show <number>                   the thread with its comments and history, its page's versions, its
+                                  link and the people it is shared with, as one JSON line
   page <number> <file> [--from <claude.ai address>]
                                   the HTML file as the thread's page, a new version of it; --from names the
                                   artifact it was read from
@@ -190,14 +191,19 @@ async function move(io: Io, secret: string, args: readonly string[]): Promise<nu
   return report(io, "move", await call(io, secret, `${THREADS}/${number}`, { method: "POST", body: JSON.stringify(change) }), "thread");
 }
 
-/** A comment's Markdown from stdin, as is: quotes and line breaks need no escaping. */
+/**
+ * A comment's Markdown from stdin, as is: quotes and line breaks need no escaping. `--only-me` writes it for the
+ * owner alone, never shown to the people a thread is shared with.
+ */
 async function comment(io: Io, secret: string, args: readonly string[]): Promise<number> {
   const [given, ...rest] = args;
   const number = numberOf("comment", given);
-  if (rest.length > 0) throw new Usage("comment takes a thread's number, and its words on stdin");
+  const onlyMe = rest.length === 1 && rest[0] === "--only-me";
+  if (rest.length > 0 && !onlyMe) throw new Usage("comment takes a thread's number and --only-me at most, and its words on stdin");
   const body = await io.stdin();
   if (body.trim() === "") throw new Usage("comment read nothing on stdin");
-  return report(io, "comment", await call(io, secret, `${THREADS}/${number}/comments`, { method: "POST", body: JSON.stringify({ body }) }), "comment");
+  const sent = onlyMe ? { body, audience: "owner" } : { body };
+  return report(io, "comment", await call(io, secret, `${THREADS}/${number}/comments`, { method: "POST", body: JSON.stringify(sent) }), "comment");
 }
 
 /** A thread's living summary or main text, replaced by stdin; nothing on stdin clears the summary. */

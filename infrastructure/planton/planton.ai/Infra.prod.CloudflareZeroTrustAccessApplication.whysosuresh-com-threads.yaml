@@ -1,6 +1,7 @@
 # The threads' private calls: every request to whysosuresh.com/threads/api and everything under it meets Access
-# first. The owner signs in with an email code, the recorder sync with its service token; anyone else is stopped
-# at Cloudflare's edge and never reaches the site. Only the calls are guarded, never a thread's own page, so a
+# first. The owner signs in with an email code, the recorder sync with its service token, and people the owner
+# invited to a thread with an email code too, once the site says they are invited; anyone else is stopped at
+# Cloudflare's edge and never reaches the site. Only the calls are guarded, never a thread's own page, so a
 # thread made public opens without a sign-in.
 #
 # `status.outputs.aud` is the application's tag, which Access signs into every request it lets through. The
@@ -32,7 +33,8 @@ spec:
         fieldPath: status.outputs.identity_provider_id
   autoRedirectToIdentity: true
   appLauncherVisible: false
-  # The two reusable policies, owner first (first made for the inbox's door, which /threads replaced).
+  # The reusable policies: the owner first and the sync (both first made for the inbox's door, which /threads
+  # replaced), then invited people, whom the site itself names at sign-in.
   policies:
     - policy:
         valueFrom:
@@ -48,3 +50,10 @@ spec:
           name: whysosuresh-com-inbox-sync
           fieldPath: status.outputs.policy_id
       precedence: 2
+    - policy:
+        valueFrom:
+          kind: CloudflareZeroTrustAccessPolicy
+          env: prod
+          name: whysosuresh-com-threads-members
+          fieldPath: status.outputs.policy_id
+      precedence: 3

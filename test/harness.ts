@@ -1,6 +1,6 @@
 // The Worker in Cloudflare's own runtime, for the Worker tests (test/talk.test.ts, test/threads-door.test.ts,
-// test/threads.test.ts, test/routing.test.ts, test/migrations.test.ts) and the signed-in local site
-// (test/dev-signed-in.ts): Miniflare (pinned to the version the
+// test/threads.test.ts, test/members.test.ts, test/evaluate.test.ts, test/routing.test.ts, test/migrations.test.ts)
+// and the signed-in local site (test/dev-signed-in.ts): Miniflare (pinned to the version the
 // pinned wrangler itself runs, so the runtime and compatibility date are production's) runs the exact bundle
 // `wrangler deploy --dry-run --outdir dist` writes, in front of the site's own files with the routing
 // wrangler.jsonc declares (which paths reach the code, how the rest are served, and the binding the code hands
@@ -12,9 +12,12 @@
 // anything else fails; under Cloudflare's test secret every token passes, as Cloudflare answers it. Cloudflare
 // Access is played too: the team's certs address (wrangler.jsonc's `ACCESS_TEAM_DOMAIN`) serves the harness's
 // own RSA keys, and `access.token` signs an application token with them as Access would, for the threads'
-// application. Every other host the Worker tries is refused and recorded.
+// application: the owner's, the sync's, or an invited person's (`memberClaims`). `access.evaluationClaims` are what
+// Access sends the site's evaluation door at sign-in (src/evaluate.ts), signed the same way, and the Worker gets
+// its own evaluation key (`EVALUATION_KEY`, whose public half the tests verify the answers with). Every other host
+// the Worker tries is refused and recorded.
 
-import { createSign, generateKeyPairSync, type KeyObject } from "node:crypto";
+import { createPublicKey, createSign, generateKeyPairSync, type KeyObject } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -105,6 +108,14 @@ export interface PlayedAccess {
   /** The owner's claims and the sync's claims, for the threads' application, to build on. */
   ownerClaims(): Claims;
   syncClaims(): Claims;
+  /** An invited person's claims for the threads' application: the owner's, with another address. */
+  memberClaims(email: string): Claims;
+  /**
+   * What Access sends the evaluation door at sign-in, after Cloudflare's example: the address that asked for a code
+   * (`identity.email`) and a nonce, with no application's audience or type. Passed to `token`, it replaces every
+   * application claim.
+   */
+  evaluationClaims(email: string, nonce?: string): Claims;
   /** How many times the Worker fetched the certs. */
   readonly fetches: number;
   /** Serves a second key as well, as Cloudflare does while it rotates; returns its key id. */
@@ -150,7 +161,15 @@ function migrations(): { number: string; statements: string[] }[] {
 }
 
 /** The tables `reset` empties, children before the tables they name, because D1 checks foreign keys. */
-const TABLES = ["events", "comments", "pages", "threads", "talk_days", "talk_senders"];
+const TABLES = ["events", "comments", "members", "pages", "threads", "people", "talk_days", "talk_senders"];
+
+/**
+ * The Worker's evaluation key in the harness, as the deploy hands it over (an RSA private key as a JWK), and its
+ * public half, which the tests check the evaluation door's answers and its keys address against.
+ */
+const evaluation = generateKeyPairSync("rsa", { modulusLength: 2048 });
+export const EVALUATION_KEY = JSON.stringify(evaluation.privateKey.export({ format: "jwk" }));
+export const EVALUATION_PUBLIC_KEY: KeyObject = createPublicKey(evaluation.privateKey);
 
 const base64Url = (bytes: Buffer): string => bytes.toString("base64url");
 
@@ -186,6 +205,23 @@ function playAccess(): PlayedAccess & { serve(request: RuntimeRequest): RuntimeR
     // A service token's claims carry no email or identity, only the token's client id (Cloudflare's
     // application-token page); the owner's are removed so `token()` doesn't merge them in.
     syncClaims: () => ({ ...common(), common_name: INBOX_SYNC_CLIENT_ID, sub: "", email: undefined, identity_nonce: undefined, country: undefined }),
+    memberClaims(email) {
+      return { ...this.ownerClaims(), email, sub: "0f6f2c1e-6a40-4a5e-9d5e-3f1d5b2a7c11" };
+    },
+    evaluationClaims: (email, nonce = "nonce-from-access") => ({
+      iss: `https://${ACCESS_TEAM_DOMAIN}`,
+      iat: now(),
+      exp: now() + 60,
+      nonce,
+      identity: { email, idp: { type: "onetimepin" } },
+      aud: undefined,
+      nbf: undefined,
+      type: undefined,
+      email: undefined,
+      sub: undefined,
+      identity_nonce: undefined,
+      country: undefined,
+    }),
     token(claims = {}, options = {}) {
       const signer = options.foreignKey ? foreign : (keys[keys.length - 1] ?? foreign);
       const merged: Claims = { ...this.ownerClaims(), ...claims };
@@ -215,7 +251,7 @@ function playAccess(): PlayedAccess & { serve(request: RuntimeRequest): RuntimeR
   };
 }
 
-export async function startHarness(options: { secret?: string; owner?: string; through?: string } = {}): Promise<Harness> {
+export async function startHarness(options: { secret?: string; owner?: string; through?: string; evaluationKey?: string } = {}): Promise<Harness> {
   const bundlePath = join(root, "dist", "worker.js");
   if (!existsSync(bundlePath)) throw new Error("dist/worker.js is missing: run `npm run dry-run` first (`npm test` does)");
   if (!COMPATIBILITY_DATE) throw new Error("wrangler.jsonc names no compatibility_date");
@@ -249,6 +285,7 @@ export async function startHarness(options: { secret?: string; owner?: string; t
 
   const secret = options.secret ?? SECRET;
   const owner = options.owner ?? OWNER;
+  const evaluationKey = options.evaluationKey ?? EVALUATION_KEY;
   const mf = new Miniflare({
     host: "127.0.0.1",
     port: 0,
@@ -271,6 +308,7 @@ export async function startHarness(options: { secret?: string; owner?: string; t
             PAGES: { type: "r2", name: "whysosuresh-com-pages" },
             ...(secret === "" ? {} : { TURNSTILE_SECRET: { type: "text" as const, value: secret } }),
             ...(owner === "" ? {} : { INBOX_OWNER_EMAIL: { type: "text" as const, value: owner } }),
+            ...(evaluationKey === "" ? {} : { THREADS_EVALUATION_KEY: { type: "text" as const, value: evaluationKey } }),
             ACCESS_TEAM_DOMAIN: { type: "text" as const, value: ACCESS_TEAM_DOMAIN },
             THREADS_ACCESS_AUD: { type: "text" as const, value: THREADS_ACCESS_AUD },
             INBOX_SYNC_CLIENT_ID: { type: "text" as const, value: INBOX_SYNC_CLIENT_ID },

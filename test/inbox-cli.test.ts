@@ -1,7 +1,7 @@
 // The inbox's command line (tools/inbox/), driven through its logic with a played fetch: each verb's request to
 // the threads' calls, by the thread's number, with the service token's two Access headers and the client id
-// wrangler.jsonc names; a list followed through every page; an add answered line by line; a comment and an edit
-// taking their words from stdin as they are; a page sent from a file as HTML, refused here past 16 MiB; a link set
+// wrangler.jsonc names; a list followed through every page; an add answered line by line; a comment (for everyone
+// in the thread, or with --only-me for the owner alone) and an edit taking their words from stdin as they are; a page sent from a file as HTML, refused here past 16 MiB; a link set
 // and cleared; the Worker's refusals and the edge's passed through with a
 // non-zero exit; usage errors; and the secret in no line it prints. One run of the real entry point as a child
 // process proves Node runs the TypeScript as it is.
@@ -187,6 +187,13 @@ describe("comment", () => {
     expect(out).toEqual([JSON.stringify(comment)]);
   });
 
+  it("with --only-me writes it for the owner alone", async () => {
+    const comment = { id: "c2", author: "sync", audience: "owner", body: "Not for them.", createdAt: "2026-11-05T10:00:00.000Z" };
+    const { io, sent } = client([{ status: 201, body: { comment } }], { stdin: "Not for them." });
+    expect(await run(["comment", "42", "--only-me"], io)).toBe(0);
+    expect(sent.map((one) => JSON.parse(one.body ?? ""))).toEqual([{ body: "Not for them.", audience: "owner" }]);
+  });
+
   it("passes on a thread that isn't there with exit 1", async () => {
     const { io, err } = client([{ status: 404, body: { reason: "no-thread" } }], { stdin: "Hello" });
     expect(await run(["comment", "9"], io)).toBe(1);
@@ -197,6 +204,8 @@ describe("comment", () => {
     ["nothing on stdin", ["comment", "42"], "  \n"],
     ["no number", ["comment"], "Hello"],
     ["more arguments", ["comment", "42", "Hello"], "Hello"],
+    ["a flag it doesn't know", ["comment", "42", "--only-them"], "Hello"],
+    ["--only-me twice", ["comment", "42", "--only-me", "--only-me"], "Hello"],
   ])("refuses %s as a usage error, sending nothing", async (_, argv, stdin) => {
     const { io, sent } = client([], { stdin });
     expect(await run(argv, io)).toBe(2);
