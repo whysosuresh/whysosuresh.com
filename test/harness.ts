@@ -6,7 +6,7 @@
 // wrangler.jsonc declares (which paths reach the code, how the rest are served, and the binding the code hands
 // files over through, which applies site/_redirects and site/_headers as the deploy does), with a real local D1 holding
 // migrations/, all of them or up to the one a test names, so a test can stage a table as an earlier one left
-// it and then apply the rest. Turnstile's
+// it and then apply the rest, and a real local R2 bucket for the pages saved into threads. Turnstile's
 // verification is played here: a token of `pass` passes for the request's own host, `wrong-host` passes for
 // another host, `wrong-action` for another action, `unreachable` answers as a check that is down, and
 // anything else fails; under Cloudflare's test secret every token passes, as Cloudflare answers it. Cloudflare
@@ -72,6 +72,12 @@ export interface Statement {
   all<T>(): Promise<{ results: T[] }>;
   first<T>(): Promise<T | null>;
 }
+/** The parts of the local R2 bucket the tests use. */
+export interface Bucket {
+  list(): Promise<{ objects: { key: string; size: number }[] }>;
+  get(key: string): Promise<{ text(): Promise<string>; httpMetadata?: { contentType?: string } } | null>;
+  delete(keys: string | string[]): Promise<void>;
+}
 export interface Database {
   prepare(sql: string): Statement;
   batch(statements: Statement[]): Promise<unknown[]>;
@@ -117,6 +123,8 @@ export interface Harness {
   fetch(url: string, init?: RequestInit): Promise<Response>;
   /** The Worker's database, to look at or stage what it holds. */
   db(): Promise<Database>;
+  /** The pages bucket, to look at what the Worker kept. */
+  pages(): Promise<Bucket>;
   /** Every host the Worker tried to reach. */
   outboundHosts: Set<string>;
   /** Cloudflare Access, played. */
@@ -147,7 +155,7 @@ function migrations(): { number: string; statements: string[] }[] {
 }
 
 /** The tables `reset` empties, children before the tables they name, because D1 checks foreign keys. */
-const TABLES = ["events", "comments", "threads", "talk_days", "talk_senders"];
+const TABLES = ["events", "comments", "pages", "threads", "talk_days", "talk_senders"];
 
 const base64Url = (bytes: Buffer): string => bytes.toString("base64url");
 
@@ -265,6 +273,7 @@ export async function startHarness(options: { secret?: string; owner?: string; t
           env: {
             [ASSETS_BINDING]: { type: "assets" as const },
             DB: { type: "d1", id: "whysosuresh-com" },
+            PAGES: { type: "r2", name: "whysosuresh-com-pages" },
             ...(secret === "" ? {} : { TURNSTILE_SECRET: { type: "text" as const, value: secret } }),
             ...(owner === "" ? {} : { INBOX_OWNER_EMAIL: { type: "text" as const, value: owner } }),
             ACCESS_TEAM_DOMAIN: { type: "text" as const, value: ACCESS_TEAM_DOMAIN },
@@ -295,6 +304,7 @@ export async function startHarness(options: { secret?: string; owner?: string; t
       return (await mf.dispatchFetch(url, init as never)) as unknown as Response;
     },
     db,
+    pages: async () => (await mf.getR2Bucket("PAGES", WORKER)) as unknown as Bucket,
     outboundHosts,
     access,
     migrate,
@@ -304,6 +314,9 @@ export async function startHarness(options: { secret?: string; owner?: string; t
         (await database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all<{ name: string }>()).results.map((table) => table.name),
       );
       await database.batch(TABLES.filter((table) => present.has(table)).map((table) => database.prepare(`DELETE FROM ${table}`)));
+      const bucket = (await mf.getR2Bucket("PAGES", WORKER)) as unknown as Bucket;
+      const kept = (await bucket.list()).objects.map((object) => object.key);
+      if (kept.length > 0) await bucket.delete(kept);
       outboundHosts.clear();
     },
     dispose: () => mf.dispose(),

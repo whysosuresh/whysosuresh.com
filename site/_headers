@@ -1,11 +1,12 @@
 # The headers on every file the site serves; the Worker's own answers under /api/ set theirs in code.
-# The CSP allows the site's own files, one frame (YouTube's privacy-mode player), the note flow's
+# The CSP allows the site's own files, its own frames (a page saved into a thread, sealed by its own answer's
+# headers), YouTube's privacy-mode player, the note flow's
 # scripts and Cloudflare's Turnstile (its script and its frame), and requests only to the site itself.
 # No page may use the camera, the microphone or the location.
 # The referrer policy is never no-referrer, because the player refuses to play without one.
 # test/site.test.ts checks this file against the pages and the scripts.
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; img-src 'self'; connect-src 'self'; frame-src https://www.youtube-nocookie.com https://challenges.cloudflare.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; img-src 'self'; connect-src 'self'; frame-src 'self' https://www.youtube-nocookie.com https://challenges.cloudflare.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   Referrer-Policy: strict-origin-when-cross-origin
   X-Content-Type-Options: nosniff
   Permissions-Policy: camera=(), microphone=(), geolocation=()

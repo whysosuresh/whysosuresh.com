@@ -15,12 +15,15 @@
  *   number: number, id: string, createdAt: string, source: 'talk' | 'told' | 'self' | string, space: string | null,
  *   title: string | null, body: string, summary: string | null, senderName: string | null, senderEmail: string | null,
  *   status: Status, kind: 'feedback' | 'idea' | null, dropReason: string | null, replyOpenedAt: string | null,
- *   ref: string | null, filedLink: string | null, movedAt: string | null, activityAt: string
+ *   ref: string | null, filedLink: string | null, movedAt: string | null, activityAt: string,
+ *   main: 'text' | 'page' | 'link', link: { url: string, title: string | null } | null
  * }} Thread
+ * @typedef {{ version: number, savedAt: string, actor: string, bytes: number, source: string | null }} PageVersion
+ * @typedef {{ version: number, savedAt: string, source: string | null, versions: PageVersion[] }} Page
  * @typedef {{ id: string, author: 'owner' | 'sync' | string, body: string, createdAt: string }} Comment
  * @typedef {{ id: number, at: string, actor: 'owner' | 'sync' | 'visitor' | 'import' | string, type: string, data: Record<string, unknown> }} Event
- * @typedef {{ thread: Thread, comments: Comment[], events: Event[], truncated: boolean }} Shown
- * @typedef {{ threads: Thread[], counts: Record<Tab, number>, next: number | null, me: string | null }} Page
+ * @typedef {{ thread: Thread, page: Page | null, comments: Comment[], events: Event[], truncated: boolean }} Shown
+ * @typedef {{ threads: Thread[], counts: Record<Tab, number>, next: number | null, me: string | null }} Listing
  * @typedef {{ action: 'act' | 'discuss' | 'unsort' | 'done' | 'reopen' | 'reply-opened' }
  *   | { action: 'drop', reason: string }
  *   | { action: 'space', space: string }} Action
@@ -74,18 +77,18 @@ function post(path, body) {
  * One tab's threads, newest number first, below the number `before` when it is given.
  * @param {Tab} tab
  * @param {number | null} before
- * @returns {Promise<Page>}
+ * @returns {Promise<Listing>}
  */
 export async function list(tab, before) {
   const query = new URLSearchParams({ tab });
   if (before !== null) query.set('before', String(before));
-  return /** @type {Page} */ (await call(`/threads?${query.toString()}`, { method: 'GET' }));
+  return /** @type {Listing} */ (await call(`/threads?${query.toString()}`, { method: 'GET' }));
 }
 
 /**
  * Every thread in a tab, page after page, with the tab counts and the owner's address from the last page.
  * @param {Tab} tab
- * @returns {Promise<Page>}
+ * @returns {Promise<Listing>}
  */
 export async function listAll(tab) {
   let page = await list(tab, null);
@@ -153,6 +156,15 @@ export async function edit(number, field, text) {
  */
 export async function search(words) {
   return /** @type {{ threads: Thread[] }} */ (await call(`/search?${new URLSearchParams({ q: words }).toString()}`, { method: 'GET' })).threads;
+}
+
+/**
+ * The address a page's frame loads one version from: the thread's own call, sealed by its answer's headers.
+ * @param {number} number
+ * @param {number} version
+ */
+export function pageAddress(number, version) {
+  return `${API}/threads/${number}/pages/${version}`;
 }
 
 /**

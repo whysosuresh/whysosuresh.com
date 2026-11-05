@@ -50,6 +50,8 @@ interface Thread {
   filedLink: string | null;
   movedAt: string | null;
   activityAt: string;
+  main: string;
+  link: { url: string; title: string | null } | null;
 }
 
 interface Event {
@@ -164,6 +166,8 @@ describe("an add", () => {
       filedLink: null,
       movedAt: null,
       activityAt: thread.createdAt,
+      main: "text",
+      link: null,
     });
     const again = await call("", { body: { ...body, title: "Another title" } });
     expect(again.status).toBe(200);

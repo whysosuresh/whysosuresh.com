@@ -244,8 +244,8 @@ describe("0007, the inbox retired a deploy later", () => {
     expect((await database.prepare("SELECT COUNT(*) AS n FROM threads WHERE origin_ref = 'chat:twice'").first<{ n: number }>())?.n).toBe(1);
     expect(await thread(harness, "00000000-0000-4000-8000-000000000007")).toBeNull();
     const after = (await database.prepare("SELECT * FROM threads WHERE id NOT IN (?1, ?2, ?3) ORDER BY number").bind("00000000-0000-4000-8000-000000000003", "00000000-0000-4000-8000-000000000005", "00000000-0000-4000-8000-000000000006").all<Record<string, unknown>>()).results;
-    // 0008 adds each thread's last activity; everything 0007 found stays as it was.
-    expect(after.map(({ activity_at: _activity, ...rest }) => rest)).toEqual(before);
+    // Later migrations add a thread's last activity and its main section; everything 0007 found stays as it was.
+    expect(after.map(({ activity_at: _activity, main: _main, link_url: _url, link_title: _title, ...rest }) => rest)).toEqual(before);
   });
 
   it("drops the inbox's table", async () => {

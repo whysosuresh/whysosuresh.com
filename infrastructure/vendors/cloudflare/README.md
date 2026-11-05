@@ -9,7 +9,7 @@ What the Cloudflare dashboard holds for whysosuresh.com that Planton cannot crea
 
 ## R2
 
-R2 was turned on in the account on 2026-11-04 for the site's recordings (with a card, which stays on the account) and retired on 2026-11-04, when the site stopped taking voice; its one bucket is gone (`../../planton/planton.ai/README.md` rows 15 and 17).
+R2 was turned on in the account on 2026-11-04 for the site's recordings (with a card, which stays on the account) and retired on 2026-11-04, when the site stopped taking voice; that bucket is gone (`../../planton/planton.ai/README.md` rows 15 and 17). Since 2026-11-05 the account's one bucket is `whysosuresh-com-pages`, the pages saved into threads (row 29). Planton's token creates it (Workers R2 Storage Write); the deploy key needs no R2 right to bind it.
 
 ## Zero Trust
 

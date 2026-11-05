@@ -1,17 +1,23 @@
 // The signed-in local site, for looking at the threads page in a real browser before a deploy:
 // `npm run dev:signed-in` serves http://localhost:8790/ from the Worker's own bundle in workerd (test/harness.ts),
-// with a local D1 holding a few made-up threads, and plays Cloudflare Access by signing every call under
-// /threads/api/ and /inbox/api/ as the owner, the way the edge hands a signed-in request over. The browser's own
-// origin is told to the Worker as the site's, so the owner's writes pass the same-origin check they pass in
-// production. `--signed-out` signs nothing, so the page shows what a visitor sees. Nothing here is deployed or
-// reaches Cloudflare: the harness refuses every outside request but Access's played keys.
+// with a local D1 and R2 holding a few made-up threads, and plays Cloudflare Access by signing every call under
+// /threads/api/ and /inbox/api/ as the owner, the way the edge hands a signed-in request over. `--signed-out` signs nothing, so the page shows what a visitor sees. Pages are seeded the way the
+// sync saves them, through the threads' call with its played token: the sealed probe (test/fixtures/sealed-probe.html,
+// every line of which should read "blocked" in the browser), and each file given with `--page <file>` (an
+// artifact's HTML as the Artifact tool's read saved it) as a version of one thread. Requests reach the Worker at
+// this local address, so the script a page carries addresses its height to it, as it addresses whysosuresh.com
+// live. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
+// played keys.
 
+import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { SITE, startHarness, type Harness } from "./harness.ts";
 
 const PORT = 8790;
 const LOCAL = `http://localhost:${PORT}`;
 const signedOut = process.argv.includes("--signed-out");
+/** Each file after a `--page`, saved in order as versions of one thread's page. */
+const pageFiles = process.argv.flatMap((arg, i) => (process.argv[i - 1] === "--page" ? [arg] : []));
 
 const harness: Harness = await startHarness();
 const sync = (): string => harness.access.token(harness.access.syncClaims("threads"), { app: "threads" });
@@ -53,6 +59,30 @@ async function seed(): Promise<void> {
     )
     .bind(crypto.randomUUID(), new Date().toISOString(), "Followed the install page on Windows. It stops after \"fetching the runner\" with no message.")
     .run();
+  const page = async (number: number, html: Uint8Array, from: string | null): Promise<void> => {
+    const query = from === null ? "" : `?${new URLSearchParams({ from }).toString()}`;
+    const response = await harness.fetch(`${SITE}/threads/api/threads/${number}/pages${query}`, {
+      method: "POST",
+      headers: { "Content-Type": "text/html; charset=utf-8", "Cf-Access-Jwt-Assertion": sync() },
+      body: html,
+    });
+    if (response.status !== 201) throw new Error(`seeding a page into #${number} answered ${response.status}: ${await response.text()}`);
+  };
+  const probe = await add("chat:seed-probe", { title: "Sealed probe", status: "act", space: "other", body: "A page that tries every way out of its frame." });
+  await page(probe, new Uint8Array(readFileSync(new URL("./fixtures/sealed-probe.html", import.meta.url))), null);
+  const pricing = await add("chat:seed-pricing", { title: "Hosted cloud pricing", status: "discuss", space: "company", body: "The pricing proposal, as a page." });
+  const files = pageFiles.length > 0 ? pageFiles : [];
+  if (files.length === 0) {
+    const sample = (n: number): string =>
+      `<!doctype html><html><head><meta charset="utf-8"><title>Pricing</title><style>body{font:15px/1.5 system-ui;margin:24px}button[aria-selected=true]{font-weight:700}</style></head><body><h1>Hosted cloud pricing, version ${n}</h1><p>Three ways to charge.</p><div><button aria-selected="true">Per seat</button> <button>Per run</button> <button>Flat</button></div>${"<p>A line to make the page tall.</p>".repeat(30)}<script>for(const b of document.querySelectorAll('button'))b.onclick=()=>{for(const o of document.querySelectorAll('button'))o.setAttribute('aria-selected',String(o===b))}</script></body></html>`;
+    await page(pricing, new TextEncoder().encode(sample(1)), "https://claude.ai/artifact/example-pricing");
+    await page(pricing, new TextEncoder().encode(sample(2)), "https://claude.ai/artifact/example-pricing");
+  }
+  for (const file of files) await page(pricing, new Uint8Array(readFileSync(file)), null);
+  await asSync(`/${pricing}/text`, { field: "summary", text: "Decided: small teams use it free until launch.\nOpen: per seat, per run, or flat.\nWaiting on: the cost per run.\nNext: pick one on Friday." });
+  const slides = await add("chat:seed-slides", { title: "Launch talk slides", status: "act", space: "stigmer", body: "The launch talk, as slides on claude.ai." });
+  await asSync(`/${slides}/link`, { url: "https://claude.ai/artifact/example-slides", title: "Launch talk" });
+
   // One thread untouched for ten days, so Today has something that sat a week.
   const old = new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString();
   await database.prepare("UPDATE threads SET activity_at = ?1 WHERE origin_ref = 'chat:seed-2'").bind(old).run();
@@ -71,15 +101,14 @@ async function serve(request: IncomingMessage, response: ServerResponse): Promis
     if (value === undefined || ["host", "connection", "content-length"].includes(name)) continue;
     headers[name] = Array.isArray(value) ? value.join(", ") : value;
   }
-  if (headers.origin === LOCAL) headers.origin = SITE;
   const app = path.startsWith("/threads/api/") ? "threads" : path.startsWith("/inbox/api/") ? "inbox" : null;
   if (app !== null && !signedOut) headers["cf-access-jwt-assertion"] = harness.access.token(harness.access.ownerClaims(app), { app });
   const method = request.method ?? "GET";
   const sent = method === "GET" || method === "HEAD" ? undefined : await body(request);
-  const answer = await harness.fetch(`${SITE}${path}`, { method, headers, redirect: "manual", ...(sent === undefined ? {} : { body: sent }) });
+  const answer = await harness.fetch(`${LOCAL}${path}`, { method, headers, redirect: "manual", ...(sent === undefined ? {} : { body: sent }) });
   const out: Record<string, string> = {};
   answer.headers.forEach((value, name) => {
-    out[name] = name === "location" && value.startsWith(SITE) ? value.slice(SITE.length) || "/" : value;
+    out[name] = value;
   });
   // The site's HSTS would pin localhost to https in the browser, so it stays out of the local answers.
   delete out["strict-transport-security"];

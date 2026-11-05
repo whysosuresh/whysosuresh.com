@@ -11,7 +11,11 @@
 // A thread's number is one more than the largest, given inside its INSERT; D1 runs one query at a time, and the
 // UNIQUE constraint turns any duplicate into an error rather than two #42s. Every write also stamps the thread's
 // last activity (`activity_at`, migrations/0008_activity.sql) in the same batch: an arrival, a move, an edit, a
-// comment. This file is its only writer, so the rule lives here once.
+// comment, a page saved, a link set. This file is its only writer, so the rule lives here once.
+//
+// A thread's main section (`main`, migrations/0009_pages.sql) is its text, a page or a link, whichever was attached
+// last. A page's versions are rows in `pages`, each naming its object in the private bucket by a fresh key; the
+// bucket is the threads' calls' to write (src/threads.ts), before the row, and this file only keeps the rows.
 
 /** Where a thread came from: the site's note flow, something told to him in person, or his own. */
 export type Source = "talk" | "told" | "self";
@@ -37,7 +41,7 @@ export function isTab(value: string): value is Tab {
 // The last activity reads the arrival time when it was never set: a thread the code before 0008 created between
 // that migration and its deploy. A plain expression, so it is safe in RETURNING.
 export const COLUMNS =
-  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at";
+  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title";
 
 export interface ThreadRow {
   id: string;
@@ -58,6 +62,23 @@ export interface ThreadRow {
   filed_link: string | null;
   moved_at: string | null;
   activity_at: string;
+  /** What the thread shows as its main section. */
+  main: Main;
+  link_url: string | null;
+  link_title: string | null;
+}
+
+/** A thread's main section: its text, a page saved into it, or a link to an artifact on claude.ai. */
+export type Main = "text" | "page" | "link";
+
+/** One saved version of a thread's page. */
+export interface PageRow {
+  version: number;
+  object_key: string;
+  created_at: string;
+  actor: string;
+  bytes: number;
+  source_url: string | null;
 }
 
 export interface CommentRow {
@@ -393,4 +414,99 @@ export async function search(db: D1Database, words: string): Promise<ThreadRow[]
       p,
     ).all<ThreadRow>()
   ).results;
+}
+
+/** A page version a door has already written to the bucket, as the store keeps its row. */
+export interface NewPage {
+  readonly objectKey: string;
+  readonly bytes: number;
+  readonly sourceUrl: string | null;
+}
+
+/**
+ * Keeps a new version of a thread's page, numbered after its last, with its `page-saved` event, and makes the
+ * page the thread's main section: one batch, so all of it is kept or none. Null when there is no such thread.
+ * Throws when the batch fails, a save racing another for the same version among the ways it can; either way the
+ * caller deletes the object it wrote, so no object is left that no row names.
+ */
+export async function savePage(db: D1Database, number: number, page: NewPage, actor: Author): Promise<{ row: ThreadRow; version: number } | null> {
+  const now = new Date().toISOString();
+  const p = new Params();
+  const insert = statement(
+    db,
+    `INSERT INTO pages (thread_id, version, object_key, created_at, actor, bytes, source_url)
+     SELECT id, (SELECT COALESCE(MAX(version), 0) + 1 FROM pages WHERE pages.thread_id = threads.id), ${p.list([page.objectKey, now, actor, page.bytes, page.sourceUrl])}
+     FROM threads WHERE number = ${p.add(number)}`,
+    p,
+  );
+  // The object's key is unique and new, so this finds the row the insert above made, and nothing when it made none.
+  const e = new Params();
+  const event = statement(
+    db,
+    `INSERT INTO events (thread_id, at, actor, type, data)
+     SELECT thread_id, created_at, actor, 'page-saved', json_object('version', version, 'bytes', bytes) FROM pages WHERE object_key = ${e.add(page.objectKey)}`,
+    e,
+  );
+  const u = new Params();
+  const update = statement(
+    db,
+    `UPDATE threads SET main = 'page', activity_at = ${u.add(now)}
+     WHERE id = (SELECT thread_id FROM pages WHERE object_key = ${u.add(page.objectKey)}) RETURNING ${COLUMNS}`,
+    u,
+  );
+  const v = new Params();
+  const version = statement(db, `SELECT version FROM pages WHERE object_key = ${v.add(page.objectKey)}`, v);
+  const [, , updated, saved] = await db.batch<ThreadRow | { version: number }>([insert, event, update, version]);
+  const row = updated?.results[0] as ThreadRow | undefined;
+  const kept = saved?.results[0] as { version: number } | undefined;
+  return row === undefined || kept === undefined ? null : { row, version: kept.version };
+}
+
+/** One version of a thread's page, by the thread's number; null when either isn't there. */
+export async function findPage(db: D1Database, number: number, version: number): Promise<PageRow | null> {
+  return db
+    .prepare(
+      `SELECT pages.version, pages.object_key, pages.created_at, pages.actor, pages.bytes, pages.source_url
+       FROM pages JOIN threads ON threads.id = pages.thread_id WHERE threads.number = ?1 AND pages.version = ?2`,
+    )
+    .bind(number, version)
+    .first<PageRow>();
+}
+
+/** Every version of a thread's page, oldest first. */
+export async function pagesOf(db: D1Database, threadId: string): Promise<PageRow[]> {
+  return (
+    await db
+      .prepare("SELECT version, object_key, created_at, actor, bytes, source_url FROM pages WHERE thread_id = ?1 ORDER BY version")
+      .bind(threadId)
+      .all<PageRow>()
+  ).results;
+}
+
+/**
+ * Sets a thread's link to an artifact on claude.ai and makes it the main section, or (`url` null) clears it, the
+ * main section going back to the page when the thread has one, else to its text. The `link-set` event keeps the
+ * address it replaced. A link set again to what it already is still writes its event: it is what was asked.
+ */
+export async function setLink(db: D1Database, number: number, url: string | null, title: string | null, actor: Author): Promise<ThreadRow | null> {
+  const now = new Date().toISOString();
+  const e = new Params();
+  const event = statement(
+    db,
+    `INSERT INTO events (thread_id, at, actor, type, data)
+     SELECT id, ${e.add(now)}, ${e.add(actor)}, 'link-set', json_object('url', ${e.add(url)}, 'title', ${e.add(title)}, 'before', link_url)
+     FROM threads WHERE number = ${e.add(number)}`,
+    e,
+  );
+  const u = new Params();
+  const main =
+    url === null ? "CASE WHEN EXISTS (SELECT 1 FROM pages WHERE pages.thread_id = threads.id) THEN 'page' ELSE 'text' END" : "'link'";
+  const update = statement(
+    db,
+    `UPDATE threads SET link_url = ${u.add(url)}, link_title = ${u.add(title)}, main = ${main}, activity_at = ${u.add(now)}
+     WHERE number = ${u.add(number)} RETURNING ${COLUMNS}`,
+    u,
+  );
+  const [, updated] = await db.batch<ThreadRow>([event, update]);
+  return updated?.results[0] ?? null;
 }

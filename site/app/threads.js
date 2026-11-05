@@ -3,8 +3,11 @@
 // hands over at /threads/ and at every thread's own address). Three views, each at its own address: Today
 // (/threads/: new notes, and open threads that sat a week untouched), the list (/threads/?tab=act&space=company:
 // four tabs by where a thread stands, and the five spaces), and a thread (/threads/42-who-owns-what): its living
-// summary on top, then its main text, then its comments and its history in the order they happened. Everything
-// comes from the threads' private calls (threads-store.js); the page holds no data of its own.
+// summary on top, then its main section, then its comments and its history in the order they happened. The main
+// section is the thread's text, a page or a link: a page is a Claude artifact's own HTML, shown in a sealed frame
+// at its own address (the Worker's src/page.ts sets the seal) with a bar for its versions, Open in Claude and full
+// screen; a link is a card that opens an artifact on claude.ai. Everything comes from the threads' private calls
+// (threads-store.js); the page holds no data of its own.
 //
 // It carries the inbox's ways of working: one key or tap sorts a thread (keys.js), no move asks "are you sure"
 // (each shows a toast with Undo, which sends the move that reverses it), a move shows at once and is saved behind
@@ -23,11 +26,12 @@
 import { SPACES } from '../spaces.js';
 import { SHEET, commandFor } from './keys.js';
 import { parse, summaryLines } from './markdown.js';
-import { Failed, Missing, SignedOut, comment, edit, listAll, move, search, show, signInAddress, start } from './threads-store.js';
+import { Failed, Missing, SignedOut, comment, edit, listAll, move, pageAddress, search, show, signInAddress, start } from './threads-store.js';
 
 /**
  * @typedef {import('./threads-store.js').Thread} Thread
  * @typedef {import('./threads-store.js').Shown} Shown
+ * @typedef {import('./threads-store.js').Page} Page
  * @typedef {import('./threads-store.js').Event} ThreadEvent
  * @typedef {import('./threads-store.js').Comment} ThreadComment
  * @typedef {import('./threads-store.js').Tab} Tab
@@ -40,7 +44,7 @@ import { Failed, Missing, SignedOut, comment, edit, listAll, move, search, show,
  * @typedef {{ to: string, subject: string, body: string }} Draft
  * @typedef {{ title: string, summary: string, body: string }} Editing
  * @typedef {{ title: string, space: string, status: 'received' | 'act' | 'discuss', body: string }} NewDraft
- * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space'} Overlay
+ * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions'} Overlay
  * @typedef {{ label: string, sub: string, side: string, number: number | null, run: () => void }} FindItem
  */
 
@@ -89,6 +93,10 @@ const SEARCH_WAIT_MS = 150;
 const TELUGU = /[ఀ-౿]/;
 /** Marks this device as one that has signed in before, so a signed-out visit shows a small "Sign in". */
 const SIGNED_IN_KEY = 'threads:signed-in';
+/** The sandbox a page's frame runs in, the same tokens its answer's CSP names (src/page.ts). */
+const PAGE_SANDBOX = 'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox';
+/** The heights a page may ask its frame for; anything else is ignored. */
+const PAGE_HEIGHT = { min: 160, max: 20000 };
 /** A thread's own address, with its title after the number or not. */
 const THREAD_PATH = /^\/threads\/([1-9]\d{0,8})(?:-[^/]*)?$/;
 
@@ -450,8 +458,8 @@ function prose(text) {
 function summaryBody(text) {
   const lines = summaryLines(text);
   if (lines === null) return prose(text);
-  const grid = el('dl', { class: 't-sum-lines' });
-  for (const line of lines) grid.append(el('dt', {}, [line.label]), el('dd', {}, inlineNodes(line.inline)));
+  const grid = el('dl', { class: 't-sum-grid' });
+  for (const line of lines) grid.append(el('div', {}, [el('dt', {}, [line.label]), el('dd', {}, inlineNodes(line.inline))]));
   return grid;
 }
 
@@ -477,6 +485,58 @@ function typingIn(target) {
 /** Whether a click asks for a new tab or window, which the page leaves to the browser. @param {MouseEvent} event */
 function wantsNewTab(event) {
   return event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
+}
+
+/** A row's small mark for a thread that shows a page or a link. @param {Thread} thread @returns {Node[]} */
+function rowMark(thread) {
+  if (thread.main === 'text') return [];
+  return [el('span', { class: 't-row-mark', title: thread.main === 'page' ? 'A page' : 'A link' }, [icon(thread.main === 'page' ? 'doc' : 'link')])];
+}
+
+/**
+ * The card a link thread shows: the artifact's title and address, and Open in Claude, in a new tab.
+ * @param {{ url: string, title: string | null }} link
+ */
+function linkCard(link) {
+  const shown = link.url.replace(/^https:\/\//, '');
+  return el('section', { class: 't-link-card', 'aria-label': 'Link' }, [
+    el('div', { class: 't-link-thumb' }, [el('span', {}, ['Claude artifact']), el('b', {}, [link.title ?? 'On claude.ai'])]),
+    el('div', { class: 't-link-main' }, [
+      el('span', {}, [el('span', { class: 't-chip' }, [icon('link'), 'Claude artifact'])]),
+      el('b', {}, [link.title ?? 'A Claude artifact']),
+      el('small', {}, [shown]),
+      el('p', {}, ['Kept as a link: it opens only on claude.ai, for the people it is shared with there.']),
+      el('span', {}, [el('a', { class: 't-btn t-btn-primary', href: link.url, target: '_blank', rel: 'noopener' }, ['Open in Claude'])]),
+    ]),
+  ]);
+}
+
+/**
+ * Puts a freshly drawn thread into the pane while keeping the page's frame that is already there, so a move, a
+ * comment or a toggle never reloads the page (an iframe taken out of the document loads again). Everything around
+ * the frame is replaced; the frame's own bar too. False when there is no such frame to keep.
+ * @param {HTMLElement} pane
+ * @param {HTMLElement} view
+ */
+function keepFrame(pane, view) {
+  const fresh = view.querySelector('.t-page');
+  const key = fresh instanceof HTMLElement ? fresh.dataset.pageKey : undefined;
+  const kept = key === undefined ? null : pane.querySelector(`.t-page[data-page-key="${key}"]`);
+  const doc = kept?.parentElement;
+  const freshDoc = fresh?.parentElement;
+  const details = pane.querySelector('.t-details');
+  const freshDetails = view.querySelector('.t-details');
+  if (!(kept instanceof HTMLElement) || !(fresh instanceof HTMLElement) || !doc || !freshDoc || !details || !freshDetails) return false;
+  const children = [...freshDoc.children];
+  const at = children.indexOf(fresh);
+  for (const child of [...doc.children]) if (child !== kept) child.remove();
+  kept.before(...children.slice(0, at));
+  kept.after(...children.slice(at + 1));
+  const bar = fresh.querySelector('.t-page-bar');
+  if (bar) kept.querySelector('.t-page-bar')?.replaceWith(bar);
+  kept.dataset.full = fresh.dataset.full ?? 'false';
+  details.replaceWith(freshDetails);
+  return true;
 }
 
 class Threads {
@@ -525,6 +585,10 @@ class Threads {
     this.commentPreview = false;
     /** Which edits show the text they replaced. @type {Set<number>} */
     this.opened = new Set();
+    /** The page version shown, by thread; the newest when a thread has none here. @type {Map<number, number>} */
+    this.pageVersions = new Map();
+    /** Whether the page fills the window. */
+    this.pageFull = false;
     /** @type {Overlay} */
     this.overlay = null;
     /** @type {NewDraft | null} */
@@ -555,6 +619,7 @@ class Threads {
     document.addEventListener('change', (event) => this.onChange(event));
     document.addEventListener('submit', (event) => this.onSubmit(event));
     window.addEventListener('popstate', () => this.go(routeOf(location), false));
+    window.addEventListener('message', (event) => this.onPageHeight(event));
     // A dialog's close arrives as a task, after another may already have opened in its place; only a dialog still
     // closed is emptied, so nothing in it keeps the focus and keys reach the page again.
     this.dialog.addEventListener('close', () => {
@@ -651,6 +716,7 @@ class Threads {
    */
   async go(route, push = true) {
     this.closeOverlay();
+    this.pageFull = false;
     this.editing = null;
     this.reply = null;
     this.commentPreview = false;
@@ -671,7 +737,7 @@ class Threads {
     }
     this.sel = route.number;
     const known = this.threads.get(route.number);
-    this.shown = known ? { thread: known, comments: [], events: [], truncated: false } : null;
+    this.shown = known ? { thread: known, page: null, comments: [], events: [], truncated: false } : null;
     this.render();
     this.main.scrollTop = 0;
     try {
@@ -750,7 +816,8 @@ class Threads {
     this.renderNav();
     this.renderTabbar();
     if (this.route.view === 'thread') {
-      this.main.replaceChildren(this.threadView());
+      const view = this.threadView();
+      if (!keepFrame(this.main, view)) this.main.replaceChildren(view);
       const thread = this.shown?.thread;
       document.title = thread ? `#${thread.number} ${titleOf(thread)} · Threads` : 'Threads';
       if (thread && location.pathname !== threadPath(thread)) history.replaceState(null, '', threadPath(thread));
@@ -814,7 +881,7 @@ class Threads {
     meta.append(el('span', {}, [ago(thread.activityAt)]));
     const row = el('a', { class: 't-row', href: threadPath(thread), 'data-thread': String(thread.number), 'aria-selected': String(this.sel === thread.number) }, [
       el('span', { class: 't-num' }, [`#${thread.number}`]),
-      el('span', { class: 't-row-main' }, [el('span', { class: 't-row-title' }, [titleOf(thread)]), el('span', { class: 't-row-sub' }, [sub])]),
+      el('span', { class: 't-row-main' }, [el('span', { class: 't-row-title' }, [...rowMark(thread), titleOf(thread)]), el('span', { class: 't-row-sub' }, [sub])]),
       meta,
     ]);
     return row;
@@ -938,15 +1005,7 @@ class Threads {
           summaryBody(thread.summary),
         ])
       : el('section', { class: 't-summary t-summary-empty', 'aria-label': 'Summary' }, ['No summary yet. The sync writes one at its next pass, or press ', kbd('W'), ' to write it.']);
-    const text = visitor
-      ? [
-          el('div', { class: 't-byline' }, [
-            avatar('visitor', thread.senderName ?? ''),
-            el('span', {}, [el('b', {}, [thread.senderName?.trim() || 'Someone']), ` wrote, ${when(thread.createdAt)}${thread.senderEmail ? ` · ${thread.senderEmail}` : ''}`]),
-          ]),
-          plain(thread.body),
-        ]
-      : [prose(thread.body)];
+    const text = this.mainSection(thread, this.shown.page);
     const doc = el('article', { class: 't-doc' }, [
       crumbs,
       el('h1', { class: 't-title' }, [el('span', { class: 't-tn' }, [`#${thread.number}`]), ' ', titleOf(thread)]),
@@ -960,6 +1019,80 @@ class Threads {
       this.composer(thread),
     ]);
     return el('div', { class: 't-thread' }, [doc, this.details(thread)]);
+  }
+
+  /**
+   * A thread's main section: its page, its link, or its text (a visitor's own words as typed, else Markdown). A page
+   * thread still waiting for its call shows nothing in the page's place, so nothing jumps when it arrives.
+   * @param {Thread} thread
+   * @param {Page | null} page
+   * @returns {HTMLElement[]}
+   */
+  mainSection(thread, page) {
+    if (thread.main === 'page') return page ? [this.pageSection(thread, page)] : [];
+    if (thread.main === 'link' && thread.link) return [linkCard(thread.link)];
+    if (thread.source !== 'talk') return [prose(thread.body)];
+    const name = thread.senderName?.trim() || 'Someone';
+    return [
+      el('div', { class: 't-byline' }, [
+        avatar('visitor', thread.senderName ?? ''),
+        el('span', {}, [el('b', {}, [name]), ` wrote, ${when(thread.createdAt)}${thread.senderEmail ? ` · ${thread.senderEmail}` : ''}`]),
+      ]),
+      plain(thread.body),
+    ];
+  }
+
+  /**
+   * A thread's page: its bar (the version shown, when it was saved, Versions, Open in Claude for the owner when
+   * the version names its claude.ai address, Full screen) over its frame, which loads the version from the thread's
+   * own call. The frame is 600 px tall until the page says its height.
+   * @param {Thread} thread
+   * @param {Page} page
+   */
+  pageSection(thread, page) {
+    const version = this.pageVersions.get(thread.number) ?? page.version;
+    const shown = page.versions.find((one) => one.version === version) ?? page.versions[page.versions.length - 1];
+    const number = shown?.version ?? page.version;
+    const older = number !== page.version;
+    const bar = el('div', { class: 't-page-bar' }, [
+      icon('doc'),
+      el('b', {}, ['Page']),
+      el('span', {}, [`version ${number} · saved ${shown ? when(shown.savedAt) : ''}`]),
+      ...(older ? [el('span', { class: 't-page-old' }, [`An earlier version. The newest is ${page.version}.`])] : []),
+      el('span', { class: 't-grow' }),
+      ...(page.versions.length > 1 ? [el('button', { type: 'button', class: 't-btn', 'data-act': 'page-versions' }, ['Versions'])] : []),
+      ...(shown?.source ? [el('a', { class: 't-btn', href: shown.source, target: '_blank', rel: 'noopener' }, ['Open in Claude'])] : []),
+      el('button', { type: 'button', class: 't-btn', 'data-act': 'page-full' }, [this.pageFull ? 'Back to thread' : 'Full screen']),
+    ]);
+    const frame = el('iframe', { class: 't-page-frame', sandbox: PAGE_SANDBOX, src: pageAddress(thread.number, number), title: `Page, version ${number}`, loading: 'lazy' });
+    return el('section', { class: 't-page', 'aria-label': 'Page', 'data-page-key': `${thread.number}-${number}`, 'data-full': String(this.pageFull) }, [bar, frame]);
+  }
+
+  /**
+   * A page's height, from the script its answer carries: taken only from the open page's own frame, and only as a
+   * number in range, so nothing else on the screen can resize it.
+   * @param {MessageEvent} event
+   */
+  onPageHeight(event) {
+    const frame = this.main.querySelector('.t-page-frame');
+    if (!(frame instanceof HTMLIFrameElement) || event.source !== frame.contentWindow) return;
+    const data = /** @type {unknown} */ (event.data);
+    const height = typeof data === 'object' && data !== null && 'whysosureshPageHeight' in data ? data.whysosureshPageHeight : null;
+    if (typeof height !== 'number' || !Number.isFinite(height) || height < PAGE_HEIGHT.min || height > PAGE_HEIGHT.max) return;
+    frame.style.height = `${Math.round(height)}px`;
+  }
+
+  /** @param {Thread} thread @param {Page} page */
+  openVersions(thread, page) {
+    const current = this.pageVersions.get(thread.number) ?? page.version;
+    const picks = [...page.versions].reverse().map((one) =>
+      el('button', { type: 'button', class: 't-pick', 'data-act': 'page-version', 'data-version': String(one.version), ...(one.version === current ? { 'aria-current': 'true' } : {}) }, [
+        `Version ${one.version} · ${when(one.savedAt)}`,
+        ...(one.version === page.version ? [el('span', { class: 't-chip' }, ['newest'])] : []),
+      ]),
+    );
+    this.openOverlay('versions', `Versions of #${thread.number}'s page`, 'narrow', [this.sheetHead('Versions'), el('div', { class: 't-sheet-body' }, [el('div', { class: 't-pick-list' }, picks)])]);
+    picks.find((pick) => pick.getAttribute('aria-current') === 'true')?.focus();
   }
 
   /** @param {Thread} thread */
@@ -1074,6 +1207,13 @@ class Threads {
       case 'imported':
         [name, words] = ['doc', ['became a thread when the inbox did, in ', statusWord(data.status)]];
         break;
+      case 'page-saved':
+        [name, words] = ['doc', ['saved a page ', el('b', {}, [`(version ${typeof data.version === 'number' ? data.version : '?'})`])]];
+        break;
+      case 'link-set':
+        if (typeof data.url === 'string') [name, words] = ['link', ['linked a Claude artifact', ...(typeof data.title === 'string' ? [': ', word(data.title)] : [])]];
+        else [name, words] = ['link', ['removed the link']];
+        break;
       case 'edited': {
         const field = data.field === 'body' ? 'main text' : data.field === 'title' ? 'title' : 'summary';
         name = 'pen';
@@ -1184,7 +1324,14 @@ class Threads {
       el('div', { class: 't-editor-form' }, [
         el('label', { class: 't-fld' }, [el('span', { class: 't-lbl' }, ['Title ', el('small', {}, ['one line, at most 200'])]), title]),
         el('label', { class: 't-fld' }, [el('span', { class: 't-lbl' }, ['Summary ', el('small', {}, ['four lines: Decided, Open, Waiting on, Next'])]), summary]),
-        el('label', { class: 't-fld' }, [el('span', { class: 't-lbl' }, ['Text ', el('small', {}, [visitor ? 'their words, never edited' : 'Markdown'])]), body]),
+        el('label', { class: 't-fld' }, [
+          el('span', { class: 't-lbl' }, [
+            thread.main === 'text' ? 'Text ' : 'Text, read by the command line and in email; this thread shows its ',
+            ...(thread.main === 'text' ? [] : [thread.main === 'page' ? 'page ' : 'link ']),
+            el('small', {}, [visitor ? 'their words, never edited' : 'Markdown']),
+          ]),
+          body,
+        ]),
         el('p', { class: 't-note' }, ['Every save keeps the earlier text in the history.']),
       ]),
       el('div', { class: 't-editor-preview', id: 'edit-preview', 'aria-label': 'Preview' }, this.editorPreview(thread, editing)),
@@ -1809,6 +1956,22 @@ class Threads {
       case 'found':
         this.runFound(Number(button.dataset.index));
         break;
+      case 'page-full':
+        this.pageFull = !this.pageFull;
+        this.keepScroll = true;
+        this.render();
+        break;
+      case 'page-versions':
+        if (thread && this.shown?.page) this.openVersions(thread, this.shown.page);
+        break;
+      case 'page-version':
+        if (thread) {
+          this.pageVersions.set(thread.number, Number(button.dataset.version));
+          this.closeOverlay();
+          this.keepScroll = true;
+          this.render();
+        }
+        break;
     }
   }
 
@@ -1874,7 +2037,12 @@ class Threads {
       return;
     }
     if (event.key === 'Escape') {
-      if (this.editing) {
+      if (this.pageFull) {
+        event.preventDefault();
+        this.pageFull = false;
+        this.keepScroll = true;
+        this.render();
+      } else if (this.editing) {
         event.preventDefault();
         this.editing = null;
         this.render();

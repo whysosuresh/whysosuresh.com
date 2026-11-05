@@ -10,6 +10,9 @@
 //   POST /threads/api/threads/<n>             {"action": ...}                  owner and sync
 //   POST /threads/api/threads/<n>/comments    {"body": ...}                    owner and sync
 //   POST /threads/api/threads/<n>/text        {"field": ..., "text": ...}      owner and sync
+//   POST /threads/api/threads/<n>/pages[?from=<claude.ai address>]   an HTML document   sync
+//   GET  /threads/api/threads/<n>/pages/<version>                             owner and sync
+//   POST /threads/api/threads/<n>/link        {"url": ..., "title": ...}       owner and sync
 //   GET  /threads/api/search?q=<words or a number>                            owner and sync
 //   GET  /threads/api/sign-in?next=<a threads page>                           owner and sync
 //
@@ -24,7 +27,11 @@
 // Text has its own call because a move is capped at 1 KiB. A search answers up to 20 threads for ⌘K: the one
 // with that number, or those whose title, summary or text hold the words. The sign-in is where the page sends a
 // signed-out owner: Access signs him in at the edge before the call arrives, and the call sends him on to the
-// threads page he came from, never anywhere else. Every thread answers its last activity (`activityAt`). The
+// threads page he came from, never anywhere else. A thread's main section is its text, a page or a link (`main`):
+// a page is a Claude artifact's own HTML, which the sync saves as a new version (the object in the private bucket
+// first, then its row, the object deleted again when the row isn't kept) and the threads page frames from its own
+// address, sealed by that answer's headers (src/page.ts); a link is an address on claude.ai, for an artifact that
+// only works there, and an empty one clears it. Every thread answers its last activity (`activityAt`). The
 // owner's writes must come from his own page; `reply-opened` is his alone and `file` the sync's. Nothing
 // personal is logged: a refusal's line holds its status and reason only.
 
@@ -32,6 +39,7 @@ import { isSpace } from "../site/spaces.js";
 import { identify, type Caller } from "./access.ts";
 import type { Bindings } from "./bindings.ts";
 import { json, type JsonValue } from "./json.ts";
+import { servePage, withSkeleton } from "./page.ts";
 import { sameOrigin } from "./request.ts";
 import {
   comment,
@@ -40,12 +48,17 @@ import {
   find,
   history,
   isTab,
+  findPage,
   listByNumber,
   makeMove,
   onlyFor,
+  pagesOf,
+  savePage,
   search,
+  setLink,
   type CommentRow,
   type EventRow,
+  type PageRow,
   type ThreadRow,
 } from "./store.ts";
 import {
@@ -80,6 +93,14 @@ const MAX_SEARCH = 100;
  */
 const NEXT_SHAPE = /^\/threads\/(?:[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?$/;
 const SPACE: SpaceKey = { key: "space", allowed: isSpace };
+/** The largest page: claude.ai holds a page to "16MB or smaller", and 16 MiB is at least that. */
+export const MAX_PAGE_BYTES = 16 * 1024 * 1024;
+/** The only place a link, or a page's source, may point: an address on claude.ai. */
+const CLAUDE = "https://claude.ai/";
+/** The longest such address. */
+const MAX_ADDRESS = 500;
+/** The longest link title, in UTF-16 code units of the trimmed text. */
+const MAX_LINK_TITLE = 200;
 
 /** A thread as both callers see it. */
 function thread(row: ThreadRow): { readonly [key: string]: JsonValue } {
@@ -102,7 +123,32 @@ function thread(row: ThreadRow): { readonly [key: string]: JsonValue } {
     filedLink: row.filed_link,
     movedAt: row.moved_at,
     activityAt: row.activity_at,
+    main: row.main,
+    link: row.link_url === null ? null : { url: row.link_url, title: row.link_title },
   };
+}
+
+/** A thread's page as its call answers it: the newest version, and every version; null when it has none. */
+function pageView(pages: readonly PageRow[]): JsonValue {
+  const newest = pages[pages.length - 1];
+  if (newest === undefined) return null;
+  return {
+    version: newest.version,
+    savedAt: newest.created_at,
+    source: newest.source_url,
+    versions: pages.map((page) => ({ version: page.version, savedAt: page.created_at, actor: page.actor, bytes: page.bytes, source: page.source_url })),
+  };
+}
+
+/** An address on claude.ai, as a link or a page's source names it, or null when it isn't one. */
+function claudeAddress(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > MAX_ADDRESS || !value.startsWith(CLAUDE) || /[\s\u0000-\u001f\u007f]/.test(value)) return null;
+  try {
+    const url = new URL(value);
+    return url.origin === "https://claude.ai" && url.username === "" && url.password === "" ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 function commentView(row: CommentRow): { readonly [key: string]: JsonValue } {
@@ -150,9 +196,10 @@ async function add(request: Request, env: Bindings, caller: Caller): Promise<Res
 async function show(number: number, env: Bindings): Promise<Response> {
   const row = await find(env.DB, { number });
   if (row === null) return refuse(404, "no-thread");
-  const { comments, events } = await history(env.DB, row.id, HISTORY + 1);
+  const [{ comments, events }, pages] = await Promise.all([history(env.DB, row.id, HISTORY + 1), pagesOf(env.DB, row.id)]);
   return json(200, {
     thread: thread(row),
+    page: pageView(pages),
     comments: comments.slice(0, HISTORY).map(commentView),
     events: events.slice(0, HISTORY).map(eventView),
     truncated: comments.length > HISTORY || events.length > HISTORY,
@@ -216,6 +263,74 @@ async function lookUp(url: URL, env: Bindings): Promise<Response> {
   return json(200, { threads: (await search(env.DB, trimmed)).map(thread) });
 }
 
+/**
+ * Keeps a new version of a thread's page: the sync's alone. The body is the HTML document itself, well-formed
+ * UTF-8, at most 16 MiB by its declared length before anything is read; `from`, when given, is the claude.ai address
+ * it was read from. The object is written first, under a fresh key, then its row; when the row isn't kept (no such
+ * thread, or a save racing another for the version) the object is deleted again.
+ */
+async function addPage(request: Request, url: URL, number: number, env: Bindings, caller: Caller): Promise<Response> {
+  if (caller.caller !== "sync") return refuse(403, "sync-only");
+  if ([...url.searchParams.keys()].some((key) => key !== "from") || url.searchParams.getAll("from").length > 1) return refuse(400, "query");
+  const given = url.searchParams.get("from");
+  const source = given === null ? null : claudeAddress(given);
+  if (given !== null && source === null) return refuse(400, "from");
+  const declared = request.headers.get("Content-Length");
+  if (declared === null || !/^\d{1,12}$/.test(declared)) return refuse(411, "length");
+  if (Number(declared) > MAX_PAGE_BYTES) return refuse(413, "too-large");
+  if ((request.headers.get("Content-Type") ?? "").split(";")[0]?.trim().toLowerCase() !== "text/html") return refuse(415, "type");
+
+  const bytes = await request.arrayBuffer();
+  if (bytes.byteLength > MAX_PAGE_BYTES) return refuse(413, "too-large");
+  let html: string;
+  try {
+    html = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
+  } catch {
+    return refuse(400, "encoding");
+  }
+  if (html.trim() === "") return refuse(400, "page");
+  const stored = new TextEncoder().encode(withSkeleton(html));
+  if (stored.byteLength > MAX_PAGE_BYTES) return refuse(413, "too-large");
+
+  const objectKey = `pages/${crypto.randomUUID()}.html`;
+  await env.PAGES.put(objectKey, stored, { httpMetadata: { contentType: "text/html; charset=utf-8" } });
+  let saved: Awaited<ReturnType<typeof savePage>>;
+  try {
+    saved = await savePage(env.DB, number, { objectKey, bytes: stored.byteLength, sourceUrl: source }, caller.caller);
+  } catch {
+    await env.PAGES.delete(objectKey);
+    return refuse(409, "busy");
+  }
+  if (saved === null) {
+    await env.PAGES.delete(objectKey);
+    return refuse(404, "no-thread");
+  }
+  return json(201, { version: saved.version, thread: thread(saved.row) });
+}
+
+/** One version of a thread's page, as its frame loads it (src/page.ts); a missing one answers as a missing thread. */
+async function readPage(request: Request, number: number, given: string, env: Bindings): Promise<Response> {
+  if (!NUMBER_SHAPE.test(given)) return refuse(404, "no-thread");
+  const page = await findPage(env.DB, number, Number(given));
+  if (page === null) return refuse(404, "no-thread");
+  return (await servePage(env.PAGES, page.object_key, request)) ?? refuse(404, "no-thread");
+}
+
+/** Sets a thread's link to an artifact on claude.ai, with a title, or clears it with an empty address. */
+async function replaceLink(request: Request, number: number, env: Bindings, caller: Caller): Promise<Response> {
+  const length = lengthRefusal(request, MAX_CHANGE_BYTES);
+  if (length !== null) return length;
+  const fields = exactly(await readJson(request), ["title", "url"]);
+  if (fields === null || typeof fields.url !== "string" || typeof fields.title !== "string") return refuse(400, "link");
+  const clearing = fields.url === "";
+  const url = clearing ? null : claudeAddress(fields.url);
+  const title = fields.title.trim() === "" ? null : line(fields.title, MAX_LINK_TITLE);
+  if ((!clearing && url === null) || (fields.title.trim() !== "" && title === null)) return refuse(400, "link");
+  const row = await setLink(env.DB, number, url, clearing ? null : title, caller.caller);
+  if (row === null) return refuse(404, "no-thread");
+  return json(200, { thread: thread(row) });
+}
+
 /** Sends a caller Access has just signed in back to the threads page they came from, or to the threads. */
 function signedIn(url: URL): Response {
   const next = url.searchParams.get("next");
@@ -238,7 +353,13 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
     if (request.method === "POST") return add(request, env, who);
     return json(405, { reason: "method" }, { Allow: "GET, POST" });
   }
-  const route = /^\/threads\/api\/threads\/([^/]+)(?:\/(comments|text))?$/.exec(url.pathname);
+  const version = /^\/threads\/api\/threads\/([^/]+)\/pages\/([^/]+)$/.exec(url.pathname);
+  if (version !== null) {
+    if (request.method !== "GET") return json(405, { reason: "method" }, { Allow: "GET" });
+    const [, number = "", page = ""] = version;
+    return NUMBER_SHAPE.test(number) ? readPage(request, Number(number), page, env) : refuse(404, "no-thread");
+  }
+  const route = /^\/threads\/api\/threads\/([^/]+)(?:\/(comments|text|pages|link))?$/.exec(url.pathname);
   if (route === null) return json(404, { reason: "not-found" });
   const [, given = "", part] = route;
   const reading = part === undefined && request.method === "GET";
@@ -253,5 +374,7 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
   if (reading) return show(number, env);
   if (part === "comments") return addComment(request, number, env, who);
   if (part === "text") return replaceText(request, number, env, who);
+  if (part === "pages") return addPage(request, url, number, env, who);
+  if (part === "link") return replaceLink(request, number, env, who);
   return move(request, number, env, who);
 }

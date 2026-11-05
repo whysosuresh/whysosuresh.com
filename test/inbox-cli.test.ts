@@ -1,14 +1,15 @@
 // The inbox's command line (tools/inbox/), driven through its logic with a played fetch: each verb's request to
 // the threads' calls, by the thread's number, with the service token's two Access headers and the client id
 // wrangler.jsonc names; a list followed through every page; an add answered line by line; a comment and an edit
-// taking their words from stdin as they are; the Worker's refusals and the edge's passed through with a
+// taking their words from stdin as they are; a page sent from a file as HTML, refused here past 16 MiB; a link set
+// and cleared; the Worker's refusals and the edge's passed through with a
 // non-zero exit; usage errors; and the secret in no line it prints. One run of the real entry point as a child
 // process proves Node runs the TypeScript as it is.
 
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ORIGIN, SECRET_VARIABLE, USAGE, readClientId, run, type Io } from "../tools/inbox/run.ts";
+import { MAX_PAGE_BYTES, ORIGIN, SECRET_VARIABLE, USAGE, readClientId, run, type Io } from "../tools/inbox/run.ts";
 import { INBOX_SYNC_CLIENT_ID } from "./harness.ts";
 
 const SECRET = "played-secret-0123456789abcdef";
@@ -18,13 +19,15 @@ interface Sent {
   method: string;
   headers: Record<string, string>;
   body: string | null;
+  /** A body sent as bytes, such as a page. */
+  bytes: Uint8Array | null;
   redirect: string | undefined;
 }
 
 type Reply = { status: number; body?: unknown; type?: string; text?: string };
 
 /** A client whose fetch answers each request in turn with the replies given, and records what was sent. */
-function client(replies: Reply[], options: { env?: Record<string, string>; stdin?: string } = {}) {
+function client(replies: Reply[], options: { env?: Record<string, string>; stdin?: string; files?: Record<string, Uint8Array> } = {}) {
   const sent: Sent[] = [];
   const out: string[] = [];
   const err: string[] = [];
@@ -35,6 +38,7 @@ function client(replies: Reply[], options: { env?: Record<string, string>; stdin
         method: init.method ?? "GET",
         headers: { ...(init.headers as Record<string, string>) },
         body: typeof init.body === "string" ? init.body : null,
+        bytes: init.body instanceof Uint8Array ? init.body : null,
         redirect: init.redirect,
       });
       const reply = replies.shift() ?? { status: 599, text: "no reply played" };
@@ -46,6 +50,11 @@ function client(replies: Reply[], options: { env?: Record<string, string>; stdin
     },
     env: options.env ?? { [SECRET_VARIABLE]: SECRET },
     stdin: async () => options.stdin ?? "",
+    readFile: (path) => {
+      const file = options.files?.[path];
+      if (file === undefined) throw new Error("no such file");
+      return file;
+    },
     out: (line) => out.push(line),
     err: (line) => err.push(line),
     clientId: INBOX_SYNC_CLIENT_ID,
@@ -235,6 +244,70 @@ describe("show", () => {
   });
 
   it.each([[["show"]], [["show", "0"]], [["show", "42", "43"]]])("refuses %j as a usage error", async (argv) => {
+    const { io, sent } = client([]);
+    expect(await run(argv, io)).toBe(2);
+    expect(sent).toEqual([]);
+  });
+});
+
+describe("page", () => {
+  const html = new TextEncoder().encode("<!doctype html><h1>Pricing</h1>");
+
+  it("sends the file as HTML to the thread's pages, with the address it was read from, and prints the version", async () => {
+    const { io, sent, out } = client([{ status: 201, body: { version: 2, thread: THREAD } }], { files: { "pricing.html": html } });
+    expect(await run(["page", "42", "pricing.html", "--from", "https://claude.ai/artifact/Kq7"], io)).toBe(0);
+    expect(sent).toEqual([
+      {
+        url: `${THREADS}/42/pages?from=https%3A%2F%2Fclaude.ai%2Fartifact%2FKq7`,
+        method: "POST",
+        headers: { "CF-Access-Client-Id": INBOX_SYNC_CLIENT_ID, "CF-Access-Client-Secret": SECRET, "Content-Type": "text/html; charset=utf-8" },
+        body: null,
+        bytes: html,
+        redirect: "manual",
+      },
+    ]);
+    expect(out).toEqual(["2"]);
+  });
+
+  it("refuses a file larger than the Worker keeps before sending anything", async () => {
+    const { io, sent, err } = client([], { files: { "big.html": new Uint8Array(MAX_PAGE_BYTES + 1) } });
+    expect(await run(["page", "42", "big.html"], io)).toBe(1);
+    expect(sent).toEqual([]);
+    expect(err.join("\n")).toContain("refused");
+  });
+
+  it("says so when the file can't be read, and passes the Worker's refusal through", async () => {
+    const missing = client([]);
+    expect(await run(["page", "42", "nowhere.html"], missing.io)).toBe(1);
+    expect(missing.err.join("\n")).toContain("can't read nowhere.html");
+    const refused = client([{ status: 400, body: { reason: "from" } }], { files: { "p.html": html } });
+    expect(await run(["page", "42", "p.html", "--from", "https://example.com/"], refused.io)).toBe(1);
+    expect(refused.err).toEqual(["inbox: page refused (400 from)"]);
+  });
+
+  it.each([[["page"]], [["page", "42"]], [["page", "x", "p.html"]], [["page", "42", "p.html", "--title", "x"]]])("is a usage error for %j", async (argv) => {
+    const { io, sent } = client([]);
+    expect(await run(argv, io)).toBe(2);
+    expect(sent).toEqual([]);
+  });
+});
+
+describe("link", () => {
+  it("sets a claude.ai address with a title, and clears it", async () => {
+    const { io, sent, out } = client([
+      { status: 200, body: { thread: { ...THREAD, main: "link" } } },
+      { status: 200, body: { thread: { ...THREAD, main: "text" } } },
+    ]);
+    expect(await run(["link", "42", "https://claude.ai/artifact/Ux3", "--title", "Launch talk slides"], io)).toBe(0);
+    expect(await run(["link", "42", "--clear"], io)).toBe(0);
+    expect(sent.map((one) => [one.url, one.headers["Content-Type"], one.body && JSON.parse(one.body)])).toEqual([
+      [`${THREADS}/42/link`, "application/json", { url: "https://claude.ai/artifact/Ux3", title: "Launch talk slides" }],
+      [`${THREADS}/42/link`, "application/json", { url: "", title: "" }],
+    ]);
+    expect(out.map((line) => JSON.parse(line).main)).toEqual(["link", "text"]);
+  });
+
+  it.each([[["link", "42"]], [["link", "42", "--clear", "x"]], [["link", "42", "https://claude.ai/x", "--from", "y"]]])("is a usage error for %j", async (argv) => {
     const { io, sent } = client([]);
     expect(await run(argv, io)).toBe(2);
     expect(sent).toEqual([]);

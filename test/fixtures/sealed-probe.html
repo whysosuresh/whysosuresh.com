@@ -1,0 +1,67 @@
+<!doctype html>
+<!-- A page that tries every way out of the frame a thread's page runs in (src/page.ts), and prints what each
+     attempt gave. Saved into a thread on the signed-in local site (npm run dev:signed-in) and live, every line
+     should read "blocked"; any "open" is a hole. It is a test fixture, never served from site/. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sealed probe</title>
+<style>
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 16px; }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  li { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
+  .open { font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>Sealed probe</h1>
+<p>Each line tries one way out of this frame. Every line should say <b>blocked</b>.</p>
+<ul id="out"></ul>
+<form id="form" action="https://example.com/collect" method="post" target="_blank"><input name="x" value="1"></form>
+<script>
+  const out = document.getElementById('out');
+  const say = (what, open, detail) => {
+    const li = document.createElement('li');
+    li.textContent = `${open ? 'OPEN' : 'blocked'}: ${what}${detail ? ` (${detail})` : ''}`;
+    if (open) li.className = 'open';
+    out.append(li);
+  };
+  const tryIt = (what, fn) => {
+    try {
+      const value = fn();
+      say(what, value !== undefined && value !== null && value !== '', String(value).slice(0, 60));
+    } catch (error) {
+      say(what, false, error.name);
+    }
+  };
+  tryIt('document.cookie', () => document.cookie);
+  tryIt('localStorage', () => { localStorage.setItem('probe', '1'); return localStorage.getItem('probe'); });
+  tryIt('sessionStorage', () => { sessionStorage.setItem('probe', '1'); return sessionStorage.getItem('probe'); });
+  tryIt('parent.document', () => parent.document.title);
+  tryIt('top.location.href', () => top.location.href);
+  tryIt('origin', () => (self.origin === 'null' ? '' : self.origin));
+  fetch('/threads/api/threads?tab=look').then(
+    (response) => say('fetch the threads with the owner\'s cookie', true, String(response.status)),
+    (error) => say('fetch the threads with the owner\'s cookie', false, error.name),
+  );
+  fetch('https://example.com/').then(
+    (response) => say('fetch another site', true, String(response.status)),
+    (error) => say('fetch another site', false, error.name),
+  );
+  const image = new Image();
+  image.onload = () => say('load an image from another site', true, 'loaded');
+  image.onerror = () => say('load an image from another site', false, 'error');
+  image.src = 'https://example.com/pixel.png';
+  let submitted = false;
+  document.getElementById('form').addEventListener('submit', () => { submitted = true; });
+  document.addEventListener('securitypolicyviolation', (event) => {
+    if (event.violatedDirective === 'form-action') say('submit a form to another site', false, 'form-action');
+  });
+  document.getElementById('form').requestSubmit();
+  const note = document.createElement('li');
+  note.textContent = `note: a form's own submit handler ${submitted ? 'ran, as forms in a page need' : 'did not run'}`;
+  out.append(note);
+</script>
+</body>
+</html>

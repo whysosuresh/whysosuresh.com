@@ -9,6 +9,7 @@ process.exitCode = await run(process.argv.slice(2), {
   fetch: (url, init) => fetch(url, init),
   env: process.env,
   stdin: async () => readFileSync(0, "utf8"),
+  readFile: (path) => new Uint8Array(readFileSync(path)),
   out: (line) => process.stdout.write(`${line}\n`),
   err: (line) => process.stderr.write(`${line}\n`),
   clientId: readClientId(new URL("../../wrangler.jsonc", import.meta.url)),
