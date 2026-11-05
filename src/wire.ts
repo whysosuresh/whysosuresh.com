@@ -118,6 +118,8 @@ export function readMove(value: unknown): Move | null {
     case "reopen":
     case "unsort":
     case "reply-opened":
+    case "publish":
+    case "unpublish":
       return keys === "action" ? { action: value.action } : null;
     case "drop": {
       if (keys !== "action,reason" || typeof value.reason !== "string") return null;

@@ -87,6 +87,13 @@ describe("list", () => {
     expect(out.map((line) => JSON.parse(line))).toEqual([THREAD, { number: 41 }, { number: 3 }]);
   });
 
+  it("passes each row's public time and waiting notes through whole", async () => {
+    const row = { ...THREAD, publicAt: "2026-11-05T09:00:00.000Z", shared: 0, waiting: false, pending: 2 };
+    const { io, out } = client([{ status: 200, body: { threads: [row], counts: {}, next: null } }]);
+    expect(await run(["list", "act"], io)).toBe(0);
+    expect(out.map((line) => JSON.parse(line))).toEqual([row]);
+  });
+
   it.each([
     ["the Worker's refusal", { status: 403, body: { reason: "caller" } }, "403 caller"],
     ["the edge's sign-in redirect, for no token", { status: 302 }, "302 sign-in"],
@@ -249,6 +256,14 @@ describe("show", () => {
     const { io, sent, out } = client([{ status: 200, body: answer }]);
     expect(await run(["show", "42"], io)).toBe(0);
     expect(sent.map((one) => [one.method, one.url])).toEqual([["GET", `${THREADS}/42`]]);
+    expect(out.map((line) => JSON.parse(line))).toEqual([answer]);
+  });
+
+  it("passes a public thread's fields through whole: its public time, and each note's state, name and email", async () => {
+    const note = { id: "c9", author: "visitor", name: "Tomás", audience: "public", state: "pending", body: "Hi.", createdAt: "2026-11-05T10:00:00.000Z", senderEmail: "tomas@example.com" };
+    const answer = { thread: { ...THREAD, publicAt: "2026-11-05T09:00:00.000Z" }, comments: [note], events: [], truncated: false };
+    const { io, out } = client([{ status: 200, body: answer }]);
+    expect(await run(["show", "42"], io)).toBe(0);
     expect(out.map((line) => JSON.parse(line))).toEqual([answer]);
   });
 

@@ -109,6 +109,7 @@ describe("a good note", () => {
       main: "text",
       link_url: null,
       link_title: null,
+      public_at: null,
     });
     expect(String(row?.created_at) >= before).toBe(true);
     expect(await rows("events")).toEqual([

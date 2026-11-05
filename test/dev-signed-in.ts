@@ -5,7 +5,10 @@
 // page shows what a visitor sees; `--member <address>` signs every call as a person signed in by that address, so
 // the page shows what an invited person sees. The seed always shares one thread ("Who owns what") with a made-up
 // person, Meera, at that address or meera@example.com, who has the last word on it, beside an "Only me" comment of
-// the owner's: the owner's Today shows it waiting on him, and the invited person never sees the note. Pages are seeded the way the sync saves them, through the threads' call with its
+// the owner's: the owner's Today shows it waiting on him, and the invited person never sees the note. One thread of
+// his own is public ("Shipping Stigmer 0.1.0, in public"), shared with the same person, with a comment of his
+// written for anyone, a visitor's note he OK'd and one waiting for his OK, whose words hold Markdown and a link that
+// must show as typed; signed out, its address shows the public view. Pages are seeded the way the sync saves them, through the threads' call with its
 // played token: the sealed probe (test/fixtures/sealed-probe.html, every line of which should read "blocked" in the
 // browser), and each file given with `--page <file>` (an
 // artifact's HTML as the Artifact tool's read saved it) as a version of one thread. Requests reach the Worker at
@@ -109,6 +112,31 @@ async function seed(): Promise<void> {
   await asSync(`/${pricing}/text`, { field: "summary", text: "Decided: small teams use it free until launch.\nOpen: per seat, per run, or flat.\nWaiting on: the cost per run.\nNext: pick one on Friday." });
   const slides = await add("chat:seed-slides", { title: "Launch talk slides", status: "act", space: "stigmer", body: "The launch talk, as slides on claude.ai." });
   await asSync(`/${slides}/link`, { url: "https://claude.ai/artifact/example-slides", title: "Launch talk" });
+
+  // A public thread of his own, with a comment for anyone, a note he OK'd, and one waiting for his OK.
+  const shipping = await add("chat:seed-public", {
+    title: "Shipping Stigmer 0.1.0, in public",
+    status: "act",
+    space: "stigmer",
+    body: "Writing down each step of the first release as it happens, so anyone can follow along.\n\n- the install page\n- the release notes\n- the launch talk",
+  });
+  await asSync(`/${shipping}/text`, { field: "summary", text: "Decided: 0.1.0 ships when the install works on all three systems.\nOpen: the Windows runner.\nNext: a fresh install on Windows on Friday." });
+  await asPerson(owner, `/${shipping}`, { action: "publish" });
+  await asPerson(owner, `/${shipping}/comments`, { body: "Day one: the install works on macOS and Linux. Windows next.", audience: "public" });
+  await asPerson(owner, `/${shipping}/people`, { add: { email: guest, name: "Meera" } });
+  const note = async (words: string, name: string, email: string): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const response = await harness.fetch(`${SITE}/api/threads/${shipping}/notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: SITE, "CF-Connecting-IP": "203.0.113.50" },
+      body: new TextEncoder().encode(JSON.stringify({ body: words, name, email, token: "pass" })),
+    });
+    if (response.status !== 201) throw new Error(`seeding a note on #${shipping} answered ${response.status}: ${await response.text()}`);
+  };
+  await note("Followed along from the install page. The Linux steps worked first time.", "Priya", "");
+  const okd = await database.prepare("SELECT id FROM comments WHERE author = 'visitor' ORDER BY created_at LIMIT 1").first<{ id: string }>();
+  await asPerson(owner, `/${shipping}/comments/${okd?.id ?? ""}`, { action: "show" });
+  await note("Loved the install video. **not bold**\n[a link that stays text](https://example.com/should-not-link)\nWhen does Windows land?", "Tomás", "tomas@example.com");
 
   // One thread untouched for ten days, so Today has something that sat a week.
   const old = new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString();

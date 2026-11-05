@@ -25,6 +25,12 @@
 // owner's "Only me" comments never reach them. Who may call at all is asked of the same tables (`isInvited`), by
 // the threads' door and by the answer Cloudflare Access is given at sign-in (src/evaluate.ts), so the two can't
 // disagree about who is invited.
+//
+// One of his own threads may also be public (`public_at`, migrations/0011_public.sql): anyone reads it, with no
+// sign-in, through the public calls (src/public.ts), which ask their own queries here (`findPublic`,
+// `historyPublic`, `findPublicPage`, `publicPreview`), each holding the public condition (`PUBLIC`) in its own SQL.
+// A stranger sees only the comments written as Public that are shown. A visitor may send a note on a public thread
+// (`addNote`): it is a comment that waits for his OK (`state` `pending`), and only he shows or drops it (`judgeNote`).
 
 /** Where a thread came from: the site's note flow, something told to him in person, or his own. */
 export type Source = "talk" | "told" | "self";
@@ -35,8 +41,8 @@ export type Author = "owner" | "sync";
  * in with (lowercased), reads only the threads they are in.
  */
 export type Reader = { readonly caller: "owner" | "sync" } | { readonly caller: "member"; readonly email: string };
-/** Who may read a comment: everyone in the thread, or the owner and the sync only ("Only me"). */
-export type Audience = "thread" | "owner";
+/** Who may read a comment: everyone in the thread, the owner and the sync only ("Only me"), or anyone (a public thread). */
+export type Audience = "thread" | "owner" | "public";
 /** Who an event names: a private door's caller, the visitor who sent a note, or the copy from the inbox. */
 export type Actor = Author | "visitor" | "import";
 export type Status = "received" | "act" | "discuss" | "done" | "dropped" | "filed";
@@ -57,7 +63,7 @@ export function isTab(value: string): value is Tab {
 // The last activity reads the arrival time when it was never set: a thread the code before 0008 created between
 // that migration and its deploy. A plain expression, so it is safe in RETURNING.
 export const COLUMNS =
-  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title";
+  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at";
 
 export interface ThreadRow {
   id: string;
@@ -82,10 +88,14 @@ export interface ThreadRow {
   main: Main;
   link_url: string | null;
   link_title: string | null;
+  /** When he made it public; null while it isn't. */
+  public_at: string | null;
   /** On a list's rows only (`LIST_EXTRAS`): how many people the thread is shared with now. */
   shared?: number;
   /** On a list's rows only: 1 when the last word on it is an invited person's, else 0. */
   waiting?: number;
+  /** On a list's rows only: how many visitors' notes on it wait for his OK. */
+  pending?: number;
 }
 
 /** A thread's main section: its text, a page saved into it, or a link to an artifact on claude.ai. */
@@ -104,15 +114,23 @@ export interface PageRow {
 export interface CommentRow {
   id: string;
   thread_id: string;
-  /** `owner`, `sync`, or `member` for an invited person. */
+  /** `owner`, `sync`, `member` for an invited person, or `visitor` for a note sent on a public thread. */
   author: string;
   body: string;
   created_at: string;
   audience: string;
+  /** `shown`, `pending` (a visitor's note waiting for his OK) or `dropped`. */
+  state: string;
   /** The invited person who wrote it, and their name as it stands; null for the owner's and the sync's. */
   person_id: string | null;
   person_name: string | null;
+  /** A visitor's note only: the name and email they typed, each null when not given. */
+  sender_name: string | null;
+  sender_email: string | null;
 }
+
+/** A visitor's note as he rules on it: shown on the thread, dropped, or back to waiting (how the page undoes either). */
+export type Judgement = "show" | "drop" | "hold";
 
 /** A person a thread is shared with, as the owner sees them. */
 export interface PersonRow {
@@ -153,6 +171,13 @@ class Params {
 function locate(locator: Locator, p: Params): string {
   return `number = ${p.add(locator.number)}`;
 }
+
+/**
+ * The condition a public thread meets, on the row `threads`: he made it public, and it is his own, because a site
+ * note's and a told thread's words are someone else's. Every public query holds it, so a row changed by hand never
+ * leaks.
+ */
+const PUBLIC = "threads.public_at IS NOT NULL AND threads.source = 'self'";
 
 /** Every thread: how the store itself looks a thread up after a write it made as the owner or the sync. */
 const EVERY_THREAD: Reader = { caller: "owner" };
@@ -263,15 +288,17 @@ async function listed(db: D1Database, page: D1PreparedStatement): Promise<Listed
 }
 
 /**
- * What the owner's list says of each row beside the thread: how many people it is shared with now (`shared`), and
+ * What the owner's list says of each row beside the thread: how many people it is shared with now (`shared`),
  * whether the last word on it is an invited person's (`waiting`): their newest comment is later than the owner's
- * newest comment or change, so it waits on him until he comments, moves it or edits it. Derived from the rows
- * already kept, with nothing stored for it; times compare as the ISO strings every writer stamps.
+ * newest comment or change, so it waits on him until he comments, moves it or edits it; and how many visitors'
+ * notes on it wait for his OK (`pending`). Derived from the rows already kept, with nothing stored for it; times
+ * compare as the ISO strings every writer stamps.
  */
 const LIST_EXTRAS = `(SELECT COUNT(*) FROM members WHERE members.thread_id = threads.id AND members.removed_at IS NULL) AS shared,
   (COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.thread_id = threads.id AND comments.author = 'member'), '')
     > MAX(COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.thread_id = threads.id AND comments.author = 'owner'), ''),
-          COALESCE((SELECT MAX(at) FROM events WHERE events.thread_id = threads.id AND events.actor = 'owner'), ''))) AS waiting`;
+          COALESCE((SELECT MAX(at) FROM events WHERE events.thread_id = threads.id AND events.actor = 'owner'), ''))) AS waiting,
+  (SELECT COUNT(*) FROM comments WHERE comments.thread_id = threads.id AND comments.state = 'pending') AS pending`;
 
 /** Up to `limit` threads of a tab, newest number first, below `before` when given, each with `LIST_EXTRAS`. */
 export async function listByNumber(db: D1Database, tab: Tab, before: number | null, limit: number): Promise<Listed> {
@@ -295,15 +322,18 @@ export async function listShared(db: D1Database, email: string, limit: number): 
 
 /** The columns a comment is read with: its own, and the name of the invited person who wrote it. */
 const COMMENT_COLUMNS =
-  "comments.id, comments.thread_id, comments.author, comments.body, comments.created_at, comments.audience, comments.person_id, people.name AS person_name";
+  "comments.id, comments.thread_id, comments.author, comments.body, comments.created_at, comments.audience, comments.state, comments.person_id, people.name AS person_name, comments.sender_name, comments.sender_email";
 
-/** Events an invited person never sees: the owner's mail opening, and the copy from the old inbox. */
-const OWNERS_EVENTS = "'reply-opened', 'imported'";
+/**
+ * Events an invited person never sees: the owner's mail opening, the copy from the old inbox, and a visitor's note
+ * dropped or sent back to waiting, which would tell them a note arrived that they could never read.
+ */
+const OWNERS_EVENTS = "'reply-opened', 'imported', 'note-dropped', 'note-held'";
 
 /**
  * A thread's comments and events, oldest first, up to `limit` of each. An invited person reads only the comments
- * everyone in the thread may, and not the events that are the owner's own business; the door shapes the rest of
- * what they see (src/threads.ts).
+ * everyone in the thread may that are shown (never "Only me", never a note waiting for his OK or dropped), and not
+ * the events that are the owner's own business; the door shapes the rest of what they see (src/threads.ts).
  */
 export async function history(db: D1Database, threadId: string, limit: number, reader: Reader): Promise<{ comments: CommentRow[]; events: EventRow[] }> {
   const member = reader.caller === "member";
@@ -311,7 +341,7 @@ export async function history(db: D1Database, threadId: string, limit: number, r
     db
       .prepare(
         `SELECT ${COMMENT_COLUMNS} FROM comments LEFT JOIN people ON people.id = comments.person_id
-         WHERE comments.thread_id = ?1${member ? " AND comments.audience = 'thread'" : ""} ORDER BY comments.created_at, comments.id LIMIT ${limit}`,
+         WHERE comments.thread_id = ?1${member ? " AND comments.audience <> 'owner' AND comments.state = 'shown'" : ""} ORDER BY comments.created_at, comments.id LIMIT ${limit}`,
       )
       .bind(threadId),
     db
@@ -323,7 +353,7 @@ export async function history(db: D1Database, threadId: string, limit: number, r
 
 /** A move a door asks for, as the store's own intent. */
 export type Move =
-  | { readonly action: "act" | "discuss" | "done" | "reopen" | "unsort" | "reply-opened" }
+  | { readonly action: "act" | "discuss" | "done" | "reopen" | "unsort" | "reply-opened" | "publish" | "unpublish" }
   | { readonly action: "drop"; readonly reason: string | null }
   | { readonly action: "space"; readonly space: string }
   | { readonly action: "file"; readonly link: string };
@@ -394,6 +424,25 @@ function ruleOf(move: Move, now: string): Rule {
         only: "owner",
         event: () => ({ type: "reply-opened", data: "json_object()" }),
       };
+    case "publish":
+      // Putting words in front of anyone is his act, as an invitation is; only his own threads, never someone
+      // else's words. Like `space`, it leaves the status alone.
+      return {
+        from: [...OPEN, "done", "dropped", "filed"],
+        sets: (p) => [`public_at = ${p.add(now)}`],
+        where: "source = 'self' AND public_at IS NULL",
+        only: "owner",
+        event: () => ({ type: "published", data: "json_object()" }),
+      };
+    case "unpublish":
+      // Taking a thread back is never refused while it is public, whatever its row says.
+      return {
+        from: [...OPEN, "done", "dropped", "filed"],
+        sets: () => ["public_at = NULL"],
+        where: "public_at IS NOT NULL",
+        only: "owner",
+        event: () => ({ type: "unpublished", data: "json_object()" }),
+      };
     case "file":
       // Filing an issue needs GitHub, which only the sync holds. Filed is something to act on, so it carries
       // that kind: Reply comes back once it is Done.
@@ -413,10 +462,16 @@ export function onlyFor(move: Move): Author | null {
 }
 
 /**
- * Makes a move and writes its event, or neither: `no-thread` when there is no such thread, `not-from-here` when
- * the thread isn't where the move starts. Every move stamps `moved_at`.
+ * Makes a move and writes its event, or neither: `no-thread` when there is no such thread, `not-his-words` when it
+ * would publish a thread that isn't his own, `not-from-here` when the thread isn't where the move starts. Every
+ * move stamps `moved_at`.
  */
-export async function makeMove(db: D1Database, locator: Locator, move: Move, actor: Author): Promise<ThreadRow | "no-thread" | "not-from-here"> {
+export async function makeMove(
+  db: D1Database,
+  locator: Locator,
+  move: Move,
+  actor: Author,
+): Promise<ThreadRow | "no-thread" | "not-from-here" | "not-his-words"> {
   const now = new Date().toISOString();
   const rule = ruleOf(move, now);
   const guard = (p: Params): string => `${locate(locator, p)} AND status IN (${p.list(rule.from)})${rule.where === undefined ? "" : ` AND ${rule.where}`}`;
@@ -432,7 +487,9 @@ export async function makeMove(db: D1Database, locator: Locator, move: Move, act
   const [, updated] = await db.batch<ThreadRow>([statement(db, event, e), statement(db, update, u)]);
   const row = updated?.results[0];
   if (row !== undefined) return row;
-  return (await find(db, locator, EVERY_THREAD)) === null ? "no-thread" : "not-from-here";
+  const there = await find(db, locator, EVERY_THREAD);
+  if (there === null) return "no-thread";
+  return move.action === "publish" && there.source !== "self" ? "not-his-words" : "not-from-here";
 }
 
 /** The texts of a thread that can be rewritten: its title, the living summary on top, and the main text. */
@@ -460,10 +517,10 @@ export async function edit(db: D1Database, locator: Locator, field: TextField, t
 
 /**
  * Adds a comment to a thread the reader may read, which is activity on it; null when there is no such thread, or
- * none they may read. An invited person's comment names them, and is always for everyone in the thread; the door
- * keeps `owner` to the owner and the sync.
+ * none they may read, and `not-public` when it is written as Public on a thread that isn't. An invited person's
+ * comment names them; the door keeps `owner` to the owner and the sync, and `public` to the owner and members.
  */
-export async function comment(db: D1Database, locator: Locator, reader: Reader, body: string, audience: Audience): Promise<CommentRow | null> {
+export async function comment(db: D1Database, locator: Locator, reader: Reader, body: string, audience: Audience): Promise<CommentRow | null | "not-public"> {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   const p = new Params();
@@ -472,7 +529,7 @@ export async function comment(db: D1Database, locator: Locator, reader: Reader, 
   const insert = statement(
     db,
     `INSERT INTO comments (id, thread_id, author, body, created_at, audience, person_id)
-     SELECT ${columns} FROM threads WHERE ${locate(locator, p)}${readable(reader, p)}`,
+     SELECT ${columns} FROM threads WHERE ${locate(locator, p)}${readable(reader, p)}${audience === "public" ? ` AND ${PUBLIC}` : ""}`,
     p,
   );
   // Only the thread the comment above went into is touched, so a refused comment changes nothing.
@@ -485,7 +542,9 @@ export async function comment(db: D1Database, locator: Locator, reader: Reader, 
     r,
   );
   const [, , added] = await db.batch<CommentRow>([insert, touch, read]);
-  return added?.results[0] ?? null;
+  const row = added?.results[0];
+  if (row !== undefined) return row;
+  return audience === "public" && (await find(db, locator, reader)) !== null ? "not-public" : null;
 }
 
 /** The most threads one search answers. */
@@ -717,4 +776,136 @@ export async function uninvite(db: D1Database, number: number, personId: string)
   const row = touched?.results[0];
   if (row !== undefined) return row;
   return (await find(db, { number }, EVERY_THREAD)) === null ? "no-thread" : "not-invited";
+}
+
+/** A public thread by its number: one of his own he made public; null for any other number. */
+export async function findPublic(db: D1Database, number: number): Promise<ThreadRow | null> {
+  return db.prepare(`SELECT ${COLUMNS} FROM threads WHERE number = ?1 AND ${PUBLIC}`).bind(number).first<ThreadRow>();
+}
+
+/** A public thread's comments a stranger may read, oldest first, up to `limit`: written as Public, and shown. */
+export async function historyPublic(db: D1Database, threadId: string, limit: number): Promise<CommentRow[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT ${COMMENT_COLUMNS} FROM comments LEFT JOIN people ON people.id = comments.person_id JOIN threads ON threads.id = comments.thread_id
+         WHERE comments.thread_id = ?1 AND comments.audience = 'public' AND comments.state = 'shown' AND ${PUBLIC}
+         ORDER BY comments.created_at, comments.id LIMIT ${limit}`,
+      )
+      .bind(threadId)
+      .all<CommentRow>()
+  ).results;
+}
+
+/**
+ * One version of a public thread's page, while the page is its main section: a thread that moved on to a link keeps
+ * its earlier pages, and those were never public.
+ */
+export async function findPublicPage(db: D1Database, number: number, version: number): Promise<PageRow | null> {
+  return db
+    .prepare(
+      `SELECT pages.version, pages.object_key, pages.created_at, pages.actor, pages.bytes, pages.source_url
+       FROM pages JOIN threads ON threads.id = pages.thread_id
+       WHERE threads.number = ?1 AND pages.version = ?2 AND threads.main = 'page' AND ${PUBLIC}`,
+    )
+    .bind(number, version)
+    .first<PageRow>();
+}
+
+/** What a link preview may say of a thread, and whether it is public. */
+export interface PreviewRow {
+  number: number;
+  title: string | null;
+  summary: string | null;
+  body: string;
+  main: Main;
+  public: number;
+}
+
+/**
+ * The threads page's one read (src/pages.ts): a thread's number, title, summary, main text and whether it is
+ * public, asked of every number alike with one indexed query, so a private, a missing and a public number cost the
+ * same. Only a public thread's answer is ever used.
+ */
+export async function publicPreview(db: D1Database, number: number): Promise<PreviewRow | null> {
+  return db
+    .prepare(`SELECT number, title, summary, body, main, (${PUBLIC}) AS public FROM threads WHERE number = ?1`)
+    .bind(number)
+    .first<PreviewRow>();
+}
+
+/** A visitor's note on a public thread, as the door checked it. */
+export interface VisitorNote {
+  readonly body: string;
+  readonly name: string | null;
+  readonly email: string | null;
+}
+
+/**
+ * Keeps a visitor's note on a public thread: a comment for anyone that waits for his OK, with the name and email
+ * they typed, and the thread's last activity. It writes no event, because a comment is its own entry. The insert
+ * holds the public condition itself, so a note racing the thread being taken back is refused, not kept: false then.
+ */
+export async function addNote(db: D1Database, number: number, note: VisitorNote): Promise<boolean> {
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID();
+  const p = new Params();
+  const insert = statement(
+    db,
+    `INSERT INTO comments (id, thread_id, author, body, created_at, audience, state, sender_name, sender_email)
+     SELECT ${p.add(id)}, threads.id, 'visitor', ${p.list([note.body, now])}, 'public', 'pending', ${p.list([note.name, note.email])}
+     FROM threads WHERE threads.number = ${p.add(number)} AND ${PUBLIC} RETURNING id`,
+    p,
+  );
+  const u = new Params();
+  const touch = statement(db, `UPDATE threads SET activity_at = ${u.add(now)} WHERE id = (SELECT thread_id FROM comments WHERE id = ${u.add(id)})`, u);
+  const [inserted] = await db.batch<{ id: string }>([insert, touch]);
+  return (inserted?.results.length ?? 0) > 0;
+}
+
+/** What each ruling on a note starts from, goes to, and the event it writes. */
+const JUDGEMENTS = {
+  show: { from: ["pending"], to: "shown", event: "note-shown" },
+  drop: { from: ["pending"], to: "dropped", event: "note-dropped" },
+  hold: { from: ["shown", "dropped"], to: "pending", event: "note-held" },
+} as const satisfies Record<Judgement, { from: readonly string[]; to: string; event: string }>;
+
+/**
+ * His ruling on a visitor's note, the owner's alone: shown on the thread, dropped, or back to waiting. One batch
+ * with its event, which names the note and the visitor's typed name (never their email), and the thread's last
+ * activity. `no-thread` when there is no such thread, `no-note` when it holds no such visitor's note,
+ * `not-from-here` when the note isn't where the ruling starts; either way nothing is written.
+ */
+export async function judgeNote(
+  db: D1Database,
+  number: number,
+  noteId: string,
+  judgement: Judgement,
+): Promise<CommentRow | "no-thread" | "no-note" | "not-from-here"> {
+  const now = new Date().toISOString();
+  const rule = JUDGEMENTS[judgement];
+  const note = (p: Params): string =>
+    `comments.id = ${p.add(noteId)} AND comments.author = 'visitor' AND comments.thread_id = (SELECT id FROM threads WHERE number = ${p.add(number)})`;
+  const guard = (p: Params): string => `${note(p)} AND comments.state IN (${p.list(rule.from)})`;
+
+  const e = new Params();
+  const event = statement(
+    db,
+    `INSERT INTO events (thread_id, at, actor, type, data)
+     SELECT comments.thread_id, ${e.add(now)}, 'owner', ${e.add(rule.event)}, json_object('note', comments.id, 'name', comments.sender_name) FROM comments WHERE ${guard(e)}`,
+    e,
+  );
+  // The touch runs before the note changes, in the same batch, because its guard reads the note's state.
+  const t = new Params();
+  const touch = statement(db, `UPDATE threads SET activity_at = ${t.add(now)} WHERE id = (SELECT comments.thread_id FROM comments WHERE ${guard(t)})`, t);
+  const u = new Params();
+  const update = statement(db, `UPDATE comments SET state = ${u.add(rule.to)} WHERE ${guard(u)} RETURNING id`, u);
+  const r = new Params();
+  const read = statement(db, `SELECT ${COMMENT_COLUMNS} FROM comments LEFT JOIN people ON people.id = comments.person_id WHERE ${note(r)}`, r);
+
+  const [, , updated, after] = await db.batch<CommentRow | { id: string }>([event, touch, update, read]);
+  const row = after?.results[0] as CommentRow | undefined;
+  if ((updated?.results.length ?? 0) > 0 && row !== undefined) return row;
+  if (row !== undefined) return "not-from-here";
+  return (await find(db, { number }, EVERY_THREAD)) === null ? "no-thread" : "no-note";
 }
