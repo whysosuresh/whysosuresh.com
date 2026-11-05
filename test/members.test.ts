@@ -8,6 +8,8 @@
 // thread, its page, a comment, a search and their list; and every call that isn't theirs is refused with 403
 // `owner-only` before anything is read. What they see of their thread: no visitor's email, origin, issue link,
 // drop reason or mail opening, no earlier version of any text, no "Only me" comment, and the people by name only.
+// The owner's list says how many people each thread is shared with, and which wait on him: an invited person had
+// the last word, until he comments, moves or edits.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { OWNER, SITE, startHarness, type Harness } from "./harness.ts";
@@ -368,5 +370,50 @@ describe("what an invited person sees", () => {
   it("refuses a comment's audience that is neither", async () => {
     const n = await thread();
     expect(await reasonOf(await call(`/threads/${n}/comments`, { body: { body: "x", audience: "public" } }))).toEqual([400, "comment"]);
+  });
+});
+
+describe("the owner's list", () => {
+  type Row = { number: number; shared: number; waiting: boolean };
+  async function rowOf(n: number, tab = "act"): Promise<Row | undefined> {
+    return (await answer<{ threads: Row[] }>(await call(`/threads?tab=${tab}`))).threads.find((one) => one.number === n);
+  }
+  const meera = { as: { email: MEERA } } as const;
+
+  it("says how many people each thread is shared with now", async () => {
+    const [a, b] = [await thread(), await thread()];
+    await invite(a, MEERA);
+    const dev = (await invite(a, DEV, "Dev")).people.find((p) => p.email === DEV)?.id ?? "";
+    expect([(await rowOf(a))?.shared, (await rowOf(b))?.shared]).toEqual([2, 0]);
+    await removeFrom(a, dev);
+    expect((await rowOf(a))?.shared).toBe(1);
+  });
+
+  it("waits on him once an invited person has the last word, until he comments", async () => {
+    const n = await thread();
+    await invite(n, MEERA);
+    expect((await rowOf(n))?.waiting).toBe(false);
+    await call(`/threads/${n}/comments`, { ...meera, body: { body: "Over to you." } });
+    expect((await rowOf(n))?.waiting).toBe(true);
+    // The sync's word doesn't answer them; his own does.
+    await call(`/threads/${n}/comments`, { as: "sync", body: { body: "Noted." } });
+    expect((await rowOf(n))?.waiting).toBe(true);
+    await call(`/threads/${n}/comments`, { body: { body: "Thanks.", audience: "owner" } });
+    expect((await rowOf(n))?.waiting).toBe(false);
+  });
+
+  it("stops waiting when he moves or edits it", async () => {
+    const [moved, edited] = [await thread(), await thread()];
+    for (const n of [moved, edited]) {
+      await invite(n, MEERA);
+      await call(`/threads/${n}/comments`, { ...meera, body: { body: "Over to you." } });
+      expect((await rowOf(n))?.waiting).toBe(true);
+    }
+    // Comments made within the same millisecond as the next change would compare equal; the next change is later.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect((await call(`/threads/${moved}`, { body: { action: "done" } })).status).toBe(200);
+    expect((await rowOf(moved, "done"))?.waiting).toBe(false);
+    expect((await call(`/threads/${edited}/text`, { body: { field: "summary", text: "Agreed." } })).status).toBe(200);
+    expect((await rowOf(edited))?.waiting).toBe(false);
   });
 });

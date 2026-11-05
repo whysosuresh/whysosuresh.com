@@ -31,8 +31,10 @@
 // comment (`audience` `owner`, which only the owner and the sync may write). The people on a thread are the
 // owner's to change, from his own page: the sync never invites anyone, because an invitation grants access.
 //
-// A list answers one tab, newest number first, 50 at a time, with the number to go on from, every tab's count,
-// and to the owner his own address (`me`, which his page needs to open Gmail as him). The sync's add (src/wire.ts)
+// A list answers one tab, newest number first, 50 at a time, with the number to go on from and every tab's count;
+// each row also says how many people the thread is shared with (`shared`) and whether its last word is an invited
+// person's (`waiting`, which the owner's Today shows). `me` says who is calling, and to the owner and invited people
+// their own address (the owner's page needs it to open Gmail as him). The sync's add (src/wire.ts)
 // answers the thread already there when its `ref` comes again; the owner's add is a thread he starts from his page, with a title, a space and an open tab. A thread's
 // own call answers it with its comments and its history, oldest first, up to 500 of each. A move is one of the
 // store's moves (src/store.ts), which holds their rules. A comment adds Markdown to a
@@ -235,10 +237,9 @@ async function list(url: URL, env: Bindings, caller: Writer): Promise<Response> 
   const shown = rows.slice(0, PAGE);
   const last = shown[shown.length - 1];
   return json(200, {
-    threads: shown.map((row) => thread(row, caller)),
+    threads: shown.map((row) => ({ ...thread(row, caller), shared: row.shared ?? 0, waiting: row.waiting === 1 })),
     counts,
     next: rows.length > PAGE && last !== undefined ? last.number : null,
-    me: caller.caller === "owner" ? caller.email : null,
   });
 }
 

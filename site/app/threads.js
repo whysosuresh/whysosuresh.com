@@ -17,17 +17,49 @@
 // ⌘K, a search over numbers, titles, summaries and text. On a list the next thread is selected after a move; on a
 // thread the page stays, so its history shows the move.
 //
+// A thread can be shared. The owner's Share (S) invites a person by address and name, lists who is in the thread
+// and takes an invitation back; his Gmail opens a draft with the thread's `?invite` link for him to send (share.js
+// holds the sheet's words and the draft). He can write a comment for himself alone ("Only me", drawn dashed), and
+// Today gains "Waiting on you": shared threads where an invited person had the last word. A person he invited
+// gets the same page, knowing its caller (`me`): their threads (their home), each thread with its summary, its
+// main section, its comments and its history as the Worker shapes them for them, and a comment box; no moves,
+// edits, spaces, Reply or Share, and only their own keys. Removed from every thread, they are told "Nothing is
+// shared with you now" rather than sent round the sign-in again.
+//
 // Signed out at a thread's address, the page shows what a missing address shows ("Nothing here"), so the address
-// alone never says a thread exists; a device that has signed in before also gets a small "Sign in". At /threads/
+// alone never says a thread exists; a device that has signed in before also gets a small "Sign in". The link in an
+// invitation carries `?invite`: signed out, it goes straight to the sign-in and back; signed in, the page drops it
+// from the address, so a copied link is the clean one. `?invite` on any number does the same, so it says nothing
+// about a thread. At /threads/
 // itself, which names no thread, it always says "Threads" with a Sign in button. Either sign-in goes through the
 // threads' sign-in call and comes back to the same address. When the sign-in ends mid-use, a line says so and nothing typed
 // is lost. Every element is built with DOM calls and every text is set as text, so nothing anyone wrote becomes
 // markup; Markdown is parsed into blocks first (markdown.js). The CSP allows no inline script or style attribute.
 
 import { SPACES } from '../spaces.js';
-import { SHEET, commandFor } from './keys.js';
+import { MEMBER_COMMANDS, MEMBER_SHEET, SHEET, commandFor } from './keys.js';
 import { parse, summaryLines } from './markdown.js';
-import { Failed, Missing, SignedOut, comment, edit, listAll, move, pageAddress, search, show, signInAddress, start } from './threads-store.js';
+import { invitation, invitationProblem, listed, seatsLine, seesLines } from './share.js';
+import {
+  Failed,
+  Missing,
+  NotShared,
+  SignedOut,
+  comment,
+  edit,
+  invite,
+  listAll,
+  listMine,
+  me,
+  move,
+  pageAddress,
+  people,
+  search,
+  show,
+  signInAddress,
+  start,
+  uninvite,
+} from './threads-store.js';
 
 /**
  * @typedef {import('./threads-store.js').Thread} Thread
@@ -39,13 +71,16 @@ import { Failed, Missing, SignedOut, comment, edit, listAll, move, pageAddress, 
  * @typedef {import('./threads-store.js').Status} Status
  * @typedef {import('./threads-store.js').Action} Action
  * @typedef {import('./threads-store.js').Field} Field
+ * @typedef {import('./threads-store.js').Person} Person
  * @typedef {import('./markdown.js').Inline} Inline
  * @typedef {import('./keys.js').Command} Command
  * @typedef {{ view: 'today' } | { view: 'list', tab: Tab, space: string | null } | { view: 'thread', number: number }} Route
  * @typedef {{ to: string, subject: string, body: string }} Draft
  * @typedef {{ title: string, summary: string, body: string }} Editing
  * @typedef {{ title: string, space: string, status: 'received' | 'act' | 'discuss', body: string }} NewDraft
- * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions'} Overlay
+ * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share'} Overlay
+ * @typedef {{ number: number, people: Person[], count: number, email: string, name: string, problem: string,
+ *   invited: { name: string, email: string } | null, busy: boolean }} Sharing
  * @typedef {{ label: string, sub: string, side: string, number: number | null, run: () => void }} FindItem
  */
 
@@ -471,11 +506,17 @@ function plain(text) {
   return box;
 }
 
-/** The round initial beside a name. @param {'owner' | 'sync' | 'visitor'} who @param {string} name */
+/** The round initial beside a name. @param {'owner' | 'sync' | 'visitor' | 'member'} who @param {string} name */
 function avatar(who, name) {
   if (who === 'owner') return el('span', { class: 't-av t-av-me', 'aria-hidden': 'true' }, ['S']);
   if (who === 'sync') return el('span', { class: 't-av t-av-agent', 'aria-hidden': 'true' }, ['C']);
   return el('span', { class: 't-av', 'aria-hidden': 'true' }, [(name.trim().charAt(0) || '?').toUpperCase()]);
+}
+
+/** Puts the focus in the element `selector` finds under `root`, when there is one. @param {ParentNode} root @param {string} selector */
+function focusIn(root, selector) {
+  const found = root.querySelector(selector);
+  if (found instanceof HTMLElement) found.focus({ preventScroll: true });
 }
 
 /** Whether a press came from a field being typed in. @param {EventTarget | null} target */
@@ -570,8 +611,14 @@ class Threads {
     /** @type {Map<number, Thread>} */
     this.threads = new Map();
     this.loaded = false;
+    /** Who is signed in: the owner, or a person he invited to a thread. @type {'owner' | 'member'} */
+    this.caller = 'owner';
     /** The signed-in address, which Gmail's link names. */
     this.me = '';
+    /** Whether the comment being written is for the owner alone. */
+    this.onlyMe = false;
+    /** The Share sheet's state while it is open. @type {Sharing | null} */
+    this.sharing = null;
     /** The selected row on Today or the list. @type {number | null} */
     this.sel = null;
     /** The open thread with its comments and history. @type {Shown | null} */
@@ -628,6 +675,7 @@ class Threads {
     this.dialog.addEventListener('close', () => {
       if (this.dialog.open) return;
       this.overlay = null;
+      this.sharing = null;
       this.dialog.replaceChildren();
       this.main.focus({ preventScroll: true });
     });
@@ -635,30 +683,84 @@ class Threads {
     this.toast.addEventListener('mouseleave', () => this.resumeToast());
   }
 
-  /** Loads every thread, then the open one when the address names it. */
+  /**
+   * Asks who is calling and loads the thread the address names beside it, then that caller's threads: every one
+   * for the owner, theirs for an invited person.
+   */
   async start() {
     const route = this.route;
+    const inviting = route.view === 'thread' && new URLSearchParams(location.search).has('invite');
     if (route.view === 'list') {
       this.tab = route.tab;
       this.space = route.space;
       this.from = 'list';
     }
+    const thread = route.view === 'thread' ? this.loadThread(route.number) : Promise.resolve();
+    // Its refusal is read below, after who is calling; until then it mustn't count as unhandled.
+    thread.catch(() => undefined);
     try {
-      await Promise.all([this.loadAll(), route.view === 'thread' ? this.loadThread(route.number) : Promise.resolve()]);
+      const who = await me();
+      this.caller = who.caller === 'member' ? 'member' : 'owner';
+      this.me = who.email ?? '';
+      if (this.caller === 'member' && route.view === 'list') this.route = { view: 'today' };
+      await Promise.all([this.loadAll(), thread]);
     } catch (error) {
-      if (error instanceof SignedOut) this.showLost();
+      if (error instanceof SignedOut && inviting) location.replace(signInAddress(location.pathname));
+      else if (error instanceof SignedOut) this.showLost();
+      else if (error instanceof NotShared) this.showNotShared();
       else this.fail(error, "The threads didn't load.");
       return;
     }
+    if (inviting || (this.caller === 'member' && route.view === 'list')) history.replaceState(null, '', this.route.view === 'thread' ? location.pathname : '/threads/');
+    this.applyCaller();
     rememberSignedIn();
     this.render();
   }
 
   async loadAll() {
-    const pages = await Promise.all(TABS.map((tab) => listAll(tab)));
-    this.threads = new Map(pages.flatMap((page) => page.threads).map((thread) => [thread.number, thread]));
-    this.me = pages[0]?.me ?? '';
+    if (this.caller === 'member') {
+      const mine = await listMine();
+      this.threads = new Map(mine.map((thread) => [thread.number, thread]));
+    } else {
+      const pages = await Promise.all(TABS.map((tab) => listAll(tab)));
+      this.threads = new Map(pages.flatMap((page) => page.threads).map((thread) => [thread.number, thread]));
+    }
     this.loaded = true;
+  }
+
+  get member() {
+    return this.caller === 'member';
+  }
+
+  /**
+   * Keeps a thread as a call answered it, with what only the list says (how many people it is shared with, and
+   * whether it waits on him) carried over; a change he made himself means it waits on him no longer.
+   * @param {Thread} thread
+   * @param {{ acted?: boolean, shared?: number }} [given]
+   */
+  remember(thread, given = {}) {
+    const known = this.threads.get(thread.number);
+    this.threads.set(thread.number, {
+      ...thread,
+      shared: given.shared ?? thread.shared ?? known?.shared ?? 0,
+      waiting: given.acted ? false : (thread.waiting ?? known?.waiting ?? false),
+    });
+  }
+
+  /**
+   * The parts of the page that are the owner's alone, hidden from a person he invited: New, the list's tab and the
+   * keys' owner sheet; the sidebar's foot names who is signed in.
+   */
+  applyCaller() {
+    if (!this.member) return;
+    for (const owners of document.querySelectorAll('.t-side-new, .t-tabbar [data-go="list"], .t-tabbar [data-act="new"]')) {
+      if (owners instanceof HTMLElement) owners.hidden = true;
+    }
+    const today = this.tabbar.querySelector('[data-go="today"]');
+    if (today) today.replaceChildren(icon('people'), 'Yours');
+    const who = document.querySelector('.t-side-who');
+    if (who) who.replaceChildren(this.me, el('small', {}, ['Signed in']));
+    document.querySelector('.t-side-foot .t-av')?.replaceWith(avatar('member', this.me));
   }
 
   /** @param {number} number */
@@ -669,7 +771,7 @@ class Threads {
       if (ticket !== this.loading) return;
       this.shown = shown;
       this.missing = null;
-      this.threads.set(number, shown.thread);
+      this.remember(shown.thread, this.member ? {} : { shared: shown.people.length });
     } catch (error) {
       if (ticket !== this.loading) return;
       if (error instanceof Missing) {
@@ -703,12 +805,27 @@ class Threads {
     document.title = 'Nothing here · whysosuresh.com';
   }
 
+  /** Signed in, but nothing is shared with this address now: said plainly, with no sign-in to go round again. */
+  showNotShared() {
+    this.closeOverlay();
+    this.app.hidden = true;
+    this.lost.hidden = false;
+    this.lostTitle.textContent = 'Nothing is shared with you now';
+    this.lostText.textContent = 'This address has no threads on whysosuresh.com any more. If you expected one, ask Suresh.';
+    this.signIn.hidden = true;
+    document.title = 'Nothing shared · whysosuresh.com';
+  }
+
   /**
    * Shows why something failed: an ended sign-in gets a way back in that returns to this address.
    * @param {unknown} error
    * @param {string} what
    */
   fail(error, what) {
+    if (error instanceof NotShared) {
+      this.showNotShared();
+      return;
+    }
     if (error instanceof SignedOut) {
       const here = location.pathname;
       const link = el('a', { href: signInAddress(here === '/threads/' || isThreadAddress(here) ? here : '/threads/') }, ['Sign in again']);
@@ -730,6 +847,7 @@ class Threads {
    * @param {boolean} [push]
    */
   async go(route, push = true) {
+    if (this.member && route.view === 'list') route = { view: 'today' };
     this.closeOverlay();
     this.pageFull = false;
     this.editing = null;
@@ -752,7 +870,7 @@ class Threads {
     }
     this.sel = route.number;
     const known = this.threads.get(route.number);
-    this.shown = known ? { thread: known, page: null, comments: [], events: [], truncated: false } : null;
+    this.shown = known ? { thread: known, page: null, people: [], comments: [], events: [], truncated: false } : null;
     this.render();
     this.main.scrollTop = 0;
     try {
@@ -783,22 +901,33 @@ class Threads {
       .sort((a, b) => b.number - a.number);
   }
 
-  /** New notes, newest first. */
-  fresh() {
-    return [...this.threads.values()].filter((thread) => thread.status === 'received').sort((a, b) => b.activityAt.localeCompare(a.activityAt));
+  /** Shared threads where an invited person had the last word, the most recent first. */
+  waiting() {
+    return [...this.threads.values()].filter((thread) => thread.waiting === true).sort((a, b) => b.activityAt.localeCompare(a.activityAt));
   }
 
-  /** Open threads sorted into a tab that sat a week untouched, the longest first. */
+  /** New notes, newest first, but for one already waiting on him. */
+  fresh() {
+    return [...this.threads.values()].filter((thread) => thread.status === 'received' && !thread.waiting).sort((a, b) => b.activityAt.localeCompare(a.activityAt));
+  }
+
+  /** Open threads sorted into a tab that sat a week untouched, the longest first, but for one waiting on him. */
   sat() {
     const cutoff = Date.now() - WEEK_MS;
     return [...this.threads.values()]
-      .filter((thread) => (thread.status === 'act' || thread.status === 'discuss') && new Date(thread.activityAt).getTime() <= cutoff)
+      .filter((thread) => (thread.status === 'act' || thread.status === 'discuss') && !thread.waiting && new Date(thread.activityAt).getTime() <= cutoff)
       .sort((a, b) => a.activityAt.localeCompare(b.activityAt));
   }
 
-  /** The threads J and K walk: Today's, or the list's. */
+  /** An invited person's threads, most recently active first. */
+  mine() {
+    return [...this.threads.values()].sort((a, b) => b.activityAt.localeCompare(a.activityAt) || b.number - a.number);
+  }
+
+  /** The threads J and K walk: an invited person's own, Today's, or the list's. */
   walk() {
-    return (this.from === 'today' ? [...this.fresh(), ...this.sat()] : this.inTab(this.tab)).map((thread) => thread.number);
+    if (this.member) return this.mine().map((thread) => thread.number);
+    return (this.from === 'today' ? [...this.waiting(), ...this.fresh(), ...this.sat()] : this.inTab(this.tab)).map((thread) => thread.number);
   }
 
   /** The thread a key acts on: the open one, or the selected row. */
@@ -842,8 +971,8 @@ class Threads {
       document.title = `${this.space === null ? 'All threads' : spaceLabel(this.space)} · Threads`;
     } else {
       this.ensureSel();
-      this.main.replaceChildren(this.todayView());
-      document.title = 'Today · Threads';
+      this.main.replaceChildren(this.member ? this.mineView() : this.todayView());
+      document.title = this.member ? 'Shared with you · Threads' : 'Today · Threads';
     }
     if (this.keepScroll) this.main.scrollTop = scroll;
     this.keepScroll = false;
@@ -857,10 +986,16 @@ class Threads {
   }
 
   renderNav() {
+    if (this.member) {
+      const item = el('a', { class: 't-nav-item', href: '/threads/', 'data-go': 'today' }, [icon('people'), 'Your threads', el('span', { class: 't-nav-count' }, [String(this.threads.size)])]);
+      if (this.route.view === 'today') item.setAttribute('aria-current', 'page');
+      this.nav.replaceChildren(el('div', { class: 't-nav-label' }, ['Shared with you']), item);
+      return;
+    }
     const counts = new Map();
     for (const thread of this.threads.values()) if (isOpen(thread) && thread.space !== null) counts.set(thread.space, (counts.get(thread.space) ?? 0) + 1);
     const view = this.route.view;
-    const today = this.fresh().length + this.sat().length;
+    const today = this.waiting().length + this.fresh().length + this.sat().length;
     const todayItem = el('a', { class: 't-nav-item', href: '/threads/', 'data-go': 'today' }, [icon('sun'), 'Today', el('span', { class: 't-nav-count' }, [String(today)])]);
     const allItem = el('a', { class: 't-nav-item', href: '/threads/?tab=look', 'data-go': 'list' }, [icon('list'), 'All threads']);
     if (view === 'today') todayItem.setAttribute('aria-current', 'page');
@@ -893,6 +1028,7 @@ class Threads {
   row(thread, sub) {
     const meta = el('span', { class: 't-row-meta' }, [el('span', { class: 't-chip' }, [spaceLabel(thread.space)])]);
     if (thread.status !== 'received') meta.append(el('span', {}, [STATUS_NAMES[thread.status]]));
+    if ((thread.shared ?? 0) > 0) meta.append(el('span', { class: 't-people-mark', title: `Shared with ${thread.shared}` }, [icon('people'), String(thread.shared)]));
     meta.append(el('span', {}, [ago(thread.activityAt)]));
     const row = el('a', { class: 't-row', href: threadPath(thread), 'data-thread': String(thread.number), 'aria-selected': String(this.sel === thread.number) }, [
       el('span', { class: 't-num' }, [`#${thread.number}`]),
@@ -910,9 +1046,10 @@ class Threads {
   }
 
   todayView() {
+    const waiting = this.waiting();
     const fresh = this.fresh();
     const sat = this.sat();
-    const total = fresh.length + sat.length;
+    const total = waiting.length + fresh.length + sat.length;
     const date = new Date().toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
     /**
      * @param {string} title
@@ -934,8 +1071,19 @@ class Threads {
         ]),
         el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'new' }, [icon('plus'), 'New thread ', kbd('N')]),
       ]),
+      ...(waiting.length > 0 ? [section('Waiting on you', waiting, ['the last word on a shared thread is theirs'], (thread) => firstLine(thread), '')] : []),
       section('New', fresh, [el('span', { class: 't-keys-hint' }, [kbd('A'), ' act · ', kbd('T'), ' talk · ', kbd('D'), ' drop'])], (thread) => this.rowLine(thread), 'All sorted.'),
       section('Sat a week', sat, ['still open, untouched for 7 days'], (thread) => `${ago(thread.activityAt)} in ${STATUS_NAMES[thread.status]}. Move it, or drop it.`, 'Nothing has sat a week.'),
+    ]);
+  }
+
+  /** An invited person's home: the threads shared with them, most recently active first. */
+  mineView() {
+    const mine = this.mine();
+    return el('div', { class: 't-wrap' }, [
+      el('div', { class: 't-head' }, [el('div', {}, [el('h1', {}, ['Shared with you']), el('p', {}, ['The threads Suresh shared with you, newest activity first.'])])]),
+      el('div', { class: 't-list' }, mine.length > 0 ? mine.map((thread) => this.row(thread, firstLine(thread))) : [el('div', { class: 't-empty' }, ['Nothing is shared with you yet.'])]),
+      el('p', { class: 't-note' }, ['Only the threads Suresh invites you to show here.']),
     ]);
   }
 
@@ -984,7 +1132,7 @@ class Threads {
         el('div', { class: 't-missing' }, [
           el('h1', {}, [this.missing !== null ? 'Nothing here' : 'Loading…']),
           el('p', {}, [this.missing !== null ? `There's no thread #${this.missing}.` : '']),
-          el('a', { href: '/threads/', 'data-go': 'today' }, ['Back to Today']),
+          el('a', { href: '/threads/', 'data-go': 'today' }, [this.member ? 'Back to your threads' : 'Back to Today']),
         ]),
       ]);
     }
@@ -999,15 +1147,17 @@ class Threads {
       el('button', { type: 'button', 'data-act': 'back', 'aria-label': 'Back to the list (Esc)' }, [icon('x')]),
     ]);
     const crumbs = el('div', { class: 't-crumbs' }, [
-      thread.space === null
-        ? el('span', {}, ['No space'])
+      thread.space === null || this.member
+        ? el('span', {}, [spaceLabel(thread.space)])
         : el('a', { href: `/threads/?tab=${tabOf(thread.status)}&space=${thread.space}`, 'data-space': thread.space }, [spaceLabel(thread.space)]),
       el('span', {}, ['/']),
       el('span', {}, [`#${thread.number}`]),
       el('span', { class: 't-chip' }, [STATUS_NAMES[thread.status]]),
       pager,
     ]);
-    const by = visitor
+    const by = this.member
+      ? 'Suresh shared this with you'
+      : visitor
       ? `${thread.senderName?.trim() || 'Someone'} sent this from the site`
       : thread.source === 'told'
         ? `${thread.senderName?.trim() || 'Someone'} told you this`
@@ -1019,13 +1169,15 @@ class Threads {
           el('div', { class: 't-summary-head' }, [el('span', {}, ['Summary']), el('span', {}, ['kept current by the recorder sync'])]),
           summaryBody(thread.summary),
         ])
-      : el('section', { class: 't-summary t-summary-empty', 'aria-label': 'Summary' }, ['No summary yet. The sync writes one at its next pass, or press ', kbd('W'), ' to write it.']);
+      : this.member
+        ? el('section', { class: 't-summary t-summary-empty', 'aria-label': 'Summary' }, ['No summary yet.'])
+        : el('section', { class: 't-summary t-summary-empty', 'aria-label': 'Summary' }, ['No summary yet. The sync writes one at its next pass, or press ', kbd('W'), ' to write it.']);
     const text = this.mainSection(thread, this.shown.page);
     const doc = el('article', { class: 't-doc' }, [
       crumbs,
       el('h1', { class: 't-title' }, [el('span', { class: 't-tn' }, [`#${thread.number}`]), ' ', titleOf(thread)]),
       el('div', { class: 't-byline' }, [`${by}, ${when(thread.createdAt)} · updated ${ago(thread.activityAt)} ago`]),
-      this.moves(thread),
+      ...(this.member ? [] : [this.moves(thread)]),
       summary,
       ...(this.reply ? [this.replyPanel(this.reply)] : []),
       ...text,
@@ -1033,7 +1185,7 @@ class Threads {
       ...(this.shown.truncated ? [el('p', { class: 't-note' }, ['Only the first 500 comments and events are shown.'])] : []),
       this.composer(thread),
     ]);
-    return el('div', { class: 't-thread' }, [doc, this.details(thread)]);
+    return el('div', { class: 't-thread' }, [doc, this.member ? this.memberDetails(thread) : this.details(thread)]);
   }
 
   /**
@@ -1125,6 +1277,7 @@ class Threads {
     if (status === 'filed') out.push(button('done', 'Done', 'E', true));
     if (status === 'done' || status === 'dropped') out.push(button('reopen', 'Reopen', 'U', false));
     if (canReply(thread)) out.push(el('button', { type: 'button', class: 't-btn', 'data-act': 'reply' }, [icon('reply'), 'Reply ', kbd('R')]));
+    out.push(el('button', { type: 'button', class: 't-btn', 'data-act': 'share' }, [icon('people'), 'Share ', kbd('S')]));
     out.push(el('span', { class: 't-grow' }));
     out.push(el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'edit' }, [icon('pen'), 'Edit ', kbd('W')]));
     return el('div', { class: 't-moves' }, out);
@@ -1177,7 +1330,7 @@ class Threads {
 
   /** @param {string} actor @param {Thread} thread */
   actorName(actor, thread) {
-    if (actor === 'owner') return 'You';
+    if (actor === 'owner') return this.member ? 'Suresh' : 'You';
     if (actor === 'sync') return 'Claude';
     if (actor === 'import') return 'The inbox';
     return thread.senderName?.trim() || 'Someone';
@@ -1233,9 +1386,16 @@ class Threads {
         const field = data.field === 'body' ? 'main text' : data.field === 'title' ? 'title' : 'summary';
         name = 'pen';
         words = [`edited the ${field}`];
-        before = typeof data.before === 'string' ? data.before : null;
+        // An invited person's history carries no earlier text at all, so it offers none.
+        if ('before' in data) before = typeof data.before === 'string' ? data.before : null;
         break;
       }
+      case 'invited':
+        [name, words] = ['people', ['invited ', word(data.name ?? 'someone')]];
+        break;
+      case 'removed':
+        [name, words] = ['people', ['removed ', word(data.name ?? 'someone')]];
+        break;
     }
     const line = el('div', { class: 't-ev' }, [
       el('span', { class: 't-pip' }, [icon(name)]),
@@ -1257,13 +1417,16 @@ class Threads {
 
   /** @param {ThreadComment} said @param {Thread} thread */
   commentNode(said, thread) {
-    const who = said.author === 'owner' ? 'owner' : 'sync';
-    return el('div', { class: 't-cm' }, [
-      avatar(who, ''),
+    const who = said.author === 'owner' ? 'owner' : said.author === 'member' ? 'member' : 'sync';
+    const name = who === 'member' ? (said.name ?? 'Someone') : this.actorName(said.author, thread);
+    const onlyMe = said.audience === 'owner';
+    return el('div', { class: 't-cm', 'data-audience': onlyMe ? 'owner' : 'thread' }, [
+      avatar(who, name),
       el('div', { class: 't-cm-box' }, [
         el('div', { class: 't-cm-head' }, [
-          el('b', {}, [this.actorName(said.author, thread)]),
+          el('b', {}, [name]),
           ...(who === 'sync' ? [el('span', { class: 't-chip' }, ['Recorder sync'])] : []),
+          ...(onlyMe ? [el('span', { class: 't-chip' }, [icon('lock'), 'Only me'])] : []),
           el('time', { datetime: said.createdAt }, [when(said.createdAt)]),
         ]),
         el('div', { class: 't-cm-body' }, [prose(said.body)]),
@@ -1274,15 +1437,33 @@ class Threads {
   /** @param {Thread} thread */
   composer(thread) {
     const draft = this.drafts.get(thread.number) ?? '';
+    const onlyMe = !this.member && this.onlyMe;
     const box = this.commentPreview
       ? el('div', { class: 't-preview-pane', id: 'comment-preview' }, [draft.trim() === '' ? el('span', { class: 't-note' }, ['Nothing to preview.']) : prose(draft)])
-      : el('textarea', { id: 'comment-text', 'aria-label': 'Comment', placeholder: 'Comment. Markdown works.' }, [draft]);
-    return el('form', { class: 't-composer', 'data-submit': 'comment' }, [
-      avatar('owner', ''),
+      : el('textarea', { id: 'comment-text', 'aria-label': 'Comment', placeholder: onlyMe ? 'A note for you alone. Markdown works.' : 'Comment. Markdown works.' }, [draft]);
+    const others = (this.shown?.people ?? []).filter((person) => !person.owner).map((person) => person.name ?? 'someone');
+    const note = this.member
+      ? 'Suresh and everyone in this thread read this.'
+      : onlyMe
+        ? 'Only you and Claude read this.'
+        : others.length > 0
+          ? `${listed(others)} read${others.length === 1 ? 's' : ''} this too.`
+          : 'Only you read this thread.';
+    const audience = this.member
+      ? []
+      : [
+          el('span', { class: 't-seg', role: 'group', 'aria-label': 'Who reads it' }, [
+            el('button', { type: 'button', 'data-act': 'audience', 'data-audience': 'thread', 'aria-pressed': String(!onlyMe) }, ['Thread']),
+            el('button', { type: 'button', 'data-act': 'audience', 'data-audience': 'owner', 'aria-pressed': String(onlyMe) }, [icon('lock'), ' Only me']),
+          ]),
+        ];
+    return el('form', { class: 't-composer', 'data-submit': 'comment', 'data-audience': onlyMe ? 'owner' : 'thread' }, [
+      this.member ? avatar('member', this.me) : avatar('owner', ''),
       el('div', { class: 't-composer-box' }, [
         box,
         el('div', { class: 't-composer-bar' }, [
-          el('span', { class: 't-note' }, ['Only you read this thread.']),
+          el('span', { class: 't-note' }, [note]),
+          ...audience,
           el('span', { class: 't-seg', role: 'group', 'aria-label': 'Comment view' }, [
             el('button', { type: 'button', 'data-act': 'comment-view', 'data-view': 'write', 'aria-pressed': String(!this.commentPreview) }, ['Write']),
             el('button', { type: 'button', 'data-act': 'comment-view', 'data-view': 'preview', 'aria-pressed': String(this.commentPreview) }, ['Preview']),
@@ -1315,6 +1496,33 @@ class Threads {
       row('Last activity', [el('span', { class: 't-dval t-dval-soft' }, [`${ago(thread.activityAt)} ago`])]),
       ...(origin ? [row('Moved from', [el('a', { class: 't-linkline', href: origin.href, target: '_blank', rel: 'noopener' }, [origin.name])], true)] : []),
       ...(issue ? [row('Filed as', [el('a', { class: 't-linkline', href: issue.href, target: '_blank', rel: 'noopener' }, [issue.name])], true)] : []),
+      row(
+        'People',
+        [
+          (this.shown?.people ?? []).length === 0
+            ? el('span', { class: 't-dval t-dval-soft' }, ['Only you'])
+            : el('span', { class: 't-dpeople' }, (this.shown?.people ?? []).map((person) => el('span', {}, [person.name ?? 'Someone', ' ', el('small', {}, [person.email ?? ''])]))),
+          el('span', {}, [el('button', { type: 'button', class: 't-text-btn', 'data-act': 'share' }, ['Share…'])]),
+        ],
+        true,
+      ),
+      row('Link', [el('span', { class: 't-linkline' }, [address]), el('span', {}, [el('button', { type: 'button', class: 't-text-btn', 'data-act': 'copy-link' }, ['Copy link'])])], true),
+    ]);
+  }
+
+  /** The details beside a thread, as an invited person sees them: where it stands, its people by name, its link. @param {Thread} thread */
+  memberDetails(thread) {
+    /** @param {string} label @param {(Node | string)[]} value @param {boolean} [wide] */
+    const row = (label, value, wide = false) => el('div', { class: 't-drow', ...(wide ? { 'data-wide': '' } : {}) }, [el('span', { class: 't-dlabel' }, [label]), ...value]);
+    const address = `whysosuresh.com/threads/${thread.number}`;
+    return el('aside', { class: 't-details', 'aria-label': 'About this thread' }, [
+      row('Where it stands', [el('span', { class: 't-dval' }, [STATUS_NAMES[thread.status]])]),
+      row(
+        'People',
+        [el('span', { class: 't-dpeople' }, (this.shown?.people ?? []).map((person) => el('span', {}, [person.name ?? 'Someone', ...(person.owner ? [' ', el('small', {}, ['shared it'])] : [])])))],
+        true,
+      ),
+      row('Last activity', [el('span', { class: 't-dval t-dval-soft' }, [`${ago(thread.activityAt)} ago`])]),
       row('Link', [el('span', { class: 't-linkline' }, [address]), el('span', {}, [el('button', { type: 'button', class: 't-text-btn', 'data-act': 'copy-link' }, ['Copy link'])])], true),
     ]);
   }
@@ -1382,6 +1590,7 @@ class Threads {
   closeOverlay() {
     if (this.dialog.open) this.dialog.close();
     this.overlay = null;
+    this.sharing = null;
   }
 
   /** @param {string} title */
@@ -1406,7 +1615,7 @@ class Threads {
   }
 
   openKeys() {
-    const groups = SHEET.map((group) =>
+    const groups = (this.member ? MEMBER_SHEET : SHEET).map((group) =>
       el('div', {}, [
         el('h3', {}, [group.title]),
         ...group.rows.map((row) =>
@@ -1418,13 +1627,18 @@ class Threads {
       this.sheetHead('Keys'),
       el('div', { class: 't-sheet-body' }, [
         el('div', { class: 't-keys' }, groups),
-        el('p', { class: 't-note' }, ['Phones have no keys: every move is a button on the thread, and the bar along the bottom holds Today, Threads, Find and New.']),
+        el('p', { class: 't-note' }, [
+          this.member
+            ? 'Phones have no keys: the bar along the bottom holds your threads and Find.'
+            : 'Phones have no keys: every move is a button on the thread, and the bar along the bottom holds Today, Threads, Find and New.',
+        ]),
       ]),
     ]);
   }
 
   /** @param {Partial<NewDraft>} [given] */
   openNew(given = {}) {
+    if (this.member) return;
     this.newDraft = { title: '', space: this.space ?? 'company', status: 'received', body: '', ...given };
     this.newPreview = false;
     this.renderNew();
@@ -1493,7 +1707,14 @@ class Threads {
   }
 
   openFind() {
-    const input = el('input', { id: 'find-words', class: 't-find-input', placeholder: 'A number, or words from a title, summary or text', autocomplete: 'off', 'aria-label': 'Find', 'aria-controls': 'find-list' });
+    const input = el('input', {
+      id: 'find-words',
+      class: 't-find-input',
+      placeholder: this.member ? 'A number, or words from your threads' : 'A number, or words from a title, summary or text',
+      autocomplete: 'off',
+      'aria-label': 'Find',
+      'aria-controls': 'find-list',
+    });
     this.openOverlay('find', 'Find', 'find', [
       el('div', { class: 't-find-head' }, [icon('search'), input, kbd('Esc')]),
       el('div', { class: 't-find-list', id: 'find-list', role: 'listbox', 'aria-label': 'Results' }),
@@ -1511,12 +1732,17 @@ class Threads {
   findActions(words) {
     const query = words.toLowerCase();
     /** @type {{ label: string, hay: string, key: string, run: () => void }[]} */
-    const actions = [
-      { label: 'Go to Today', hay: 'today', key: '', run: () => void this.go({ view: 'today' }) },
-      { label: 'Go to all threads', hay: 'threads all list', key: '', run: () => void this.go({ view: 'list', tab: this.tab, space: null }) },
-      { label: 'New thread', hay: 'new thread start create', key: 'N', run: () => this.openNew({ title: words !== '' && !/^#?\d+$/.test(words) ? words : '' }) },
-      { label: 'Show the keys', hay: 'keys keyboard shortcuts help', key: '?', run: () => this.openKeys() },
-    ];
+    const actions = this.member
+      ? [
+          { label: 'Go to your threads', hay: 'threads home mine yours', key: '', run: () => void this.go({ view: 'today' }) },
+          { label: 'Show the keys', hay: 'keys keyboard shortcuts help', key: '?', run: () => this.openKeys() },
+        ]
+      : [
+          { label: 'Go to Today', hay: 'today', key: '', run: () => void this.go({ view: 'today' }) },
+          { label: 'Go to all threads', hay: 'threads all list', key: '', run: () => void this.go({ view: 'list', tab: this.tab, space: null }) },
+          { label: 'New thread', hay: 'new thread start create', key: 'N', run: () => this.openNew({ title: words !== '' && !/^#?\d+$/.test(words) ? words : '' }) },
+          { label: 'Show the keys', hay: 'keys keyboard shortcuts help', key: '?', run: () => this.openKeys() },
+        ];
     return actions
       .filter((action) => query === '' || action.hay.includes(query) || action.label.toLowerCase().includes(query))
       .map((action) => ({ label: action.label, sub: '', side: action.key, number: null, run: action.run }));
@@ -1586,7 +1812,10 @@ class Threads {
         ]),
       );
     });
-    if (threads.length === 0 && words.trim() !== '') nodes.unshift(el('div', { class: 't-empty' }, [`No thread matches "${words.trim()}". Press ↵ to start one with this title.`]));
+    if (threads.length === 0 && words.trim() !== '') {
+      const none = this.member ? `None of your threads matches "${words.trim()}".` : `No thread matches "${words.trim()}". Press ↵ to start one with this title.`;
+      nodes.unshift(el('div', { class: 't-empty' }, [none]));
+    }
     list.replaceChildren(...nodes);
   }
 
@@ -1662,7 +1891,7 @@ class Threads {
   async makeMove(thread, action) {
     const list = this.walk();
     const at = list.indexOf(thread.number);
-    const predicted = predict(thread, action);
+    const predicted = { ...predict(thread, action), waiting: false };
     this.threads.set(thread.number, predicted);
     if (this.shown?.thread.number === thread.number) this.shown = { ...this.shown, thread: predicted };
     this.closeOverlay();
@@ -1685,7 +1914,7 @@ class Threads {
       this.fail(error, `That didn't save, so #${thread.number} is back where it was.`);
       return;
     }
-    this.threads.set(saved.number, saved);
+    this.remember(saved, { acted: true });
     this.clearProblem();
     await this.refreshShown(saved.number);
     const back = inverse(thread, action);
@@ -1700,7 +1929,7 @@ class Threads {
   async revert(moved, back) {
     try {
       const restored = await move(moved.number, back);
-      this.threads.set(restored.number, restored);
+      this.remember(restored, { acted: true });
       if (this.route.view !== 'thread') this.sel = restored.number;
       await this.refreshShown(restored.number);
       this.say('Undone', null);
@@ -1726,20 +1955,161 @@ class Threads {
   async sendComment(thread) {
     const text = (this.drafts.get(thread.number) ?? '').trim();
     if (text === '') return;
+    const onlyMe = !this.member && this.onlyMe;
     try {
-      await comment(thread.number, text);
+      await comment(thread.number, text, onlyMe ? 'owner' : 'thread');
     } catch (error) {
       this.fail(error, "The comment didn't save. It is still in the box.");
       return;
     }
     this.drafts.delete(thread.number);
     this.commentPreview = false;
+    this.onlyMe = false;
     this.clearProblem();
     const known = this.threads.get(thread.number);
-    if (known) this.threads.set(thread.number, { ...known, activityAt: new Date().toISOString() });
+    if (known) this.threads.set(thread.number, { ...known, activityAt: new Date().toISOString(), waiting: this.member ? (known.waiting ?? false) : false });
     await this.refreshShown(thread.number);
     this.main.scrollTo({ top: this.main.scrollHeight });
-    this.say(`Commented on #${thread.number}`, null);
+    this.say(onlyMe ? `Noted on #${thread.number}, for you alone` : `Commented on #${thread.number}`, null);
+  }
+
+  /* ---------- Share: the owner invites people to a thread, and takes invitations back ---------- */
+
+  /** Opens the Share sheet for a thread, then fills it with its people. @param {Thread} thread */
+  async openShare(thread) {
+    if (this.member) return;
+    this.sharing = { number: thread.number, people: [], count: 0, email: '', name: '', problem: '', invited: null, busy: true };
+    this.renderShare();
+    try {
+      const answer = await people(thread.number);
+      if (this.sharing?.number !== thread.number) return;
+      this.sharing = { ...this.sharing, people: answer.people, count: answer.invitedCount, busy: false };
+    } catch (error) {
+      this.closeOverlay();
+      this.fail(error, "The people on this thread didn't load.");
+      return;
+    }
+    this.renderShare();
+    focusIn(this.dialog, '#share-email');
+  }
+
+  renderShare() {
+    const sharing = this.sharing;
+    const thread = sharing === null ? undefined : this.threads.get(sharing.number);
+    if (sharing === null || thread === undefined) return;
+    const shown = this.shown?.thread.number === sharing.number ? this.shown : null;
+    const comments = shown?.comments ?? [];
+    const lines = seesLines(comments.filter((said) => said.audience !== 'owner').length, comments.filter((said) => said.audience === 'owner').length);
+    const form = el('form', { class: 't-invite', 'data-submit': 'invite', novalidate: '' }, [
+      el('label', { class: 't-fld' }, [
+        el('span', { class: 't-lbl' }, ['Email']),
+        el('input', { class: 't-field', id: 'share-email', type: 'email', autocomplete: 'off', placeholder: 'meera@example.com', value: sharing.email }),
+      ]),
+      el('label', { class: 't-fld' }, [
+        el('span', { class: 't-lbl' }, ['Name']),
+        el('input', { class: 't-field', id: 'share-name', autocomplete: 'off', placeholder: 'Meera', value: sharing.name }),
+      ]),
+      el('button', { type: 'submit', class: 't-btn t-btn-primary', ...(sharing.busy ? { disabled: '' } : {}) }, ['Invite ', kbd('↵')]),
+    ]);
+    const rows = [
+      el('div', { class: 't-prow' }, [avatar('owner', ''), el('span', { class: 't-prow-name' }, [el('b', {}, ['You']), el('small', {}, ['owner'])]), el('span', { class: 't-prow-role' }, ['Everything'])]),
+      ...sharing.people.map((person) =>
+        el('div', { class: 't-prow' }, [
+          avatar('member', person.name ?? ''),
+          el('span', { class: 't-prow-name' }, [el('b', {}, [person.name ?? 'Someone']), el('small', {}, [person.email ?? ''])]),
+          el('button', { type: 'button', class: 't-text-btn', 'data-act': 'share-remove', 'data-person': person.id ?? '', ...(sharing.busy ? { disabled: '' } : {}) }, ['Remove']),
+        ]),
+      ),
+    ];
+    const invited = sharing.invited;
+    const draft = invited === null ? null : invitation({ number: thread.number, title: titleOf(thread), path: threadPath(thread) }, invited, location.origin);
+    this.openOverlay('share', `Share #${thread.number}`, 'form', [
+      this.sheetHead(`Share #${thread.number} ${titleOf(thread)}`),
+      el('div', { class: 't-sheet-body' }, [
+        form,
+        ...(sharing.problem ? [el('p', { class: 't-err', role: 'alert' }, [sharing.problem])] : []),
+        el('div', { class: 't-plist' }, rows),
+        el('div', { class: 't-sees' }, [el('span', {}, [el('b', {}, ['They see']), ' ', lines.sees]), el('span', {}, [el('b', {}, ['Never']), ' ', lines.never])]),
+        el('div', { class: 't-seats' }, [el('meter', { class: 't-seat-bar', min: '0', max: '50', value: String(sharing.count), 'aria-label': 'People with access' }), el('span', {}, [seatsLine(sharing.count)])]),
+        ...(draft === null || invited === null
+          ? []
+          : [
+              el('div', { class: 't-reply' }, [
+                el('div', { class: 't-reply-head' }, [el('h2', {}, [`Send ${invited.name} the link`]), el('span', {}, [`to ${invited.email}`])]),
+                el('div', { class: 't-reply-body' }, [el('span', { class: 't-note' }, ['Nothing is sent from the site. Gmail opens a draft as you; read it, change it if you like, and press Send there.'])]),
+                el('div', { class: 't-reply-actions' }, [el('a', { class: 't-btn t-btn-primary', href: gmailLink(draft, this.me), target: '_blank', rel: 'noopener' }, [icon('mail'), 'Open the draft in Gmail'])]),
+              ]),
+            ]),
+      ]),
+    ]);
+  }
+
+  /** Reads the sheet's two fields into its state. */
+  readShare() {
+    if (this.sharing === null) return;
+    const email = this.dialog.querySelector('#share-email');
+    const name = this.dialog.querySelector('#share-name');
+    if (email instanceof HTMLInputElement) this.sharing.email = email.value;
+    if (name instanceof HTMLInputElement) this.sharing.name = name.value;
+  }
+
+  async sendInvite() {
+    this.readShare();
+    const sharing = this.sharing;
+    if (sharing === null || sharing.busy) return;
+    const problem = invitationProblem(sharing.email, sharing.name, this.me, sharing.people);
+    if (problem !== null) {
+      this.sharing = { ...sharing, problem };
+      this.renderShare();
+      focusIn(this.dialog, problem.startsWith('Add') || problem.startsWith('Keep') ? '#share-name' : '#share-email');
+      return;
+    }
+    const person = { name: sharing.name.trim(), email: sharing.email.trim().toLowerCase() };
+    this.sharing = { ...sharing, busy: true, problem: '' };
+    this.renderShare();
+    /** @type {import('./threads-store.js').People} */
+    let answer;
+    try {
+      answer = await invite(sharing.number, person.email, person.name);
+    } catch (error) {
+      const said = error instanceof Failed && error.message === 'owner' ? "That's your own address. You're in every thread." : null;
+      this.sharing = { ...sharing, busy: false, problem: said ?? "The invitation didn't save. Check the address and try again." };
+      this.renderShare();
+      if (said === null) this.fail(error, "The invitation didn't save.");
+      return;
+    }
+    this.sharing = { ...sharing, people: answer.people, count: answer.invitedCount, email: '', name: '', problem: '', invited: person, busy: false };
+    const known = this.threads.get(sharing.number);
+    if (known) this.remember(known, { shared: answer.people.length });
+    await this.refreshShown(sharing.number);
+    this.renderShare();
+    this.say(`${person.name} can open #${sharing.number}. Open the draft to send them the link.`, null);
+  }
+
+  /** @param {string} id */
+  async removePerson(id) {
+    const sharing = this.sharing;
+    const person = sharing?.people.find((one) => one.id === id);
+    if (sharing === null || sharing.busy || person === undefined) return;
+    this.sharing = { ...sharing, busy: true };
+    this.renderShare();
+    /** @type {import('./threads-store.js').People} */
+    let answer;
+    try {
+      answer = await uninvite(sharing.number, id);
+    } catch (error) {
+      this.sharing = { ...sharing, busy: false };
+      this.renderShare();
+      this.fail(error, `${person.name ?? 'They'} wasn't removed.`);
+      return;
+    }
+    const invited = sharing.invited?.email === person.email ? null : sharing.invited;
+    this.sharing = { ...sharing, people: answer.people, count: answer.invitedCount, invited, busy: false };
+    const known = this.threads.get(sharing.number);
+    if (known) this.remember(known, { shared: answer.people.length });
+    await this.refreshShown(sharing.number);
+    this.renderShare();
+    this.say(`${person.name ?? 'They'} removed. Their next click is refused.`, null);
   }
 
   readEditor() {
@@ -1773,7 +2143,7 @@ class Threads {
     const saved = [];
     for (const [field, text] of changes) {
       try {
-        this.threads.set(thread.number, await edit(thread.number, field, text));
+        this.remember(await edit(thread.number, field, text), { acted: true });
         saved.push(field === 'body' ? 'text' : field);
       } catch (error) {
         this.fail(error, saved.length > 0 ? `Saved the ${saved.join(' and ')}, but not the rest. It is still in the editor.` : "That didn't save. It is still in the editor.");
@@ -1879,6 +2249,18 @@ class Threads {
         break;
       case 'close':
         this.closeOverlay();
+        break;
+      case 'share':
+        if (thread) void this.openShare(thread);
+        break;
+      case 'share-remove':
+        void this.removePerson(button.dataset.person ?? '');
+        break;
+      case 'audience':
+        this.onlyMe = button.dataset.audience === 'owner';
+        this.keepScroll = true;
+        this.render();
+        focusIn(this.main, '#comment-text');
         break;
       case 'undo':
         void this.runUndo();
@@ -2000,6 +2382,7 @@ class Threads {
       this.readEditor();
       this.main.querySelector('#edit-preview')?.replaceChildren(...this.editorPreview(this.shown.thread, this.editing));
     } else if (target.id.startsWith('new-')) this.readNew();
+    else if (target.id.startsWith('share-')) this.readShare();
   }
 
   /** @param {Event} event */
@@ -2025,6 +2408,7 @@ class Threads {
     if (kind === 'comment' && thread) void this.sendComment(thread);
     if (kind === 'edit' && thread) void this.saveEdit(thread);
     if (kind === 'new') void this.saveNew();
+    if (kind === 'invite') void this.sendInvite();
   }
 
   /** @param {KeyboardEvent} event */
@@ -2113,6 +2497,7 @@ class Threads {
 
   /** @param {Command} command */
   run(command) {
+    if (this.member && !MEMBER_COMMANDS.has(command)) return;
     const thread = this.target();
     const status = thread?.status;
     switch (command) {
@@ -2181,6 +2566,9 @@ class Threads {
         break;
       case 'new':
         this.openNew();
+        break;
+      case 'share':
+        if (this.route.view === 'thread' && thread) void this.openShare(thread);
         break;
       case 'keys':
         this.openKeys();

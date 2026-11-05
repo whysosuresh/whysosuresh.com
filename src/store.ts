@@ -82,6 +82,10 @@ export interface ThreadRow {
   main: Main;
   link_url: string | null;
   link_title: string | null;
+  /** On a list's rows only (`LIST_EXTRAS`): how many people the thread is shared with now. */
+  shared?: number;
+  /** On a list's rows only: 1 when the last word on it is an invited person's, else 0. */
+  waiting?: number;
 }
 
 /** A thread's main section: its text, a page saved into it, or a link to an artifact on claude.ai. */
@@ -258,12 +262,23 @@ async function listed(db: D1Database, page: D1PreparedStatement): Promise<Listed
   return { rows: (rows?.results ?? []) as ThreadRow[], counts: tally };
 }
 
-/** Up to `limit` threads of a tab, newest number first, below `before` when given. */
+/**
+ * What the owner's list says of each row beside the thread: how many people it is shared with now (`shared`), and
+ * whether the last word on it is an invited person's (`waiting`): their newest comment is later than the owner's
+ * newest comment or change, so it waits on him until he comments, moves it or edits it. Derived from the rows
+ * already kept, with nothing stored for it; times compare as the ISO strings every writer stamps.
+ */
+const LIST_EXTRAS = `(SELECT COUNT(*) FROM members WHERE members.thread_id = threads.id AND members.removed_at IS NULL) AS shared,
+  (COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.thread_id = threads.id AND comments.author = 'member'), '')
+    > MAX(COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.thread_id = threads.id AND comments.author = 'owner'), ''),
+          COALESCE((SELECT MAX(at) FROM events WHERE events.thread_id = threads.id AND events.actor = 'owner'), ''))) AS waiting`;
+
+/** Up to `limit` threads of a tab, newest number first, below `before` when given, each with `LIST_EXTRAS`. */
 export async function listByNumber(db: D1Database, tab: Tab, before: number | null, limit: number): Promise<Listed> {
   const p = new Params();
   const statuses = p.list(TABS[tab]);
   const cursor = before === null ? "" : ` AND number < ${p.add(before)}`;
-  return listed(db, statement(db, `SELECT ${COLUMNS} FROM threads WHERE status IN (${statuses})${cursor} ORDER BY number DESC LIMIT ${limit}`, p));
+  return listed(db, statement(db, `SELECT ${COLUMNS}, ${LIST_EXTRAS} FROM threads WHERE status IN (${statuses})${cursor} ORDER BY number DESC LIMIT ${limit}`, p));
 }
 
 /** Up to `limit` of the threads an invited person is in, most recently active first. */

@@ -2,8 +2,10 @@
 // `npm run dev:signed-in` serves http://localhost:8790/ from the Worker's own bundle in workerd (test/harness.ts),
 // with a local D1 and R2 holding a few made-up threads, and plays Cloudflare Access by signing every call under
 // /threads/api/ as the owner, the way the edge hands a signed-in request over. `--signed-out` signs nothing, so the
-// page shows what a visitor sees; `--member <address>` signs every call as a person signed in by that address, whom
-// the seed invites to one thread ("Who owns what"), so the page shows what an invited person sees. Pages are seeded the way the sync saves them, through the threads' call with its
+// page shows what a visitor sees; `--member <address>` signs every call as a person signed in by that address, so
+// the page shows what an invited person sees. The seed always shares one thread ("Who owns what") with a made-up
+// person, Meera, at that address or meera@example.com, who has the last word on it, beside an "Only me" comment of
+// the owner's: the owner's Today shows it waiting on him, and the invited person never sees the note. Pages are seeded the way the sync saves them, through the threads' call with its
 // played token: the sealed probe (test/fixtures/sealed-probe.html, every line of which should read "blocked" in the
 // browser), and each file given with `--page <file>` (an
 // artifact's HTML as the Artifact tool's read saved it) as a version of one thread. Requests reach the Worker at
@@ -59,14 +61,22 @@ async function seed(): Promise<void> {
   await asSync(`/${done}`, { action: "done" });
   await asSync(`/${who}/text`, { field: "summary", text: "Decided: a release needs two people.\nOpen: who owns pricing.\nWaiting on: you.\nNext: settle pricing on Friday's call." });
   await asSync(`/${who}/comments`, { body: "From the call: Asha takes on-call, and wants releases to need two of us." });
-  if (member !== null) {
-    const invited = await harness.fetch(`${SITE}/threads/api/threads/${who}/people`, {
+  const guest = member ?? "meera@example.com";
+  /** Sends one call from a signed-in browser on the site: the owner's, or the invited guest's. */
+  const asPerson = async (claims: Record<string, unknown>, path: string, body: unknown): Promise<void> => {
+    const response = await harness.fetch(`${SITE}/threads/api/threads${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: SITE, "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()) },
-      body: new TextEncoder().encode(JSON.stringify({ add: { email: member, name: "Meera" } })),
+      headers: { "Content-Type": "application/json", Origin: SITE, "Cf-Access-Jwt-Assertion": harness.access.token(claims) },
+      body: new TextEncoder().encode(JSON.stringify(body)),
     });
-    if (!invited.ok) throw new Error(`inviting ${member} answered ${invited.status}: ${await invited.text()}`);
-  }
+    if (!response.ok) throw new Error(`seeding ${path} answered ${response.status}: ${await response.text()}`);
+  };
+  const owner = harness.access.ownerClaims();
+  await asPerson(owner, `/${who}/comments`, { body: "Before sharing: pricing stays between us until Friday.", audience: "owner" });
+  await asPerson(owner, `/${who}/people`, { add: { email: guest, name: "Meera" } });
+  await asPerson(owner, `/${who}/comments`, { body: "Meera, would you own pricing?" });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await asPerson(harness.access.memberClaims(guest), `/${who}/comments`, { body: "Happy to own pricing. I'll draft the tiers by Thursday." });
 
   const database = await harness.db();
   await database

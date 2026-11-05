@@ -36,7 +36,6 @@ interface ListAnswer {
   threads: { id: string; number: number; status: string }[];
   counts: Record<string, number>;
   next: number | null;
-  me: string | null;
 }
 
 let harness: Harness;
@@ -157,7 +156,7 @@ beforeEach(async () => {
 });
 
 describe("a list", () => {
-  it("answers each tab with its own threads, newest number first, every tab's count, and the owner's address", async () => {
+  it("answers each tab with its own threads, newest number first, and every tab's count, naming no one", async () => {
     const look = [await seed(), await seed()];
     const act = await seed({ status: "act", kind: "feedback" });
     const discuss = await seed({ status: "discuss", kind: "idea" });
@@ -179,17 +178,16 @@ describe("a list", () => {
       expect(answer.threads.map((thread) => thread.id)).toEqual(ids);
       expect(answer.counts).toEqual({ look: 2, act: 1, discuss: 1, done: 3 });
       expect(answer.next).toBeNull();
-      expect(answer.me).toBe(OWNER);
+      expect(Object.keys(answer).sort()).toEqual(["counts", "next", "threads"]);
     }
   });
 
-  it("answers the sync with no address", async () => {
+  it("answers the sync the same tab", async () => {
     await seed();
     const response = await getList("?tab=look", { claims: harness.access.syncClaims() });
     expect(response.status).toBe(200);
     const answer = (await response.json()) as ListAnswer;
     expect(answer.threads).toHaveLength(1);
-    expect(answer.me).toBeNull();
   });
 });
 
