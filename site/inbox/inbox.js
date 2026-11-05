@@ -11,15 +11,17 @@
 // <name>"), his own work and ideas ("yours", as "You"), each with a title, and items moved from a GitHub issue
 // with a link back to it. A note the sync filed as an issue sits in Done as Filed, with a link to the issue;
 // Done closes it once the issue is, and Reply then opens for its sender as for any feedback. What the sync
-// adds is written in GitHub's Markdown, so it is shown formatted (markdown.js parses, this file builds the
-// nodes, so nothing becomes markup); a visitor's note is always shown as the plain text they typed.
+// adds is written in GitHub's Markdown, so it is shown formatted (the threads' parser, ../app/markdown.js, parses,
+// this file builds the nodes, so nothing becomes markup); a table and the threads' blocks are shown as the lines
+// they were written in, as they were before this page's successor drew them; a visitor's note is always shown
+// as the plain text they typed.
 //
 // Laptop: three columns (queues, list, note), every move on a key (`?` lists them). Phone: one note fills the
 // screen with the moves under the thumb and the queues along the bottom. The data sits behind inbox-store.js.
 
 import { TOPICS } from '../talk-topics.js';
 import { Failed, SignedOut, change, list } from './inbox-store.js';
-import { parse } from './markdown.js';
+import { parse } from '../app/markdown.js';
 
 /**
  * @typedef {import('./inbox-store.js').Item} Item
@@ -207,7 +209,7 @@ function fromOf(item) {
 
 /**
  * Inline runs as nodes: text stays text, a link opens in a new tab.
- * @param {import('./markdown.js').Inline[]} runs
+ * @param {import('../app/markdown.js').Inline[]} runs
  * @returns {(Node | string)[]}
  */
 function inlineNodes(runs) {
@@ -223,8 +225,18 @@ function inlineNodes(runs) {
         return el('em', {}, [run.text]);
       case 'link':
         return el('a', { href: run.href, target: '_blank', rel: 'noopener' }, [run.text]);
+      case 'thread':
+        return `#${run.number}`;
     }
   });
+}
+
+/**
+ * Inline runs as the text they read as, for a table shown as its lines.
+ * @param {import('../app/markdown.js').Inline[]} runs
+ */
+function plainText(runs) {
+  return runs.map((run) => (run.type === 'thread' ? `#${run.number}` : run.text)).join('');
 }
 
 /**
@@ -252,6 +264,16 @@ function formatted(text) {
         break;
       case 'rule':
         box.append(el('hr'));
+        break;
+      case 'table':
+        box.append(el('pre', {}, [el('code', {}, [[block.head, ...block.rows].map((row) => `| ${row.map(plainText).join(' | ')} |`).join('\n')])]));
+        break;
+      case 'decision':
+      case 'numbers':
+      case 'timeline':
+      case 'columns':
+      case 'card':
+        box.append(el('pre', {}, [el('code', {}, [block.source])]));
         break;
     }
   }

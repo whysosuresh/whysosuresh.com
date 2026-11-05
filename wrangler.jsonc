@@ -1,8 +1,10 @@
 // whysosuresh.com: one Cloudflare Worker that serves the folder ./site, and runs code only for /api/* (the
 // note flow's one public write, src/talk.ts), /inbox/api/* (the private inbox's calls, src/inbox.ts) and
-// /threads/api/* (the threads' private calls, src/threads.ts), all on the database bound below. Every page, the
-// inbox's included, comes straight from ./site, with no code in its path; Cloudflare Access guards /inbox and
-// everything under it, and /threads/api and everything under it, one application each (infrastructure/). This
+// /threads/* (the threads' private calls under /threads/api/, src/threads.ts, and the threads page at every
+// other path, src/pages.ts, which hands over site/threads/index.html through the assets binding), all on the
+// database bound below. Every other page, the inbox's included, comes straight from ./site, with no code in its
+// path; Cloudflare Access guards /inbox and everything under it, and /threads/api and everything under it, one
+// application each (infrastructure/), never a thread's page. This
 // file drives `wrangler dev`, the dry run in `npm run check` (whose bundle the Worker tests run, with ./site and
 // the routing below), and the deploy that .github/workflows/site.yaml runs on every merge to main, all with the
 // wrangler pinned in ./deploy.
@@ -27,8 +29,11 @@
     "not_found_handling": "404-page",
     // /feedback serves feedback.html; /feedback.html and /index.html redirect to the clean address.
     "html_handling": "auto-trailing-slash",
-    // Only these paths reach the code; everything else is a file from ./site.
-    "run_worker_first": ["/api/*", "/inbox/api/*", "/threads/api/*"]
+    // Only these paths reach the code; everything else is a file from ./site. The threads page's scripts live
+    // under /app/, so they stay files.
+    "run_worker_first": ["/api/*", "/inbox/api/*", "/threads/*"],
+    // How the code hands over a file from ./site: the threads page, with site/_headers on it.
+    "binding": "ASSETS"
   },
   // The apex is the Worker's one address, through a route on the zone, found by its name in the
   // account above. The route needs a proxied record at the apex, which Planton holds; www is the

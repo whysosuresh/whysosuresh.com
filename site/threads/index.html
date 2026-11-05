@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<!-- whysosuresh.com/threads: Suresh's threads, the page the Worker hands over at /threads/ and at every thread's
+     own address, /threads/42 (src/pages.ts). Today (new notes, and what sat a week in one tab), the threads list
+     (four tabs and the spaces), and a thread: its living summary on top, its text drawn as blocks, then comments and
+     history in order. threads.js draws all of it from the threads' private calls under /threads/api/, behind
+     Cloudflare Access; the page itself holds no data. Until a call answers, nothing shows: a visitor who isn't
+     signed in sees the same "Nothing here" a missing thread shows, and a small "Sign in" only on a device that
+     has signed in before. Every link and file is root-absolute; the icons are a template the script copies. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex">
+  <title>Threads · whysosuresh.com</title>
+  <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
+  <link rel="icon" type="image/png" sizes="192x192" href="/img/icon-192.png">
+  <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app/threads.js"></script>
+</head>
+<body class="threads">
+  <div class="t-app" data-app hidden>
+    <nav class="t-side" aria-label="Threads">
+      <div class="t-side-head"><span class="t-brand">Threads</span><a class="t-site" href="/">whysosuresh.com</a></div>
+      <button type="button" class="t-side-find" data-act="find"><span data-icon="search"></span>Find anything<kbd>⌘K</kbd></button>
+      <div class="t-nav" data-nav></div>
+      <button type="button" class="t-side-new" data-act="new"><span data-icon="plus"></span>New thread<kbd>N</kbd></button>
+      <div class="t-side-foot"><span class="t-av t-av-me">S</span><span class="t-side-who">Suresh<small>Signed in</small></span><button type="button" class="t-icon-button" data-act="keys" aria-label="Keys"><span data-icon="keys"></span></button></div>
+    </nav>
+    <div class="t-main" data-main tabindex="-1"></div>
+    <nav class="t-tabbar" aria-label="Sections" data-tabbar>
+      <button type="button" data-go="today"><span data-icon="sun"></span>Today</button>
+      <button type="button" data-go="list"><span data-icon="list"></span>Threads</button>
+      <button type="button" data-act="find"><span data-icon="search"></span>Find</button>
+      <button type="button" data-act="new"><span data-icon="plus"></span>New</button>
+    </nav>
+  </div>
+
+  <div class="t-lost" data-lost hidden>
+    <div class="t-lost-bar"><a class="t-lost-name" href="/">whysosuresh.com</a></div>
+    <div class="t-lost-body">
+      <h1 class="t-lost-title">Nothing here</h1>
+      <p class="t-lost-text">There's nothing at this address.</p>
+      <p class="t-lost-text" data-sign-in hidden><a data-sign-in-link href="/threads/">Sign in</a></p>
+    </div>
+  </div>
+
+  <p class="t-banner" role="alert" data-banner hidden></p>
+
+  <div class="t-toast" role="status" data-toast hidden>
+    <span data-toast-text></span>
+    <button type="button" class="t-toast-undo" data-act="undo">Undo <kbd>Z</kbd></button>
+    <span class="t-toast-bar" data-toast-bar></span>
+  </div>
+
+  <dialog class="t-dialog" data-dialog aria-label="Threads"></dialog>
+
+  <template data-icons>
+    <svg class="t-i" data-name="search" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/></svg>
+    <svg class="t-i" data-name="plus" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
+    <svg class="t-i" data-name="sun" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1"/></svg>
+    <svg class="t-i" data-name="list" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"/></svg>
+    <svg class="t-i" data-name="keys" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="4" width="13" height="8" rx="1.5"/><path d="M4 6.5h.01M6.5 6.5h.01M9 6.5h.01M11.5 6.5h.01M5 9.5h6"/></svg>
+    <svg class="t-i" data-name="move" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h11M9.5 4.5 13 8l-3.5 3.5"/></svg>
+    <svg class="t-i" data-name="check" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg>
+    <svg class="t-i" data-name="mail" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="3.5" width="13" height="9" rx="1.5"/><path d="m2 4.5 6 4.5 6-4.5"/></svg>
+    <svg class="t-i" data-name="link" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 9.5a3 3 0 0 0 4.2 0l2.3-2.3a3 3 0 0 0-4.2-4.2l-.8.8M9.5 6.5a3 3 0 0 0-4.2 0L3 8.8A3 3 0 0 0 7.2 13l.8-.8"/></svg>
+    <svg class="t-i" data-name="doc" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.5h5.5L12.5 4.5V14a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2a.5.5 0 0 1 .5-.5Z"/><path d="M9.5 1.5v3h3M5.5 8h5M5.5 10.5h5"/></svg>
+    <svg class="t-i" data-name="x" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
+    <svg class="t-i" data-name="pen" viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 2.5 13.5 5.5 6 13H3v-3Z"/></svg>
+    <svg class="t-i" data-name="fork" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="3.5" r="1.5"/><circle cx="12" cy="3.5" r="1.5"/><circle cx="8" cy="12.5" r="1.5"/><path d="M4 5v1.5c0 1.5 4 2 4 4.5M12 5v1.5c0 1.5-4 2-4 4.5"/></svg>
+    <svg class="t-i" data-name="reply" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4 2.5 7.5 6 11M2.5 7.5H10a3.5 3.5 0 0 1 3.5 3.5v1"/></svg>
+    <svg class="t-i" data-name="up" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 10 4-4 4 4"/></svg>
+    <svg class="t-i" data-name="down" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+    <svg class="t-i" data-name="reopen" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v3h3"/></svg>
+    <svg class="t-i" data-name="mic" viewBox="0 0 16 16" aria-hidden="true"><rect x="6" y="1.5" width="4" height="8" rx="2"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V15"/></svg>
+    <svg class="t-i" data-name="space" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11Z"/></svg>
+  </template>
+</body>
+</html>
