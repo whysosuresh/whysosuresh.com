@@ -8,7 +8,8 @@
 // the owner's: the owner's Today shows it waiting on him, and the invited person never sees the note. One thread of
 // his own is public ("Shipping Stigmer 0.1.0, in public"), shared with the same person, with a comment of his
 // written for anyone, a visitor's note he OK'd and one waiting for his OK, whose words hold Markdown and a link that
-// must show as typed; signed out, its address shows the public view. Pages are seeded the way the sync saves them, through the threads' call with its
+// must show as typed; signed out, its address shows the public view. The pricing page thread is public as well, and
+// not shared, so the invited person reads it in the public view too. Pages are seeded the way the sync saves them, through the threads' call with its
 // played token: the sealed probe (test/fixtures/sealed-probe.html, every line of which should read "blocked" in the
 // browser), and each file given with `--page <file>` (an
 // artifact's HTML as the Artifact tool's read saved it) as a version of one thread. Requests reach the Worker at
@@ -18,7 +19,7 @@
 
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { SITE, startHarness, type Harness } from "./harness.ts";
+import { SITE, TEST_SECRET, startHarness, type Harness } from "./harness.ts";
 
 const PORT = 8790;
 const LOCAL = `http://localhost:${PORT}`;
@@ -33,7 +34,9 @@ if (member !== null && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(member)) {
 /** Each file after a `--page`, saved in order as versions of one thread's page. */
 const pageFiles = process.argv.flatMap((arg, i) => (process.argv[i - 1] === "--page" ? [arg] : []));
 
-const harness: Harness = await startHarness();
+// Cloudflare's always-pass test secret, as `npm run dev` gives the Worker, so the browser's test widget's token passes
+// the bot check when a note is sent on the public thread.
+const harness: Harness = await startHarness({ secret: TEST_SECRET });
 const sync = (): string => harness.access.token(harness.access.syncClaims());
 
 /** Sends one call as the sync, as `inbox` does, and answers its JSON. */
@@ -110,6 +113,8 @@ async function seed(): Promise<void> {
   }
   for (const file of files) await page(pricing, new Uint8Array(readFileSync(file)), null);
   await asSync(`/${pricing}/text`, { field: "summary", text: "Decided: small teams use it free until launch.\nOpen: per seat, per run, or flat.\nWaiting on: the cost per run.\nNext: pick one on Friday." });
+  // Public too, and not shared with the invited person, so they read it in the public view, its page from the public address.
+  await asPerson(owner, `/${pricing}`, { action: "publish" });
   const slides = await add("chat:seed-slides", { title: "Launch talk slides", status: "act", space: "stigmer", body: "The launch talk, as slides on claude.ai." });
   await asSync(`/${slides}/link`, { url: "https://claude.ai/artifact/example-slides", title: "Launch talk" });
 

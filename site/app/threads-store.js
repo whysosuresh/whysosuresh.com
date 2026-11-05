@@ -10,6 +10,11 @@
 // NotShared (signed in, but no thread is shared with this address now); a 404 is Missing (a thread that isn't
 // there, or one this browser may not read, which the page shows alike); anything else that fails is Failed, with
 // the Worker's reason when it gave one. The page's writes carry JSON, which a form on another site can't send.
+//
+// A thread Suresh made public is also read with no sign-in, from the public call outside Access (`showPublic`,
+// /api/threads/<n>, src/public.ts): what the thread says and the comments written as Public that are shown, in the
+// private answer's own field names, so one renderer draws both. Its page loads from the public address too. His OK on
+// a visitor's note (`judge`: show, drop, or hold to put it back to waiting) is a private call of his own.
 
 /**
  * @typedef {'look' | 'act' | 'discuss' | 'done'} Tab
@@ -19,19 +24,31 @@
  *   title: string | null, body: string, summary: string | null, senderName: string | null, senderEmail: string | null,
  *   status: Status, kind: 'feedback' | 'idea' | null, dropReason: string | null, replyOpenedAt: string | null,
  *   ref: string | null, filedLink: string | null, movedAt: string | null, activityAt: string,
- *   main: 'text' | 'page' | 'link', link: { url: string, title: string | null } | null,
- *   shared?: number, waiting?: boolean
+ *   main: 'text' | 'page' | 'link', link: { url: string, title: string | null } | null, publicAt: string | null,
+ *   shared?: number, waiting?: boolean, pending?: number
  * }} Thread
  * @typedef {{ version: number, savedAt: string, actor: string, bytes: number, source: string | null }} PageVersion
  * @typedef {{ version: number, savedAt: string, source: string | null, versions: PageVersion[] }} Page
- * @typedef {{ id: string, author: 'owner' | 'sync' | 'member' | string, name: string | null, audience: 'thread' | 'owner' | string, body: string, createdAt: string }} Comment
+ * @typedef {'thread' | 'owner' | 'public'} Audience
+ * @typedef {{
+ *   id: string, author: 'owner' | 'sync' | 'member' | 'visitor' | string, name: string | null, audience: Audience | string,
+ *   state: 'shown' | 'pending' | 'dropped' | string, body: string, createdAt: string, senderEmail?: string | null
+ * }} Comment
+ * @typedef {{
+ *   number: number, title: string | null, summary: string | null, space: string | null, main: 'text' | 'page' | 'link',
+ *   body: string | null, link: { url: string, title: string | null } | null, createdAt: string
+ * }} PublicThread
+ * @typedef {{ version: number, savedAt: string, versions: { version: number, savedAt: string }[] }} PublicPage
+ * @typedef {{ author: 'owner' | 'member' | 'visitor' | string, name: string | null, body: string, createdAt: string }} PublicComment
+ * @typedef {{ thread: PublicThread, page: PublicPage | null, comments: PublicComment[], truncated: boolean }} PublicShown
+ * @typedef {'show' | 'drop' | 'hold'} Judgement
  * @typedef {{ id?: string, name: string | null, email?: string, addedAt?: string, owner?: boolean }} Person
  * @typedef {{ people: Person[], invitedCount: number }} People
  * @typedef {{ caller: 'owner' | 'sync' | 'member', email: string | null }} Me
  * @typedef {{ id: number, at: string, actor: 'owner' | 'sync' | 'visitor' | 'import' | string, type: string, data: Record<string, unknown> }} Event
  * @typedef {{ thread: Thread, page: Page | null, people: Person[], comments: Comment[], events: Event[], truncated: boolean }} Shown
  * @typedef {{ threads: Thread[], counts: Record<Tab, number>, next: number | null }} Listing
- * @typedef {{ action: 'act' | 'discuss' | 'unsort' | 'done' | 'reopen' | 'reply-opened' }
+ * @typedef {{ action: 'act' | 'discuss' | 'unsort' | 'done' | 'reopen' | 'reply-opened' | 'publish' | 'unpublish' }
  *   | { action: 'drop', reason: string }
  *   | { action: 'space', space: string }} Action
  * @typedef {'title' | 'summary' | 'body'} Field
@@ -162,14 +179,57 @@ export async function move(number, action) {
 }
 
 /**
- * Adds a comment to a thread: for everyone in it, or (`owner`, the owner's alone) for him only.
+ * Adds a comment to a thread: for everyone in it, for him only (`owner`, the owner's alone), or on a public thread
+ * for anyone (`public`).
  * @param {number} number
  * @param {string} body
- * @param {'thread' | 'owner'} audience
+ * @param {Audience} audience
  * @returns {Promise<Comment>}
  */
 export async function comment(number, body, audience) {
-  return /** @type {{ comment: Comment }} */ (await post(`/threads/${number}/comments`, audience === 'owner' ? { body, audience } : { body })).comment;
+  return /** @type {{ comment: Comment }} */ (await post(`/threads/${number}/comments`, audience === 'thread' ? { body } : { body, audience })).comment;
+}
+
+/**
+ * His ruling on a visitor's note: shown on the thread, dropped, or back to waiting; answers the note as it now is.
+ * @param {number} number
+ * @param {string} note
+ * @param {Judgement} action
+ * @returns {Promise<Comment>}
+ */
+export async function judge(number, note, action) {
+  return /** @type {{ comment: Comment }} */ (await post(`/threads/${number}/comments/${encodeURIComponent(note)}`, { action })).comment;
+}
+
+/**
+ * A public thread, as anyone reads it with no sign-in: Missing for any number that isn't one.
+ * @param {number} number
+ * @returns {Promise<PublicShown>}
+ */
+export async function showPublic(number) {
+  /** @type {Response} */
+  let response;
+  try {
+    response = await fetch(`/api/threads/${number}`, { redirect: 'manual', credentials: 'omit', cache: 'no-store' });
+  } catch {
+    throw new Failed('network');
+  }
+  if (response.status === 404) throw new Missing();
+  if (!response.ok) throw new Failed(String(response.status));
+  try {
+    return /** @type {PublicShown} */ (await response.json());
+  } catch {
+    throw new Failed('answer');
+  }
+}
+
+/**
+ * The address a public thread's page frame loads one version from, outside Access, sealed as the private one is.
+ * @param {number} number
+ * @param {number} version
+ */
+export function publicPageAddress(number, version) {
+  return `/api/threads/${number}/pages/${version}`;
 }
 
 /**
