@@ -1,9 +1,10 @@
 // The signed-in local site, for looking at the threads page in a real browser before a deploy:
 // `npm run dev:signed-in` serves http://localhost:8790/ from the Worker's own bundle in workerd (test/harness.ts),
 // with a local D1 and R2 holding a few made-up threads, and plays Cloudflare Access by signing every call under
-// /threads/api/ and /inbox/api/ as the owner, the way the edge hands a signed-in request over. `--signed-out` signs nothing, so the page shows what a visitor sees. Pages are seeded the way the
-// sync saves them, through the threads' call with its played token: the sealed probe (test/fixtures/sealed-probe.html,
-// every line of which should read "blocked" in the browser), and each file given with `--page <file>` (an
+// /threads/api/ as the owner, the way the edge hands a signed-in request over. `--signed-out` signs nothing, so the
+// page shows what a visitor sees. Pages are seeded the way the sync saves them, through the threads' call with its
+// played token: the sealed probe (test/fixtures/sealed-probe.html, every line of which should read "blocked" in the
+// browser), and each file given with `--page <file>` (an
 // artifact's HTML as the Artifact tool's read saved it) as a version of one thread. Requests reach the Worker at
 // this local address, so the script a page carries addresses its height to it, as it addresses whysosuresh.com
 // live. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
@@ -20,7 +21,7 @@ const signedOut = process.argv.includes("--signed-out");
 const pageFiles = process.argv.flatMap((arg, i) => (process.argv[i - 1] === "--page" ? [arg] : []));
 
 const harness: Harness = await startHarness();
-const sync = (): string => harness.access.token(harness.access.syncClaims("threads"), { app: "threads" });
+const sync = (): string => harness.access.token(harness.access.syncClaims());
 
 /** Sends one call as the sync, as `inbox` does, and answers its JSON. */
 async function asSync(path: string, body: unknown): Promise<Record<string, unknown>> {
@@ -101,8 +102,7 @@ async function serve(request: IncomingMessage, response: ServerResponse): Promis
     if (value === undefined || ["host", "connection", "content-length"].includes(name)) continue;
     headers[name] = Array.isArray(value) ? value.join(", ") : value;
   }
-  const app = path.startsWith("/threads/api/") ? "threads" : path.startsWith("/inbox/api/") ? "inbox" : null;
-  if (app !== null && !signedOut) headers["cf-access-jwt-assertion"] = harness.access.token(harness.access.ownerClaims(app), { app });
+  if (path.startsWith("/threads/api/") && !signedOut) headers["cf-access-jwt-assertion"] = harness.access.token(harness.access.ownerClaims());
   const method = request.method ?? "GET";
   const sent = method === "GET" || method === "HEAD" ? undefined : await body(request);
   const answer = await harness.fetch(`${LOCAL}${path}`, { method, headers, redirect: "manual", ...(sent === undefined ? {} : { body: sent }) });

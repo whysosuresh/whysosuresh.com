@@ -3,11 +3,11 @@
 // player and the scripts' allowed resources, that the headers match the pages and the scripts, that the
 // stylesheet carries no dead rules, that the "Send a note" doors open the note flow, that the topic list
 // the Worker shares is plain data and reads page addresses right, that the spaces the Worker shares are plain
-// data and hold every topic, that the private inbox's page and the threads page are never indexed or shared and
-// reach only their own calls, that no file names the owner's email address, and that the Worker's config routes
-// the one domain to the code only under /api/, /inbox/api/ and /threads/ (test/routing.test.ts sends the requests). `wrangler deploy --dry-run` does not read
-// site/_headers, so this file parses it. The Worker itself is test/talk.test.ts's and
-// test/inbox.test.ts's.
+// data and hold every topic, that the threads page is never indexed or shared and reaches only its own calls,
+// that /inbox, the threads' old address, redirects to /threads/ and nothing else is redirected, that no file names
+// the owner's email address, and that the Worker's config routes the one domain to the code only under /api/ and
+// /threads/ (test/routing.test.ts sends the requests). `wrangler deploy --dry-run` does not read
+// site/_headers or site/_redirects, so this file parses them. The Worker itself is the Worker tests'.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -22,6 +22,7 @@ const siteDir = join(root, "site");
 const SERVED = [
   "404.html",
   "_headers",
+  "_redirects",
   "app/keys.js",
   "app/markdown.js",
   "app/threads-store.js",
@@ -31,9 +32,6 @@ const SERVED = [
   "img/avatar.webp",
   "img/icon-192.png",
   "img/share.jpg",
-  "inbox/inbox-store.js",
-  "inbox/inbox.js",
-  "inbox/index.html",
   "index.html",
   "robots.txt",
   "spaces.js",
@@ -421,7 +419,7 @@ describe("style.css", () => {
       }
     }
     // The note flow draws its sheet from a template in its script, and names the dialog's class there; the
-    // inbox builds its cards with a helper that takes the class as an object key (`class: 'card'`).
+    // threads build their elements with a helper that takes the class as an object key (`class: 't-row'`).
     for (const script of scripts) {
       for (const match of read(script).matchAll(/class(?:Name)?\s*[=:]\s*["']([^"'$]+)["']/g)) {
         for (const name of (match[1] ?? "").split(/\s+/)) used.add(name);
@@ -438,25 +436,17 @@ describe("style.css", () => {
   });
 });
 
-describe("the inbox's page", () => {
-  it("is never indexed, and carries nothing a shared link reads", async () => {
-    const doc = await parse("inbox/index.html");
-    const robots = doc.querySelectorAll('meta[name="robots"]')[0];
-    expect(robots && attr(robots, "content")).toBe("noindex");
-    expect(doc.querySelectorAll('link[rel="canonical"], meta[property^="og:"], meta[name="description"]')).toEqual([]);
-    expect(SHARED_PAGES).not.toContain("inbox/index.html");
-  });
-
-  it("loads only its own script, which reaches the inbox's calls and nothing else of the site's", async () => {
-    const loaded = (await parse("inbox/index.html")).querySelectorAll('script[type="module"]').map((el) => attr(el, "src"));
-    expect(loaded).toEqual(["/inbox/inbox.js"]);
-    const paths = [...read("inbox/inbox-store.js").matchAll(/`(\/[^`?$]*)/g)].map((m) => m[1]);
-    expect(paths.every((path) => path?.startsWith("/inbox/api/"))).toBe(true);
-    expect(paths.length).toBeGreaterThan(0);
-  });
-
-  it("never submits a form, because the CSP allows none: its dialog holds no form", async () => {
-    expect((await parse("inbox/index.html")).querySelectorAll("form")).toEqual([]);
+describe("_redirects", () => {
+  it("sends /inbox and everything under it to /threads/ for good, and nothing else", () => {
+    const rules = read("_redirects")
+      .split("\n")
+      .filter((line) => line.trim() !== "" && !line.trimStart().startsWith("#"))
+      .map((line) => line.trim().split(/\s+/));
+    expect(rules).toEqual([
+      ["/inbox", "/threads/", "301"],
+      ["/inbox/", "/threads/", "301"],
+      ["/inbox/*", "/threads/", "301"],
+    ]);
   });
 });
 
@@ -518,8 +508,8 @@ describe("wrangler.jsonc", () => {
     expect(text).not.toContain("custom_domain");
   });
 
-  it("runs the code only under /api/, /inbox/api/ and /threads/, and every other page comes straight from site/", () => {
-    expect(text).toContain('"run_worker_first": ["/api/*", "/inbox/api/*", "/threads/*"]');
+  it("runs the code only under /api/ and /threads/, and every other page comes straight from site/", () => {
+    expect(text).toContain('"run_worker_first": ["/api/*", "/threads/*"]');
     expect(text.match(/"run_worker_first"/g)).toHaveLength(1);
   });
 

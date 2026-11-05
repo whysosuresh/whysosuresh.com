@@ -17,11 +17,10 @@
 //   GET  /threads/api/sign-in?next=<a threads page>                           owner and sync
 //
 // A list answers one tab, newest number first, 50 at a time, with the number to go on from, every tab's count,
-// and to the owner his own address (`me`, which his page needs to open Gmail as him). The sync's add is the
-// inbox's add with `space` for `topic` (src/wire.ts), and answers the thread already there when its `ref` comes
-// again; the owner's add is a thread he starts from his page, with a title, a space and an open tab. A thread's
-// own call answers it with its comments and its history, oldest first, up to 500 of each. A move is the inbox's
-// move list with `space` for `topic`, and the store holds its rules (src/store.ts). A comment adds Markdown to a
+// and to the owner his own address (`me`, which his page needs to open Gmail as him). The sync's add (src/wire.ts)
+// answers the thread already there when its `ref` comes again; the owner's add is a thread he starts from his page, with a title, a space and an open tab. A thread's
+// own call answers it with its comments and its history, oldest first, up to 500 of each. A move is one of the
+// store's moves (src/store.ts), which holds their rules. A comment adds Markdown to a
 // thread. A text replaces the thread's title, its living summary (an empty one clears it) or its main text,
 // keeping the text it replaced in the history; a visitor's own words are never rewritten (409 `visitor-words`).
 // Text has its own call because a move is capped at 1 KiB. A search answers up to 20 threads for ⌘K: the one
@@ -35,7 +34,6 @@
 // owner's writes must come from his own page; `reply-opened` is his alone and `file` the sync's. Nothing
 // personal is logged: a refusal's line holds its status and reason only.
 
-import { isSpace } from "../site/spaces.js";
 import { identify, type Caller } from "./access.ts";
 import type { Bindings } from "./bindings.ts";
 import { json, type JsonValue } from "./json.ts";
@@ -74,7 +72,6 @@ import {
   readOwnAdd,
   refuse,
   text,
-  type SpaceKey,
 } from "./wire.ts";
 
 /** The most threads one list answers. */
@@ -92,7 +89,6 @@ const MAX_SEARCH = 100;
  * and the list at /threads/, a thread at /threads/<n> with its title after it), and nowhere else.
  */
 const NEXT_SHAPE = /^\/threads\/(?:[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?$/;
-const SPACE: SpaceKey = { key: "space", allowed: isSpace };
 /** The largest page: claude.ai holds a page to "16MB or smaller", and 16 MiB is at least that. */
 export const MAX_PAGE_BYTES = 16 * 1024 * 1024;
 /** The only place a link, or a page's source, may point: an address on claude.ai. */
@@ -185,7 +181,7 @@ async function add(request: Request, env: Bindings, caller: Caller): Promise<Res
   if (length !== null) return length;
 
   const given = await readJson(request);
-  const found = caller.caller === "sync" ? readAdd(given, SPACE) : readOwnAdd(given, SPACE);
+  const found = caller.caller === "sync" ? readAdd(given) : readOwnAdd(given);
   if (typeof found === "string") return refuse(400, found);
 
   const kept = await create(env.DB, found, caller.caller);
@@ -209,7 +205,7 @@ async function show(number: number, env: Bindings): Promise<Response> {
 async function move(request: Request, number: number, env: Bindings, caller: Caller): Promise<Response> {
   const length = lengthRefusal(request, MAX_CHANGE_BYTES);
   if (length !== null) return length;
-  const change = readMove(await readJson(request), SPACE);
+  const change = readMove(await readJson(request));
   if (change === null) return refuse(400, "change");
   const only = onlyFor(change);
   if (only !== null && only !== caller.caller) return refuse(403, `${only}-only`);

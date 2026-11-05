@@ -1,10 +1,9 @@
-// What the two private doors, the inbox's calls (src/inbox.ts) and the threads' calls (src/threads.ts), read from
-// a request before the store sees it: the size and type checks, and an add or a move as the store's own intent
-// (src/store.ts). The doors differ only in the name of the thing a thread is about: the inbox says `topic` and
-// takes only the note flow's topics, the threads say `space` and take every space; so the key and its check are
-// passed in, and the rules live here once. The owner's own add, from the threads page, has its own shape
-// (`readOwnAdd`). Every refusal logs its status and reason only, nothing personal.
+// What the threads' calls (src/threads.ts) read from a request before the store sees it: the size and type
+// checks, and an add or a move as the store's own intent (src/store.ts). What a thread is about is its `space`,
+// any of site/spaces.js. The sync's add and the owner's own add, from the threads page, have their own shapes
+// (`readAdd`, `readOwnAdd`). Every refusal logs its status and reason only, nothing personal.
 
+import { isSpace } from "../site/spaces.js";
 import { json } from "./json.ts";
 import { isJson } from "./request.ts";
 import type { Move, NewThread } from "./store.ts";
@@ -32,12 +31,6 @@ const ISSUE_SHAPE = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+$/;
 const CONTROL = /[\u0000-\u001f\u007f]/;
 /** A body may keep its line breaks and tabs; every other control character is refused. */
 const BODY_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/;
-
-/** The name a door gives what a thread is about, and the check its values pass. */
-export interface SpaceKey {
-  readonly key: "topic" | "space";
-  readonly allowed: (slug: string) => boolean;
-}
 
 export function refuse(status: number, reason: string): Response {
   console.log(JSON.stringify({ refused: status, reason }));
@@ -86,11 +79,11 @@ export function text(value: unknown, max: number): string | null {
  * An add from the sync as a new thread, or the reason it is refused: its first field that is wrong, in a fixed
  * order. Something told to Suresh in person (`told`) names the teller; his own (`self`) names no one.
  */
-export function readAdd(value: unknown, space: SpaceKey): NewThread | string {
+export function readAdd(value: unknown): NewThread | string {
   if (!isRecord(value)) return "item";
   const source = value.source;
   if (source !== "told" && source !== "self") return "source";
-  const expected = ["body", "ref", "source", "status", "title", space.key, ...(source === "told" ? ["name"] : [])].sort().join(",");
+  const expected = ["body", "ref", "source", "space", "status", "title", ...(source === "told" ? ["name"] : [])].sort().join(",");
   if (Object.keys(value).sort().join(",") !== expected) return "keys";
 
   if (typeof value.ref !== "string" || !REF_SHAPE.test(value.ref)) return "ref";
@@ -98,10 +91,10 @@ export function readAdd(value: unknown, space: SpaceKey): NewThread | string {
   if (title === null) return "title";
   const body = text(value.body, MAX_BODY);
   if (body === null || body === "") return "body";
-  const given = value[space.key];
+  const given = value.space;
   let about: string | null = null;
   if (given !== null) {
-    if (typeof given !== "string" || !space.allowed(given)) return space.key;
+    if (typeof given !== "string" || !isSpace(given)) return "space";
     about = given;
   }
   let name: string | null = null;
@@ -115,7 +108,7 @@ export function readAdd(value: unknown, space: SpaceKey): NewThread | string {
 }
 
 /** A change as one of the store's moves, or null for a malformed one. */
-export function readMove(value: unknown, space: SpaceKey): Move | null {
+export function readMove(value: unknown): Move | null {
   if (!isRecord(value)) return null;
   const keys = Object.keys(value).sort().join(",");
   switch (value.action) {
@@ -132,9 +125,9 @@ export function readMove(value: unknown, space: SpaceKey): Move | null {
       if (reason.length > MAX_REASON || CONTROL.test(reason) || !reason.isWellFormed()) return null;
       return { action: "drop", reason: reason === "" ? null : reason };
     }
-    case space.key: {
-      const slug = value[space.key];
-      if (keys !== `action,${space.key}` || typeof slug !== "string" || !space.allowed(slug)) return null;
+    case "space": {
+      const slug = value.space;
+      if (keys !== "action,space" || typeof slug !== "string" || !isSpace(slug)) return null;
       return { action: "space", space: slug };
     }
     case "file":
@@ -152,15 +145,15 @@ export function readMove(value: unknown, space: SpaceKey): Move | null {
  * title; it names no origin, so starting the same title twice makes two threads, as two clicks of New would. Its
  * main text may be empty: a thread can start as a title, and its text is written later.
  */
-export function readOwnAdd(value: unknown, space: SpaceKey): NewThread | string {
+export function readOwnAdd(value: unknown): NewThread | string {
   if (!isRecord(value)) return "item";
-  if (Object.keys(value).sort().join(",") !== ["body", "status", "title", space.key].sort().join(",")) return "keys";
+  if (Object.keys(value).sort().join(",") !== "body,space,status,title") return "keys";
   const title = line(value.title, MAX_TITLE);
   if (title === null) return "title";
   const body = text(value.body, MAX_BODY);
   if (body === null) return "body";
-  const given = value[space.key];
-  if (typeof given !== "string" || !space.allowed(given)) return space.key;
+  const given = value.space;
+  if (typeof given !== "string" || !isSpace(given)) return "space";
   const status = value.status;
   if (status !== "received" && status !== "act" && status !== "discuss") return "status";
   return { source: "self", space: given, title, body, senderName: null, senderEmail: null, status, originRef: null };

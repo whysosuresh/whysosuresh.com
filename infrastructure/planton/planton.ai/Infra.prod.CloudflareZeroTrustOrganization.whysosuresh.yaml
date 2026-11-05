@@ -1,9 +1,9 @@
 # The account `whysosuresh`'s Zero Trust organization (../../vendors/cloudflare/README.md, "Zero Trust"): the
-# team whose sign-in page guards the inbox at whysosuresh.com/inbox. Cloudflare creates it when Zero Trust is
+# team whose sign-in page guards the threads' calls at whysosuresh.com/threads/api. Cloudflare creates it when Zero Trust is
 # switched on (row 21's owner step, 2026-11-04), under a random team name; this file gives it the site's name.
 # Planton configures it and never creates or deletes it: deleting this resource changes nothing at Cloudflare.
 #
-# The team domain is the address every sign-in goes through and the issuer the Worker checks on every inbox
+# The team domain is the address every sign-in goes through and the issuer the Worker checks on every threads
 # request (`ACCESS_TEAM_DOMAIN` in ../../../wrangler.jsonc). Changing it ends every session and breaks the
 # Worker's check until wrangler.jsonc follows, so it changes only with both, in one PR.
 #

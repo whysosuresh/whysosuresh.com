@@ -38,7 +38,7 @@ beforeEach(async () => {
 type Who = "owner" | "sync";
 
 function token(as: Who): string {
-  return harness.access.token(as === "sync" ? harness.access.syncClaims("threads") : harness.access.ownerClaims("threads"), { app: "threads" });
+  return harness.access.token(as === "sync" ? harness.access.syncClaims() : harness.access.ownerClaims());
 }
 
 async function thread(): Promise<number> {

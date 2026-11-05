@@ -1,4 +1,4 @@
-// The Worker in Cloudflare's own runtime, for the Worker tests (test/talk.test.ts, test/inbox.test.ts,
+// The Worker in Cloudflare's own runtime, for the Worker tests (test/talk.test.ts, test/threads-door.test.ts,
 // test/threads.test.ts, test/routing.test.ts, test/migrations.test.ts) and the signed-in local site
 // (test/dev-signed-in.ts): Miniflare (pinned to the version the
 // pinned wrangler itself runs, so the runtime and compatibility date are production's) runs the exact bundle
@@ -11,8 +11,8 @@
 // another host, `wrong-action` for another action, `unreachable` answers as a check that is down, and
 // anything else fails; under Cloudflare's test secret every token passes, as Cloudflare answers it. Cloudflare
 // Access is played too: the team's certs address (wrangler.jsonc's `ACCESS_TEAM_DOMAIN`) serves the harness's
-// own RSA keys, and `access.token` signs an application token with them as Access would, for the inbox's
-// application or the threads'. Every other host the Worker tries is refused and recorded.
+// own RSA keys, and `access.token` signs an application token with them as Access would, for the threads'
+// application. Every other host the Worker tries is refused and recorded.
 
 import { createSign, generateKeyPairSync, type KeyObject } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -48,7 +48,6 @@ function wranglerVar(name: string): string {
   return value;
 }
 export const ACCESS_TEAM_DOMAIN = wranglerVar("ACCESS_TEAM_DOMAIN");
-export const ACCESS_AUD = wranglerVar("ACCESS_AUD");
 export const THREADS_ACCESS_AUD = wranglerVar("THREADS_ACCESS_AUD");
 export const INBOX_SYNC_CLIENT_ID = wranglerVar("INBOX_SYNC_CLIENT_ID");
 /** The owner's address in the harness; production's comes from the deploy and is in no file. */
@@ -86,13 +85,9 @@ export interface Database {
 /** The claims of an application token, as Cloudflare Access signs them; a key set to undefined is left out. */
 export type Claims = Record<string, unknown>;
 
-/** The two Access applications, each with its own audience tag. */
-export type App = "inbox" | "threads";
 
 /** How a played token is made beyond its claims. */
 export interface TokenOptions {
-  /** The application whose tag the token's default claims carry; the inbox's by default. */
-  app?: App;
   /** The key id the header names; the served key's by default. */
   kid?: string;
   /** The header's algorithm; RS256 by default. */
@@ -107,9 +102,9 @@ export interface TokenOptions {
 export interface PlayedAccess {
   /** A signed application token: the owner's by default; `claims` change or (as undefined) remove claims. */
   token(claims?: Claims, options?: TokenOptions): string;
-  /** The owner's claims and the sync's claims, for an application (the inbox's by default), to build on. */
-  ownerClaims(app?: App): Claims;
-  syncClaims(app?: App): Claims;
+  /** The owner's claims and the sync's claims, for the threads' application, to build on. */
+  ownerClaims(): Claims;
+  syncClaims(): Claims;
   /** How many times the Worker fetched the certs. */
   readonly fetches: number;
   /** Serves a second key as well, as Cloudflare does while it rotates; returns its key id. */
@@ -177,8 +172,8 @@ function playAccess(): PlayedAccess & { serve(request: RuntimeRequest): RuntimeR
   let down = false;
 
   const now = (): number => Math.floor(Date.now() / 1000);
-  const common = (app: App = "inbox"): Claims => ({
-    aud: [app === "threads" ? THREADS_ACCESS_AUD : ACCESS_AUD],
+  const common = (): Claims => ({
+    aud: [THREADS_ACCESS_AUD],
     iss: `https://${ACCESS_TEAM_DOMAIN}`,
     iat: now(),
     nbf: now(),
@@ -187,13 +182,13 @@ function playAccess(): PlayedAccess & { serve(request: RuntimeRequest): RuntimeR
   });
 
   return {
-    ownerClaims: (app) => ({ ...common(app), email: OWNER, sub: "7335d417-61da-459d-899c-0a01c76a2f94", identity_nonce: "nonce", country: "IN" }),
+    ownerClaims: () => ({ ...common(), email: OWNER, sub: "7335d417-61da-459d-899c-0a01c76a2f94", identity_nonce: "nonce", country: "IN" }),
     // A service token's claims carry no email or identity, only the token's client id (Cloudflare's
     // application-token page); the owner's are removed so `token()` doesn't merge them in.
-    syncClaims: (app) => ({ ...common(app), common_name: INBOX_SYNC_CLIENT_ID, sub: "", email: undefined, identity_nonce: undefined, country: undefined }),
+    syncClaims: () => ({ ...common(), common_name: INBOX_SYNC_CLIENT_ID, sub: "", email: undefined, identity_nonce: undefined, country: undefined }),
     token(claims = {}, options = {}) {
       const signer = options.foreignKey ? foreign : (keys[keys.length - 1] ?? foreign);
-      const merged: Claims = { ...this.ownerClaims(options.app), ...claims };
+      const merged: Claims = { ...this.ownerClaims(), ...claims };
       for (const [key, value] of Object.entries(merged)) if (value === undefined) delete merged[key];
       const header = base64Url(Buffer.from(JSON.stringify({ alg: options.alg ?? "RS256", kid: options.kid ?? signer.kid, typ: "JWT" })));
       const payload = base64Url(Buffer.from(JSON.stringify(merged)));
@@ -277,7 +272,6 @@ export async function startHarness(options: { secret?: string; owner?: string; t
             ...(secret === "" ? {} : { TURNSTILE_SECRET: { type: "text" as const, value: secret } }),
             ...(owner === "" ? {} : { INBOX_OWNER_EMAIL: { type: "text" as const, value: owner } }),
             ACCESS_TEAM_DOMAIN: { type: "text" as const, value: ACCESS_TEAM_DOMAIN },
-            ACCESS_AUD: { type: "text" as const, value: ACCESS_AUD },
             THREADS_ACCESS_AUD: { type: "text" as const, value: THREADS_ACCESS_AUD },
             INBOX_SYNC_CLIENT_ID: { type: "text" as const, value: INBOX_SYNC_CLIENT_ID },
           },

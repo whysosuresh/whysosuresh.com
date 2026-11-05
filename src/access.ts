@@ -1,9 +1,9 @@
-// Who is calling a private door. Cloudflare Access stands in front of whysosuresh.com/inbox and of
-// whysosuresh.com/threads/api, one application each, and signs every request it lets through (the
+// Who is calling the private door. Cloudflare Access stands in front of whysosuresh.com/threads/api, its own
+// application, and signs every request it lets through (the
 // `Cf-Access-Jwt-Assertion` header, RS256, with the team's keys). This module checks that signature itself, with
 // the runtime's WebCrypto and no library, and then admits exactly two callers: the owner, by the email the
-// sign-in proved, and the recorder sync, by its service token's client id. Each door names its own
-// application's audience tag, so a token Access signed for one door never opens the other. Anything Access
+// sign-in proved, and the recorder sync, by its service token's client id. The door names its application's
+// audience tag, so a token Access signed for any other application never opens it. Anything Access
 // didn't sign for that application, or signed for someone else, is refused, so a request that slipped past the
 // edge's path match (a changed case, an encoded slash) still meets this check.
 //
@@ -24,7 +24,7 @@ export interface AccessSettings {
   readonly INBOX_OWNER_EMAIL?: string;
 }
 
-/** A caller the inbox admits. */
+/** A caller the threads' door admits. */
 export type Caller = { readonly caller: "owner"; readonly email: string } | { readonly caller: "sync" };
 
 /** Why a request is refused: its status and a reason short enough to log. */
