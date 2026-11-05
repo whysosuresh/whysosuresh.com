@@ -13,7 +13,8 @@
     "dry-run": "deploy/node_modules/.bin/wrangler deploy --dry-run --config wrangler.jsonc --outdir dist",
     "test": "npm run dry-run && vitest run",
     "check": "npm run typecheck && npm test",
-    "dev": "deploy/node_modules/.bin/wrangler dev --config wrangler.jsonc --port 8787 --var TURNSTILE_SECRET:1x0000000000000000000000000000000AA"
+    "dev": "deploy/node_modules/.bin/wrangler dev --config wrangler.jsonc --port 8787 --var TURNSTILE_SECRET:1x0000000000000000000000000000000AA",
+    "dev:signed-in": "npm run dry-run && node test/dev-signed-in.ts"
   },
   "devDependencies": {
     "@types/node": "22.20.5",

@@ -1,8 +1,10 @@
 // The Worker in Cloudflare's own runtime, for the Worker tests (test/talk.test.ts, test/inbox.test.ts,
-// test/threads.test.ts, test/routing.test.ts, test/migrations.test.ts): Miniflare (pinned to the version the
+// test/threads.test.ts, test/routing.test.ts, test/migrations.test.ts) and the signed-in local site
+// (test/dev-signed-in.ts): Miniflare (pinned to the version the
 // pinned wrangler itself runs, so the runtime and compatibility date are production's) runs the exact bundle
 // `wrangler deploy --dry-run --outdir dist` writes, in front of the site's own files with the routing
-// wrangler.jsonc declares (which paths reach the code, and how the rest are served), with a real local D1 holding
+// wrangler.jsonc declares (which paths reach the code, how the rest are served, and the binding the code hands
+// files over through, which applies site/_redirects and site/_headers as the deploy does), with a real local D1 holding
 // migrations/, all of them or up to the one a test names, so a test can stage a table as an earlier one left
 // it and then apply the rest. Turnstile's
 // verification is played here: a token of `pass` passes for the request's own host, `wrong-host` passes for
@@ -34,6 +36,8 @@ function wranglerAsset(name: string): string {
 const RUN_WORKER_FIRST = JSON.parse(/"run_worker_first": (\[[^\]]*\])/.exec(WRANGLER)?.[1] ?? "null") as unknown;
 if (!Array.isArray(RUN_WORKER_FIRST) || !RUN_WORKER_FIRST.every((path) => typeof path === "string")) throw new Error("wrangler.jsonc names no run_worker_first list");
 const HTML_HANDLING = wranglerAsset("html_handling");
+/** The binding the code reads the site's files through. */
+const ASSETS_BINDING = wranglerAsset("binding");
 const NOT_FOUND_HANDLING = wranglerAsset("not_found_handling");
 if (HTML_HANDLING !== "auto-trailing-slash" || NOT_FOUND_HANDLING !== "404-page") throw new Error("the harness doesn't know wrangler.jsonc's asset handling");
 
@@ -259,6 +263,7 @@ export async function startHarness(options: { secret?: string; owner?: string; t
             runWorkerFirst: RUN_WORKER_FIRST,
           },
           env: {
+            [ASSETS_BINDING]: { type: "assets" as const },
             DB: { type: "d1", id: "whysosuresh-com" },
             ...(secret === "" ? {} : { TURNSTILE_SECRET: { type: "text" as const, value: secret } }),
             ...(owner === "" ? {} : { INBOX_OWNER_EMAIL: { type: "text" as const, value: owner } }),

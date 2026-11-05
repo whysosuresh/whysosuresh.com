@@ -4,21 +4,29 @@
 // loud (#42).
 //
 //   GET  /threads/api/threads?tab=look|act|discuss|done[&before=<number>]   owner and sync
-//   POST /threads/api/threads                 {"ref": ..., "source": ..., ...}   sync only
+//   POST /threads/api/threads                 {"ref": ..., "source": ..., ...}   sync
+//   POST /threads/api/threads                 {"title", "body", "space", "status"}   owner
 //   GET  /threads/api/threads/<n>                                             owner and sync
 //   POST /threads/api/threads/<n>             {"action": ...}                  owner and sync
 //   POST /threads/api/threads/<n>/comments    {"body": ...}                    owner and sync
 //   POST /threads/api/threads/<n>/text        {"field": ..., "text": ...}      owner and sync
+//   GET  /threads/api/search?q=<words or a number>                            owner and sync
+//   GET  /threads/api/sign-in?next=<a threads page>                           owner and sync
 //
-// A list answers one tab, newest number first, 50 at a time, with the number to go on from and every tab's
-// count. An add is the inbox's add with `space` for `topic` (src/wire.ts), and answers the thread already
-// there when its `ref` comes again. A thread's own call answers it with its comments and its history, oldest
-// first, up to 500 of each. A move is the inbox's move list with `space` for `topic`, and the store holds its
-// rules (src/store.ts). A comment adds Markdown to a thread. A text replaces the thread's living summary (an
-// empty one clears it) or its main text, keeping the text it replaced in the history; a visitor's own words are
-// never rewritten (409 `visitor-words`). Text has its own call because a move is capped at 1 KiB. The owner's
-// writes must come from his own page; `reply-opened` is his alone and `file` the sync's. Nothing personal is
-// logged: a refusal's line holds its status and reason only.
+// A list answers one tab, newest number first, 50 at a time, with the number to go on from, every tab's count,
+// and to the owner his own address (`me`, which his page needs to open Gmail as him). The sync's add is the
+// inbox's add with `space` for `topic` (src/wire.ts), and answers the thread already there when its `ref` comes
+// again; the owner's add is a thread he starts from his page, with a title, a space and an open tab. A thread's
+// own call answers it with its comments and its history, oldest first, up to 500 of each. A move is the inbox's
+// move list with `space` for `topic`, and the store holds its rules (src/store.ts). A comment adds Markdown to a
+// thread. A text replaces the thread's title, its living summary (an empty one clears it) or its main text,
+// keeping the text it replaced in the history; a visitor's own words are never rewritten (409 `visitor-words`).
+// Text has its own call because a move is capped at 1 KiB. A search answers up to 20 threads for ⌘K: the one
+// with that number, or those whose title, summary or text hold the words. The sign-in is where the page sends a
+// signed-out owner: Access signs him in at the edge before the call arrives, and the call sends him on to the
+// threads page he came from, never anywhere else. Every thread answers its last activity (`activityAt`). The
+// owner's writes must come from his own page; `reply-opened` is his alone and `file` the sync's. Nothing
+// personal is logged: a refusal's line holds its status and reason only.
 
 import { isSpace } from "../site/spaces.js";
 import { identify, type Caller } from "./access.ts";
@@ -35,11 +43,26 @@ import {
   listByNumber,
   makeMove,
   onlyFor,
+  search,
   type CommentRow,
   type EventRow,
   type ThreadRow,
 } from "./store.ts";
-import { MAX_BODY, MAX_CHANGE_BYTES, MAX_TEXT_BYTES, lengthRefusal, readAdd, readJson, readMove, refuse, text, type SpaceKey } from "./wire.ts";
+import {
+  MAX_BODY,
+  MAX_CHANGE_BYTES,
+  MAX_TEXT_BYTES,
+  MAX_TITLE,
+  lengthRefusal,
+  line,
+  readAdd,
+  readJson,
+  readMove,
+  readOwnAdd,
+  refuse,
+  text,
+  type SpaceKey,
+} from "./wire.ts";
 
 /** The most threads one list answers. */
 const PAGE = 50;
@@ -49,6 +72,13 @@ const HISTORY = 500;
 const MAX_SUMMARY = 4000;
 /** A thread's number as a path or a cursor names it: no sign, no leading zero, at most nine digits. */
 const NUMBER_SHAPE = /^[1-9]\d{0,8}$/;
+/** The longest search, in UTF-16 code units of the trimmed words. */
+const MAX_SEARCH = 100;
+/**
+ * Where the sign-in may send the owner on: the threads page's own addresses, as src/pages.ts serves them (Today
+ * and the list at /threads/, a thread at /threads/<n> with its title after it), and nowhere else.
+ */
+const NEXT_SHAPE = /^\/threads\/(?:[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?$/;
 const SPACE: SpaceKey = { key: "space", allowed: isSpace };
 
 /** A thread as both callers see it. */
@@ -71,6 +101,7 @@ function thread(row: ThreadRow): { readonly [key: string]: JsonValue } {
     ref: row.origin_ref,
     filedLink: row.filed_link,
     movedAt: row.moved_at,
+    activityAt: row.activity_at,
   };
 }
 
@@ -82,7 +113,7 @@ function eventView(row: EventRow): { readonly [key: string]: JsonValue } {
   return { id: row.id, at: row.at, actor: row.actor, type: row.type, data: JSON.parse(row.data) as JsonValue };
 }
 
-async function list(url: URL, env: Bindings): Promise<Response> {
+async function list(url: URL, env: Bindings, caller: Caller): Promise<Response> {
   const keys = [...url.searchParams.keys()];
   const tab = url.searchParams.get("tab") ?? "";
   const before = url.searchParams.get("before");
@@ -94,15 +125,21 @@ async function list(url: URL, env: Bindings): Promise<Response> {
   const { rows, counts } = await listByNumber(env.DB, tab, before === null ? null : Number(before), PAGE + 1);
   const shown = rows.slice(0, PAGE);
   const last = shown[shown.length - 1];
-  return json(200, { threads: shown.map(thread), counts, next: rows.length > PAGE && last !== undefined ? last.number : null });
+  return json(200, {
+    threads: shown.map(thread),
+    counts,
+    next: rows.length > PAGE && last !== undefined ? last.number : null,
+    me: caller.caller === "owner" ? caller.email : null,
+  });
 }
 
 async function add(request: Request, env: Bindings, caller: Caller): Promise<Response> {
-  if (caller.caller !== "sync") return refuse(403, "sync-only");
+  if (caller.caller === "owner" && !sameOrigin(request)) return refuse(403, "origin");
   const length = lengthRefusal(request, MAX_TEXT_BYTES);
   if (length !== null) return length;
 
-  const found = readAdd(await readJson(request), SPACE);
+  const given = await readJson(request);
+  const found = caller.caller === "sync" ? readAdd(given, SPACE) : readOwnAdd(given, SPACE);
   if (typeof found === "string") return refuse(400, found);
 
   const kept = await create(env.DB, found, caller.caller);
@@ -160,9 +197,9 @@ async function replaceText(request: Request, number: number, env: Bindings, call
   if (length !== null) return length;
   const fields = exactly(await readJson(request), ["field", "text"]);
   const field = fields?.field;
-  if (fields === null || (field !== "summary" && field !== "body")) return refuse(400, "text");
-  const given = text(fields.text, field === "summary" ? MAX_SUMMARY : MAX_BODY);
-  // An empty summary clears it; a thread always has a main text.
+  if (fields === null || (field !== "title" && field !== "summary" && field !== "body")) return refuse(400, "text");
+  // A title is one line and never empty; an empty summary clears it; a main text, once written, is never emptied.
+  const given = field === "title" ? line(fields.text, MAX_TITLE) : text(fields.text, field === "summary" ? MAX_SUMMARY : MAX_BODY);
   if (given === null || (field === "body" && given === "")) return refuse(400, "text");
 
   const edited = await edit(env.DB, { number }, field, given === "" ? null : given, caller.caller);
@@ -171,14 +208,33 @@ async function replaceText(request: Request, number: number, env: Bindings, call
   return json(200, { thread: thread(edited) });
 }
 
+async function lookUp(url: URL, env: Bindings): Promise<Response> {
+  const words = url.searchParams.get("q");
+  if (words === null || [...url.searchParams.keys()].some((key) => key !== "q") || url.searchParams.getAll("q").length !== 1) return refuse(400, "query");
+  const trimmed = line(words, MAX_SEARCH);
+  if (trimmed === null) return refuse(400, "query");
+  return json(200, { threads: (await search(env.DB, trimmed)).map(thread) });
+}
+
+/** Sends a caller Access has just signed in back to the threads page they came from, or to the threads. */
+function signedIn(url: URL): Response {
+  const next = url.searchParams.get("next");
+  const to = next !== null && NEXT_SHAPE.test(next) ? next : "/threads/";
+  return json(303, { next: to }, { Location: to });
+}
+
 /** Answers every request under /threads/api/: who is calling first, then the route. */
 export async function handleThreads(request: Request, env: Bindings): Promise<Response> {
   const who = await identify(request, env, env.THREADS_ACCESS_AUD);
   if (!("caller" in who)) return refuse(who.status, who.reason);
 
   const url = new URL(request.url);
+  if (url.pathname === "/threads/api/search" || url.pathname === "/threads/api/sign-in") {
+    if (request.method !== "GET") return json(405, { reason: "method" }, { Allow: "GET" });
+    return url.pathname === "/threads/api/search" ? lookUp(url, env) : signedIn(url);
+  }
   if (url.pathname === "/threads/api/threads") {
-    if (request.method === "GET") return list(url, env);
+    if (request.method === "GET") return list(url, env, who);
     if (request.method === "POST") return add(request, env, who);
     return json(405, { reason: "method" }, { Allow: "GET, POST" });
   }

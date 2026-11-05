@@ -105,6 +105,7 @@ describe("a good note", () => {
       origin_ref: null,
       filed_link: null,
       moved_at: null,
+      activity_at: row?.created_at,
     });
     expect(String(row?.created_at) >= before).toBe(true);
     expect(await rows("events")).toEqual([

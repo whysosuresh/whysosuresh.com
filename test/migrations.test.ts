@@ -6,7 +6,8 @@
 // next new thread is numbered after the copies. For 0007, which retires the inbox's table a deploy later: a row
 // the old code added between 0006 and its deploy is copied with its history and numbered after the last thread;
 // a move the old code made in that gap wins, with an `imported` event; a thread moved later on the new code
-// keeps its own move; a ref a thread already holds is never kept twice; and the table is gone.
+// keeps its own move; a ref a thread already holds is never kept twice; and the table is gone. For 0008, each
+// thread's last activity: the latest of its arrival, its events and its comments, the inbox's copy left out.
 
 import { afterEach, describe, expect, it } from "vitest";
 import { OWNER, SITE, startHarness, type Harness } from "./harness.ts";
@@ -121,7 +122,8 @@ describe("0006, every inbox row a thread", () => {
 
   it("leaves the inbox's door answering each row as the item it always was, in its tab, newest first", async () => {
     harness = await stage(ROWS);
-    await harness.migrate("0006");
+    // The code that runs now reads what later migrations add, so they are applied too; they move no copied row.
+    await harness.migrate();
     const tabs: Record<string, string[]> = { look: ["received"], act: ["act"], discuss: ["discuss"], done: ["done", "dropped", "filed"] };
     const counts = Object.fromEntries(Object.entries(tabs).map(([tab, statuses]) => [tab, ROWS.filter((row) => statuses.includes(row.status)).length]));
     for (const [tab, statuses] of Object.entries(tabs)) {
@@ -150,7 +152,7 @@ describe("0006, every inbox row a thread", () => {
 
   it("numbers the next new thread after the copies", async () => {
     harness = await stage(ROWS);
-    await harness.migrate("0006");
+    await harness.migrate();
     const response = await harness.fetch(`${SITE}/threads/api/threads`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.syncClaims("threads"), { app: "threads" }) },
@@ -241,8 +243,9 @@ describe("0007, the inbox retired a deploy later", () => {
     const database = await harness.db();
     expect((await database.prepare("SELECT COUNT(*) AS n FROM threads WHERE origin_ref = 'chat:twice'").first<{ n: number }>())?.n).toBe(1);
     expect(await thread(harness, "00000000-0000-4000-8000-000000000007")).toBeNull();
-    const after = (await database.prepare("SELECT * FROM threads WHERE id NOT IN (?1, ?2, ?3) ORDER BY number").bind("00000000-0000-4000-8000-000000000003", "00000000-0000-4000-8000-000000000005", "00000000-0000-4000-8000-000000000006").all()).results;
-    expect(after).toEqual(before);
+    const after = (await database.prepare("SELECT * FROM threads WHERE id NOT IN (?1, ?2, ?3) ORDER BY number").bind("00000000-0000-4000-8000-000000000003", "00000000-0000-4000-8000-000000000005", "00000000-0000-4000-8000-000000000006").all<Record<string, unknown>>()).results;
+    // 0008 adds each thread's last activity; everything 0007 found stays as it was.
+    expect(after.map(({ activity_at: _activity, ...rest }) => rest)).toEqual(before);
   });
 
   it("drops the inbox's table", async () => {
@@ -250,5 +253,35 @@ describe("0007, the inbox retired a deploy later", () => {
     await harness.migrate();
     const tables = (await (await harness.db()).prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'inbox'").all()).results;
     expect(tables).toEqual([]);
+  });
+});
+
+describe("0008, each thread's last activity", () => {
+  it("is the latest of its arrival, its events and its comments, never the day the inbox became threads", async () => {
+    harness = await startHarness({ through: "0007" });
+    const database = await harness.db();
+    const thread = (id: string, number: number, at: string) =>
+      database
+        .prepare("INSERT INTO threads (id, number, created_at, source, body, status) VALUES (?1, ?2, ?3, 'self', 'x', 'received')")
+        .bind(id, number, at);
+    const event = (id: string, at: string, type: string) =>
+      database.prepare("INSERT INTO events (thread_id, at, actor, type, data) VALUES (?1, ?2, 'sync', ?3, '{}')").bind(id, at, type);
+    const said = (id: string, at: string) =>
+      database.prepare("INSERT INTO comments (id, thread_id, author, body, created_at) VALUES (?1, ?2, 'sync', 'x', ?3)").bind(crypto.randomUUID(), id, at);
+    const [a, b, c] = ["a", "b", "c"].map((n) => `00000000-0000-4000-8000-00000000000${n}`) as [string, string, string];
+    await database.batch([
+      thread(a, 1, "2026-11-01T00:00:00.000Z"),
+      thread(b, 2, "2026-11-01T00:00:00.000Z"),
+      thread(c, 3, "2026-11-01T00:00:00.000Z"),
+      event(a, "2026-11-01T00:00:00.000Z", "created"),
+      event(a, "2026-11-05T00:00:00.000Z", "imported"),
+      event(b, "2026-11-02T00:00:00.000Z", "moved"),
+      said(b, "2026-11-03T00:00:00.000Z"),
+      event(c, "2026-11-04T00:00:00.000Z", "edited"),
+      said(c, "2026-11-02T00:00:00.000Z"),
+    ]);
+    await harness.migrate();
+    const rows = (await database.prepare("SELECT id, activity_at FROM threads ORDER BY number").all<{ id: string; activity_at: string }>()).results;
+    expect(rows.map((row) => row.activity_at)).toEqual(["2026-11-01T00:00:00.000Z", "2026-11-03T00:00:00.000Z", "2026-11-04T00:00:00.000Z"]);
   });
 });

@@ -1,15 +1,25 @@
 // Which paths reach the Worker's code and which are the site's own files, sent through the same routing the deploy
 // uses: the harness serves site/ with wrangler.jsonc's `run_worker_first`, `html_handling` and
-// `not_found_handling` (test/harness.ts). What it holds: the three doors (/api/, /inbox/api/, /threads/api/)
-// answer the Worker's JSON; the pages come from site/; a page's .html address redirects to its clean one; and
-// /threads and a thread's address answer the site's 404 page, because nothing serves them yet and Access guards
-// only the threads' calls, never a thread's page.
+// `not_found_handling`, and the assets binding the code hands files over through (test/harness.ts). What it
+// holds: the three doors (/api/, /inbox/api/, /threads/api/) answer the Worker's JSON; the pages come from site/;
+// a page's .html address redirects to its clean one; /threads/ and every thread's address answer the threads
+// page with the site's headers (its CSP among them) and status 200, whatever the number, with no sign-in, because
+// Access guards only the threads' calls, never a thread's page; and any other path under /threads/ is what the
+// site's files make of it.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { SITE, startHarness, type Harness } from "./harness.ts";
+
+/** The headers site/_headers sets on every file, as `name: value` lines under `/*`. */
+const SITE_HEADERS = Object.fromEntries(
+  readFileSync(fileURLToPath(new URL("../site/_headers", import.meta.url)), "utf8")
+    .split("\n")
+    .filter((line) => /^\s+\S/.test(line))
+    .map((line) => [line.slice(0, line.indexOf(":")).trim().toLowerCase(), line.slice(line.indexOf(":") + 1).trim()]),
+);
 
 const siteDir = fileURLToPath(new URL("../site", import.meta.url));
 const titleOf = (file: string): string => /<title>([^<]*)<\/title>/.exec(readFileSync(join(siteDir, file), "utf8"))?.[1] ?? "";
@@ -55,10 +65,35 @@ describe("the site's own files", () => {
     expect(new URL(response.headers.get("location") ?? "", SITE).pathname).toBe("/feedback");
   });
 
-  it.each(["/threads", "/threads/", "/threads/42", "/threads/42-who-owns-what"])("answer %s with the site's 404 page", async (path) => {
+  it.each(["/threads/", "/threads/?tab=act&space=company", "/threads/42", "/threads/42-who-owns-what", "/threads/999999999"])(
+    "answer %s with the threads page and the site's headers, with no sign-in",
+    async (path) => {
+      const response = await harness.fetch(`${SITE}${path}`, { redirect: "manual" });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/html");
+      for (const [name, value] of Object.entries(SITE_HEADERS)) expect([name, response.headers.get(name)]).toEqual([name, value]);
+      expect(await response.text()).toContain(`<title>${titleOf("threads/index.html")}</title>`);
+    },
+  );
+
+  it("redirect /threads to /threads/", async () => {
+    const response = await harness.fetch(`${SITE}/threads`, { redirect: "manual" });
+    expect(response.status).toBe(307);
+    expect(new URL(response.headers.get("location") ?? "", SITE).pathname).toBe("/threads/");
+  });
+
+  it.each(["/threads/042", "/threads/42/comments", "/threads/0", "/threads/nope"])("answer %s with the site's 404 page", async (path) => {
     const response = await harness.fetch(`${SITE}${path}`, { redirect: "manual" });
     expect(response.status).toBe(404);
     expect(response.headers.get("content-type")).toContain("text/html");
     expect(await response.text()).toContain(`<title>${titleOf("404.html")}</title>`);
+  });
+
+  it("serve the threads page's scripts as files", async () => {
+    for (const path of ["/app/threads.js", "/app/threads-store.js", "/app/keys.js", "/app/markdown.js"]) {
+      const response = await harness.fetch(`${SITE}${path}`);
+      expect([path, response.status]).toEqual([path, 200]);
+      expect(response.headers.get("content-type")).toContain("javascript");
+    }
   });
 });

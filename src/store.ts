@@ -9,7 +9,9 @@
 // reads the row as it was, and both apply or neither does. A move states its new status once, as one SQL
 // expression on the row, and both statements use it, so the event names the status the row really went to.
 // A thread's number is one more than the largest, given inside its INSERT; D1 runs one query at a time, and the
-// UNIQUE constraint turns any duplicate into an error rather than two #42s.
+// UNIQUE constraint turns any duplicate into an error rather than two #42s. Every write also stamps the thread's
+// last activity (`activity_at`, migrations/0008_activity.sql) in the same batch: an arrival, a move, an edit, a
+// comment. This file is its only writer, so the rule lives here once.
 
 /** Where a thread came from: the site's note flow, something told to him in person, or his own. */
 export type Source = "talk" | "told" | "self";
@@ -32,8 +34,10 @@ export function isTab(value: string): value is Tab {
   return Object.hasOwn(TABS, value);
 }
 
+// The last activity reads the arrival time when it was never set: a thread the code before 0008 created between
+// that migration and its deploy. A plain expression, so it is safe in RETURNING.
 export const COLUMNS =
-  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at";
+  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at";
 
 export interface ThreadRow {
   id: string;
@@ -53,6 +57,7 @@ export interface ThreadRow {
   origin_ref: string | null;
   filed_link: string | null;
   moved_at: string | null;
+  activity_at: string;
 }
 
 export interface CommentRow {
@@ -121,12 +126,14 @@ export interface NewThread {
  */
 export async function create(db: D1Database, thread: NewThread, actor: Actor): Promise<{ row: ThreadRow; created: boolean } | null> {
   const id = crypto.randomUUID();
+  const now = new Date().toISOString();
   const p = new Params();
   const insert = statement(
     db,
-    `INSERT INTO threads (id, number, created_at, source, space, title, body, status, kind, sender_name, sender_email, origin_ref)
+    `INSERT INTO threads (id, number, created_at, activity_at, source, space, title, body, status, kind, sender_name, sender_email, origin_ref)
      VALUES (${p.add(id)}, (SELECT COALESCE(MAX(number), 0) + 1 FROM threads), ${p.list([
-       new Date().toISOString(),
+       now,
+       now,
        thread.source,
        thread.space,
        thread.title,
@@ -313,7 +320,7 @@ export async function makeMove(db: D1Database, locator: Locator, move: Move, act
   const event = `INSERT INTO events (thread_id, at, actor, type, data) SELECT id, ${e.add(now)}, ${e.add(actor)}, ${e.add(type)}, ${data} FROM threads WHERE ${guard(e)}`;
 
   const u = new Params();
-  const sets = [...(rule.status === undefined ? [] : [`status = ${rule.status}`]), ...rule.sets(u), `moved_at = ${u.add(now)}`];
+  const sets = [...(rule.status === undefined ? [] : [`status = ${rule.status}`]), ...rule.sets(u), `moved_at = ${u.add(now)}`, `activity_at = ?${u.values.length}`];
   const update = `UPDATE threads SET ${sets.join(", ")} WHERE ${guard(u)} RETURNING ${COLUMNS}`;
 
   const [, updated] = await db.batch<ThreadRow>([statement(db, event, e), statement(db, update, u)]);
@@ -322,35 +329,68 @@ export async function makeMove(db: D1Database, locator: Locator, move: Move, act
   return (await find(db, locator)) === null ? "no-thread" : "not-from-here";
 }
 
-/** The two texts of a thread that can be rewritten: the living summary on top, and the main text. */
-export type TextField = "summary" | "body";
+/** The texts of a thread that can be rewritten: its title, the living summary on top, and the main text. */
+export type TextField = "title" | "summary" | "body";
 
 /**
- * Replaces a thread's summary (null clears it) or its main text, and keeps the text it replaced in an `edited`
- * event, so every earlier version stays in the history. A visitor's note keeps their own words: its main text
- * is never rewritten (`visitor-words`). An edit is not a move, so `moved_at` stays as it is.
+ * Replaces a thread's title, its summary (null clears it) or its main text, and keeps the text it replaced in an
+ * `edited` event, so every earlier version stays in the history. A visitor's note keeps their own words: its main
+ * text is never rewritten (`visitor-words`); its title and summary are the owner's labels, so they may be. An
+ * edit is not a move, so `moved_at` stays as it is; it is activity, so `activity_at` moves.
  */
 export async function edit(db: D1Database, locator: Locator, field: TextField, text: string | null, actor: Author): Promise<ThreadRow | "no-thread" | "visitor-words"> {
+  const now = new Date().toISOString();
   const guard = (p: Params): string => `${locate(locator, p)}${field === "body" ? " AND source <> 'talk'" : ""}`;
   const e = new Params();
   const event = `INSERT INTO events (thread_id, at, actor, type, data)
-    SELECT id, ${e.add(new Date().toISOString())}, ${e.add(actor)}, 'edited', json_object('field', ${e.add(field)}, 'before', ${field}) FROM threads WHERE ${guard(e)}`;
+    SELECT id, ${e.add(now)}, ${e.add(actor)}, 'edited', json_object('field', ${e.add(field)}, 'before', ${field}) FROM threads WHERE ${guard(e)}`;
   const u = new Params();
-  const update = `UPDATE threads SET ${field} = ${u.add(text)} WHERE ${guard(u)} RETURNING ${COLUMNS}`;
+  const update = `UPDATE threads SET ${field} = ${u.add(text)}, activity_at = ${u.add(now)} WHERE ${guard(u)} RETURNING ${COLUMNS}`;
   const [, updated] = await db.batch<ThreadRow>([statement(db, event, e), statement(db, update, u)]);
   const row = updated?.results[0];
   if (row !== undefined) return row;
   return (await find(db, locator)) === null ? "no-thread" : "visitor-words";
 }
 
-/** Adds a comment to a thread; null when there is no such thread. */
+/** Adds a comment to a thread, which is activity on it; null when there is no such thread. */
 export async function comment(db: D1Database, locator: Locator, author: Author, body: string): Promise<CommentRow | null> {
+  const now = new Date().toISOString();
   const p = new Params();
-  const columns = `${p.add(crypto.randomUUID())}, id, ${p.add(author)}, ${p.add(body)}, ${p.add(new Date().toISOString())}`;
-  return statement(
+  const columns = `${p.add(crypto.randomUUID())}, id, ${p.add(author)}, ${p.add(body)}, ${p.add(now)}`;
+  const insert = statement(
     db,
     `INSERT INTO comments (id, thread_id, author, body, created_at) SELECT ${columns} FROM threads WHERE ${locate(locator, p)}
      RETURNING id, thread_id, author, body, created_at`,
     p,
-  ).first<CommentRow>();
+  );
+  const u = new Params();
+  const touch = statement(db, `UPDATE threads SET activity_at = ${u.add(now)} WHERE ${locate(locator, u)}`, u);
+  const [added] = await db.batch<CommentRow>([insert, touch]);
+  return added?.results[0] ?? null;
+}
+
+/** The most threads one search answers. */
+export const SEARCH_LIMIT = 20;
+
+/**
+ * Threads for a search, most recently active first: the one numbered `number` when the words are a number
+ * (`42` or `#42`), else every thread whose title, summary or main text holds the words as typed, ignoring case
+ * for ASCII letters. `%` and `_` in the words match only themselves. Up to `SEARCH_LIMIT`.
+ */
+export async function search(db: D1Database, words: string): Promise<ThreadRow[]> {
+  const number = /^#?([1-9]\d{0,8})$/.exec(words);
+  const p = new Params();
+  if (number !== null) {
+    return (await statement(db, `SELECT ${COLUMNS} FROM threads WHERE number = ${p.add(Number(number[1]))}`, p).all<ThreadRow>()).results;
+  }
+  const pattern = p.add(`%${words.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+  const like = (column: string): string => `${column} LIKE ${pattern} ESCAPE '\\'`;
+  return (
+    await statement(
+      db,
+      `SELECT ${COLUMNS} FROM threads WHERE ${like("title")} OR ${like("summary")} OR ${like("body")}
+       ORDER BY COALESCE(activity_at, created_at) DESC, number DESC LIMIT ${SEARCH_LIMIT}`,
+      p,
+    ).all<ThreadRow>()
+  ).results;
 }

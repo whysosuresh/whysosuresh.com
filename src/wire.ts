@@ -2,7 +2,8 @@
 // a request before the store sees it: the size and type checks, and an add or a move as the store's own intent
 // (src/store.ts). The doors differ only in the name of the thing a thread is about: the inbox says `topic` and
 // takes only the note flow's topics, the threads say `space` and take every space; so the key and its check are
-// passed in, and the rules live here once. Every refusal logs its status and reason only, nothing personal.
+// passed in, and the rules live here once. The owner's own add, from the threads page, has its own shape
+// (`readOwnAdd`). Every refusal logs its status and reason only, nothing personal.
 
 import { json } from "./json.ts";
 import { isJson } from "./request.ts";
@@ -18,7 +19,8 @@ export const MAX_BODY = 32_000;
  * name the whole body stays under 128 KiB.
  */
 export const MAX_TEXT_BYTES = 128 * 1024;
-const MAX_TITLE = 200;
+/** The longest title, in UTF-16 code units of the trimmed text. */
+export const MAX_TITLE = 200;
 const MAX_NAME = 80;
 const MAX_LINK = 200;
 /** The longest drop reason, in UTF-16 code units of the trimmed text. */
@@ -65,7 +67,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** A one-line text of at most `max` code units once trimmed, or null. */
-function line(value: unknown, max: number): string | null {
+export function line(value: unknown, max: number): string | null {
   if (typeof value !== "string") return null;
   const text = value.trim();
   if (text === "" || text.length > max || CONTROL.test(text) || !text.isWellFormed()) return null;
@@ -142,4 +144,24 @@ export function readMove(value: unknown, space: SpaceKey): Move | null {
     default:
       return null;
   }
+}
+
+/**
+ * A thread the owner starts from his page, as a new thread, or the reason it is refused: its first field that is
+ * wrong, in a fixed order. It is his own (`self`), filed in a space and in one of the three open tabs, with a
+ * title; it names no origin, so starting the same title twice makes two threads, as two clicks of New would. Its
+ * main text may be empty: a thread can start as a title, and its text is written later.
+ */
+export function readOwnAdd(value: unknown, space: SpaceKey): NewThread | string {
+  if (!isRecord(value)) return "item";
+  if (Object.keys(value).sort().join(",") !== ["body", "status", "title", space.key].sort().join(",")) return "keys";
+  const title = line(value.title, MAX_TITLE);
+  if (title === null) return "title";
+  const body = text(value.body, MAX_BODY);
+  if (body === null) return "body";
+  const given = value[space.key];
+  if (typeof given !== "string" || !space.allowed(given)) return space.key;
+  const status = value.status;
+  if (status !== "received" && status !== "act" && status !== "discuss") return "status";
+  return { source: "self", space: given, title, body, senderName: null, senderEmail: null, status, originRef: null };
 }

@@ -1,15 +1,18 @@
 // @ts-check
-// The small part of GitHub's Markdown the inbox reads, as plain data: items the recorder sync adds (a moved
-// issue with its comments, an idea written up) arrive as Markdown, and showing their `##` and `**` raw makes
-// them hard to read. This module only parses: it returns blocks and inline runs, never HTML, and inbox.js
-// builds them with DOM calls, so nothing in an item's words can become markup. What it knows: headings,
-// paragraphs (their line breaks kept), quotes, bullet and numbered lists (task boxes shown as ☐ and ☑),
-// fenced code, rules, and tables kept as preformatted text; inline code, bold, italic with `*`, and links to
-// http(s) addresses. Anything else stays as the text it is. Notes visitors type on the site are never parsed.
+// The small part of GitHub's Markdown the threads read, as plain data: what the recorder sync and Suresh write
+// (a moved issue with its comments, an idea written up, a comment, a living summary) is Markdown, and showing
+// its `##` and `**` raw makes it hard to read. This module only parses: it returns blocks and inline runs, never
+// HTML, and the pages (site/app/threads.js, and site/inbox/inbox.js until it retires) build them with DOM calls,
+// so nothing in anyone's words can become markup. What it knows: headings, paragraphs (their line breaks kept),
+// quotes, bullet and numbered lists (task boxes shown as ☐ and ☑), fenced code, rules, and tables kept as
+// preformatted text, as typed; inline code, bold, italic with `*`, links to http(s) addresses, and a thread's
+// number (`#59`), which the threads page links to that thread. A living summary written as labelled lines
+// ("Decided: …", "Open: …") is read as those lines (`summaryLines`), and drawn as a grid; any other summary is
+// Markdown. Anything else stays as the text it is. Notes visitors type on the site are never parsed.
 
 /**
  * @typedef {{ type: 'text', text: string } | { type: 'code', text: string } | { type: 'strong', text: string }
- *   | { type: 'em', text: string } | { type: 'link', text: string, href: string }} Inline
+ *   | { type: 'em', text: string } | { type: 'link', text: string, href: string } | { type: 'thread', number: number }} Inline
  * @typedef {{ type: 'p', inline: Inline[] } | { type: 'h', inline: Inline[] } | { type: 'quote', inline: Inline[] }
  *   | { type: 'list', ordered: boolean, items: Inline[][] } | { type: 'pre', text: string } | { type: 'rule' }} Block
  */
@@ -22,8 +25,14 @@ const BULLET = /^\s*[-*+]\s+(.*)$/;
 const NUMBERED = /^\s*\d{1,9}[.)]\s+(.*)$/;
 const TABLE = /^\s*\|.*\|\s*$/;
 const TASK = /^\[([ xX])\]\s+/;
-/** Inline code, bold, a link to an http(s) address, italic with `*`; the first that starts earliest wins. */
-const INLINE = /(`[^`\n]+`)|(\*\*(?=\S)[^*\n]*?\S\*\*)|(\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\))|(\*(?=[^*\s])[^*\n]*?[^*\s]\*)/g;
+/**
+ * Inline code, bold, a link to an http(s) address, italic with `*`, a thread's number; the first that starts
+ * earliest wins. A number is `#` and one to nine digits with no leading zero, at the start or after a space or an
+ * opening bracket, and not followed by a letter, a digit or `_`, so `a#1`, `#1a` and `#0` stay text.
+ */
+const INLINE = /(`[^`\n]+`)|(\*\*(?=\S)[^*\n]*?\S\*\*)|(\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\))|(\*(?=[^*\s])[^*\n]*?[^*\s]\*)|((?<=^|[\s(\[])#([1-9]\d{0,8})(?![\w]))/g;
+/** One line of a living summary: a capitalised label of at most 20 characters, a colon, then its words. */
+const SUMMARY_LINE = /^\s*\*{0,2}([A-Z][A-Za-z ]{0,19}?)\*{0,2}:\*{0,2}\s+(\S.*)$/;
 
 /**
  * The inline runs of one stretch of text.
@@ -37,11 +46,12 @@ export function inline(text) {
   for (const match of text.matchAll(INLINE)) {
     const start = match.index ?? 0;
     if (start > at) runs.push({ type: 'text', text: text.slice(at, start) });
-    const [whole, code, strong, , label, href, em] = match;
+    const [whole, code, strong, , label, href, em, , number] = match;
     if (code !== undefined) runs.push({ type: 'code', text: code.slice(1, -1) });
     else if (strong !== undefined) runs.push({ type: 'strong', text: strong.slice(2, -2) });
     else if (label !== undefined && href !== undefined) runs.push({ type: 'link', text: label, href });
     else if (em !== undefined) runs.push({ type: 'em', text: em.slice(1, -1) });
+    else if (number !== undefined) runs.push({ type: 'thread', number: Number(number) });
     at = start + whole.length;
   }
   if (at < text.length) runs.push({ type: 'text', text: text.slice(at) });
@@ -141,4 +151,22 @@ export function parse(source) {
     blocks.push({ type: 'p', inline: inline(paragraph.join('\n')) });
   }
   return blocks;
+}
+
+/**
+ * A living summary's labelled lines, as label and inline runs, when every line that isn't blank is one
+ * ("Decided: a release needs two people."); null for any other summary, which is drawn as Markdown.
+ * @param {string} source
+ * @returns {{ label: string, inline: Inline[] }[] | null}
+ */
+export function summaryLines(source) {
+  const lines = source.replace(/\r\n?/g, '\n').split('\n').filter((line) => line.trim() !== '');
+  /** @type {{ label: string, inline: Inline[] }[]} */
+  const read = [];
+  for (const line of lines) {
+    const match = SUMMARY_LINE.exec(line);
+    if (match === null) return null;
+    read.push({ label: (match[1] ?? '').trim(), inline: inline((match[2] ?? '').trim()) });
+  }
+  return read.length === 0 ? null : read;
 }
