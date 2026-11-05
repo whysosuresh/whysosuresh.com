@@ -1,7 +1,8 @@
 // The threads' door (src/threads.ts, src/access.ts) held to the rules the inbox's door held before it retired,
 // run as production runs it: the Worker's bundle in workerd (test/harness.ts), with a local D1 and Cloudflare
-// Access played (its keys, and tokens signed with them). What it holds: exactly two callers get in, and every
-// other token is refused, whatever check it fails; the keys are fetched once, again for a rotated key, and not
+// Access played (its keys, and tokens signed with them). What it holds: the owner and the sync get in, an address
+// with no invitation is refused (test/members.test.ts holds invited people), and every other token is refused,
+// whatever check it fails; the keys are fetched once, again for a rotated key, and not
 // again for a made-up key within the minute, and the door fails closed when they or the owner's address are
 // missing; the Worker reaches nothing but Access's keys; every move the store allows leaves the row exactly as it
 // should, every one it refuses leaves it as it was, and every move stamps when; filing is the sync's and marking

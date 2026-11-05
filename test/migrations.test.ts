@@ -7,7 +7,9 @@
 // the old code added between 0006 and its deploy is copied with its history and numbered after the last thread;
 // a move the old code made in that gap wins, with an `imported` event; a thread moved later on the new code
 // keeps its own move; a ref a thread already holds is never kept twice; and the table is gone. For 0008, each
-// thread's last activity: the latest of its arrival, its events and its comments, the inbox's copy left out.
+// thread's last activity: the latest of its arrival, its events and its comments, the inbox's copy left out. For
+// 0010, the people a thread is shared with: every comment written before it is for everyone in the thread and by
+// no invited person, and no one is invited.
 
 import { afterEach, describe, expect, it } from "vitest";
 import { OWNER, SITE, startHarness, type Harness } from "./harness.ts";
@@ -285,5 +287,26 @@ describe("0008, each thread's last activity", () => {
     await harness.migrate();
     const rows = (await database.prepare("SELECT id, activity_at FROM threads ORDER BY number").all<{ id: string; activity_at: string }>()).results;
     expect(rows.map((row) => row.activity_at)).toEqual(["2026-11-01T00:00:00.000Z", "2026-11-03T00:00:00.000Z", "2026-11-04T00:00:00.000Z"]);
+  });
+});
+
+describe("0010, the people a thread is shared with", () => {
+  it("leaves every earlier comment for everyone in the thread, by no invited person, with no one invited", async () => {
+    harness = await startHarness({ through: "0009" });
+    const database = await harness.db();
+    await database.batch([
+      database.prepare("INSERT INTO threads (id, number, created_at, source, body, status) VALUES ('t1', 1, '2026-11-01T00:00:00.000Z', 'self', 'x', 'act')"),
+      database.prepare("INSERT INTO comments (id, thread_id, author, body, created_at) VALUES ('c1', 't1', 'owner', 'Mine.', '2026-11-02T00:00:00.000Z')"),
+      database.prepare("INSERT INTO comments (id, thread_id, author, body, created_at) VALUES ('c2', 't1', 'sync', 'Claude.', '2026-11-03T00:00:00.000Z')"),
+    ]);
+    await harness.migrate();
+    const comments = (await database.prepare("SELECT id, author, audience, person_id FROM comments ORDER BY id").all()).results;
+    expect(comments).toEqual([
+      { id: "c1", author: "owner", audience: "thread", person_id: null },
+      { id: "c2", author: "sync", audience: "thread", person_id: null },
+    ]);
+    for (const table of ["people", "members"]) {
+      expect((await database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>())?.n).toBe(0);
+    }
   });
 });

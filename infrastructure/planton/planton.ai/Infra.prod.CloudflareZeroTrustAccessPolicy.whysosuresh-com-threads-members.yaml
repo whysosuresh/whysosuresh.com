@@ -1,0 +1,28 @@
+# Who else may sign in to the threads: anyone Suresh invited to a thread, while the invitation stands. Access asks
+# the site itself, by an external evaluation: at sign-in it posts a token naming the address to the evaluate
+# address, and lets the address in only when the site answers yes, signed with the key the keys address serves
+# (../../../src/evaluate.ts). The site answers yes exactly when the address has an invitation that stands to any
+# thread, which is also what the Worker checks on every request after (../../../src/threads.ts), so the edge and the
+# Worker can't disagree about who is invited. Anyone else who types an address on the sign-in page is sent no code.
+# The owner's policy and the sync's come first in the application; this one is third.
+#
+# The Worker's deploy comes before this file: both addresses must answer before Access asks them.
+#
+#   planton apply -f Infra.prod.CloudflareZeroTrustAccessPolicy.whysosuresh-com-threads-members.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareZeroTrustAccessPolicy
+metadata:
+  name: whysosuresh-com-threads-members # permanent
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  accountId: $var/cloudflare-whysosuresh-account-id
+  name: whysosuresh.com threads members
+  decision: allow
+  sessionDuration: 168h # a week between email codes, as the owner's
+  include:
+    - externalEvaluation:
+        evaluateUrl: https://whysosuresh.com/api/access/evaluate
+        keysUrl: https://whysosuresh.com/api/access/keys

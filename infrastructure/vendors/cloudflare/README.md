@@ -1,6 +1,6 @@
 # Cloudflare
 
-What the Cloudflare dashboard holds for whysosuresh.com that Planton cannot create: the account, the products turned on in it, the token Planton signs in with, the token the repository's deploy job uses, and the one copy each of the bot check's secret and the inbox owner's address outside Planton.
+What the Cloudflare dashboard holds for whysosuresh.com that Planton cannot create: the account, the products turned on in it, the token Planton signs in with, the token the repository's deploy job uses, and the one copy each of the bot check's secret, the inbox owner's address and the evaluation key outside Planton.
 
 ## The account
 
@@ -15,7 +15,7 @@ R2 was turned on in the account on 2026-11-04 for the site's recordings (with a 
 
 Switched on by the owner on 2026-11-04, on the Free plan (up to 50 users, $0; the card from R2 is on file, and Cloudflare charges it only for use beyond the free limits). Onboarding asked for no team name and made the team `wild-violet-209f`; `Infra.prod.CloudflareZeroTrustOrganization.whysosuresh` renamed it at once, before anyone signed in, so the team domain is `whysosuresh.cloudflareaccess.com` (`../../planton/planton.ai/README.md` row 21).
 
-It is used for one thing: Access in front of Suresh's private door, `whysosuresh.com/threads/api`, with one sign-in and two policies. Everything in it is a Planton file (rows 21 to 25, and 28): the team's name, the sign-in by an emailed one-time code, the recorder sync's service token, the two policies and the application. The inbox's own application, on `whysosuresh.com/inbox`, was purged on 2026-11-05 when /inbox began redirecting to /threads/ (row 26). Cloudflare's own dashboard sign-in, which the account listed as an identity provider before any of this, is left as it is; the application allows only the email code.
+It is used for one thing: Access in front of Suresh's private door, `whysosuresh.com/threads/api`, with one sign-in and three policies: the owner, the recorder sync, and people he invited to a thread, whom the site itself names at sign-in by an external evaluation (`../../../src/evaluate.ts`). Everything in it is a Planton file (rows 21 to 25, 28 and 31): the team's name and its seat expiry, the sign-in by an emailed one-time code, the recorder sync's service token, the three policies and the application. Invited people take seats of the Free plan's 50 as they sign in; a seat is given back after a month without a sign-in (the least Cloudflare allows), and someone who comes back after that signs in again. The threads page's Share shows how many people have access to any thread, from the site's own database. The inbox's own application, on `whysosuresh.com/inbox`, was purged on 2026-11-05 when /inbox began redirecting to /threads/ (row 26). Cloudflare's own dashboard sign-in, which the account listed as an identity provider before any of this, is left as it is; the application allows only the email code.
 
 The recorder sync's service token is Planton's, and so is its secret: Cloudflare shows it once, at creation, and Planton keeps it as the token's sensitive output. A script reads it from there for each use and never prints it; there is no other copy. Rotating it is one field (`clientSecretVersion`) in its file, re-applied.
 
@@ -24,6 +24,12 @@ The recorder sync's service token is Planton's, and so is its secret: Cloudflare
 The one email address the inbox admits is the Planton secret `inbox-owner-email` (row 22), read by the owner's Access policy. The Worker checks the same address again, so it has one more copy: `INBOX_OWNER_EMAIL` in the GitHub environment `production`, which the deploy hands to the Worker as a secret, as it does the bot check's. A deploy with it empty fails before uploading anything. The repository is public and names the address nowhere.
 
 **Copy.** As the bot check's secret below: a script reveals the one value with `planton secret get inbox-owner-email --reveal -o plain`, checks its shape, and pipes it into `gh secret set INBOX_OWNER_EMAIL --env production --repo whysosuresh/whysosuresh.com`; nothing prints it. Changing the address means setting the Planton secret, re-applying the owner's policy, copying it again and re-running the latest `site` run on `main`.
+
+## The evaluation key
+
+The key the site signs its answers to Access's sign-in question with is the Planton secret `threads-evaluation-key` (row 30): an RSA private key as a JWK. Planton keeps it; the Worker needs it too, so it has one more copy: `THREADS_EVALUATION_KEY` in the GitHub environment `production`, which the deploy hands to the Worker as a secret. A deploy with it empty fails before uploading anything. The Worker derives the public half from it and serves it at `https://whysosuresh.com/api/access/keys`, which the members' policy names, so the public half has no copy to keep in step.
+
+**Make and copy.** One script makes the key with Node's `crypto.generateKeyPairSync("rsa", { modulusLength: 2048 })`, exports the private key as a JWK, and pipes that one value into `planton secret set threads-evaluation-key --string` and `gh secret set THREADS_EVALUATION_KEY --env production --repo whysosuresh/whysosuresh.com`; nothing prints it and nothing writes it to disk. To rotate, run the same script and re-run the latest `site` run on `main`: Access reads the new public half from the keys address, and until the deploy runs, the old key keeps answering.
 
 ## The bot check's secret
 

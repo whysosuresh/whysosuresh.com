@@ -2,7 +2,8 @@
 // `npm run dev:signed-in` serves http://localhost:8790/ from the Worker's own bundle in workerd (test/harness.ts),
 // with a local D1 and R2 holding a few made-up threads, and plays Cloudflare Access by signing every call under
 // /threads/api/ as the owner, the way the edge hands a signed-in request over. `--signed-out` signs nothing, so the
-// page shows what a visitor sees. Pages are seeded the way the sync saves them, through the threads' call with its
+// page shows what a visitor sees; `--member <address>` signs every call as a person signed in by that address, whom
+// the seed invites to one thread ("Who owns what"), so the page shows what an invited person sees. Pages are seeded the way the sync saves them, through the threads' call with its
 // played token: the sealed probe (test/fixtures/sealed-probe.html, every line of which should read "blocked" in the
 // browser), and each file given with `--page <file>` (an
 // artifact's HTML as the Artifact tool's read saved it) as a version of one thread. Requests reach the Worker at
@@ -17,6 +18,13 @@ import { SITE, startHarness, type Harness } from "./harness.ts";
 const PORT = 8790;
 const LOCAL = `http://localhost:${PORT}`;
 const signedOut = process.argv.includes("--signed-out");
+/** The address after `--member`, signed in as an invited person instead of the owner. */
+const memberAt = process.argv.indexOf("--member");
+const member = memberAt === -1 ? null : (process.argv[memberAt + 1] ?? "");
+if (member !== null && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(member)) {
+  console.error("--member takes an email address, such as meera@example.com");
+  process.exit(2);
+}
 /** Each file after a `--page`, saved in order as versions of one thread's page. */
 const pageFiles = process.argv.flatMap((arg, i) => (process.argv[i - 1] === "--page" ? [arg] : []));
 
@@ -51,6 +59,14 @@ async function seed(): Promise<void> {
   await asSync(`/${done}`, { action: "done" });
   await asSync(`/${who}/text`, { field: "summary", text: "Decided: a release needs two people.\nOpen: who owns pricing.\nWaiting on: you.\nNext: settle pricing on Friday's call." });
   await asSync(`/${who}/comments`, { body: "From the call: Asha takes on-call, and wants releases to need two of us." });
+  if (member !== null) {
+    const invited = await harness.fetch(`${SITE}/threads/api/threads/${who}/people`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: SITE, "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()) },
+      body: new TextEncoder().encode(JSON.stringify({ add: { email: member, name: "Meera" } })),
+    });
+    if (!invited.ok) throw new Error(`inviting ${member} answered ${invited.status}: ${await invited.text()}`);
+  }
 
   const database = await harness.db();
   await database
@@ -102,7 +118,9 @@ async function serve(request: IncomingMessage, response: ServerResponse): Promis
     if (value === undefined || ["host", "connection", "content-length"].includes(name)) continue;
     headers[name] = Array.isArray(value) ? value.join(", ") : value;
   }
-  if (path.startsWith("/threads/api/") && !signedOut) headers["cf-access-jwt-assertion"] = harness.access.token(harness.access.ownerClaims());
+  if (path.startsWith("/threads/api/") && !signedOut) {
+    headers["cf-access-jwt-assertion"] = harness.access.token(member === null ? harness.access.ownerClaims() : harness.access.memberClaims(member));
+  }
   const method = request.method ?? "GET";
   const sent = method === "GET" || method === "HEAD" ? undefined : await body(request);
   const answer = await harness.fetch(`${LOCAL}${path}`, { method, headers, redirect: "manual", ...(sent === undefined ? {} : { body: sent }) });
@@ -123,7 +141,8 @@ createServer((request, response) => {
     response.writeHead(500).end();
   });
 }).listen(PORT, "127.0.0.1", () => {
-  console.log(`The threads, ${signedOut ? "signed out" : "signed in as the owner"}: ${LOCAL}/threads/ (Ctrl-C stops it)`);
+  const as = signedOut ? "signed out" : member === null ? "signed in as the owner" : `signed in as ${member}, invited to one thread`;
+  console.log(`The threads, ${as}: ${LOCAL}/threads/ (Ctrl-C stops it)`);
 });
 process.on("SIGINT", () => {
   void harness.dispose().then(() => process.exit(0));
