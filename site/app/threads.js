@@ -17,9 +17,10 @@
 // ⌘K, a search over numbers, titles, summaries and text. On a list the next thread is selected after a move; on a
 // thread the page stays, so its history shows the move.
 //
-// Signed out, the page shows what a missing address shows ("Nothing here"), so the address alone never says a
-// thread exists; a device that has signed in before also gets a small "Sign in", which goes through the threads'
-// sign-in call and comes back to the same address. When the sign-in ends mid-use, a line says so and nothing typed
+// Signed out at a thread's address, the page shows what a missing address shows ("Nothing here"), so the address
+// alone never says a thread exists; a device that has signed in before also gets a small "Sign in". At /threads/
+// itself, which names no thread, it always says "Threads" with a Sign in button. Either sign-in goes through the
+// threads' sign-in call and comes back to the same address. When the sign-in ends mid-use, a line says so and nothing typed
 // is lost. Every element is built with DOM calls and every text is set as text, so nothing anyone wrote becomes
 // markup; Markdown is parsed into blocks first (markdown.js). The CSP allows no inline script or style attribute.
 
@@ -547,6 +548,8 @@ class Threads {
     this.tabbar = find(document, '[data-tabbar]', HTMLElement);
     this.lost = find(document, '[data-lost]', HTMLElement);
     this.signIn = find(document, '[data-sign-in]', HTMLElement);
+    this.lostTitle = find(document, '[data-lost-title]', HTMLElement);
+    this.lostText = find(document, '[data-lost-text]', HTMLElement);
     this.signInLink = find(document, '[data-sign-in-link]', HTMLAnchorElement);
     this.banner = find(document, '[data-banner]', HTMLElement);
     this.toast = find(document, '[data-toast]', HTMLElement);
@@ -678,13 +681,25 @@ class Threads {
     }
   }
 
-  /** The signed-out page: what a missing address shows, with a small "Sign in" on a device that has signed in. */
+  /**
+   * The signed-out page. At /threads/ (Today and the list), which names no thread, it says what it is and offers
+   * Sign in. At a thread's address it is what a missing address shows, with a small "Sign in" only on a device that
+   * has signed in before, so the address never says whether that thread exists.
+   */
   showLost() {
     this.app.hidden = true;
     this.lost.hidden = false;
-    this.signIn.hidden = !signedInBefore();
     const here = location.pathname;
     this.signInLink.href = signInAddress(here === '/threads/' || isThreadAddress(here) ? here : '/threads/');
+    if (here === '/threads/') {
+      this.lostTitle.textContent = 'Threads';
+      this.lostText.textContent = "Suresh's private threads. Sign in to open them.";
+      this.signInLink.className = 't-btn t-btn-primary';
+      this.signIn.hidden = false;
+      document.title = 'Threads · whysosuresh.com';
+      return;
+    }
+    this.signIn.hidden = !signedInBefore();
     document.title = 'Nothing here · whysosuresh.com';
   }
 

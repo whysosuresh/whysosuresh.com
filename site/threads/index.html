@@ -4,7 +4,8 @@
      and the spaces), and a thread: its living summary on top, its main text, then comments and history in order.
      /app/threads.js draws all of it from the threads' private calls under /threads/api/, behind Cloudflare Access;
      the page itself holds no data. Until a call answers, nothing shows: a visitor who isn't signed in sees the
-     same "Nothing here" a missing thread shows, and a small "Sign in" only on a device that has signed in before.
+     same "Nothing here" a missing thread shows at a thread's address, and a small "Sign in" there only on a device that
+     has signed in before; at /threads/ itself, which names no thread, it always offers "Sign in".
      Every link and file is root-absolute; the icons are a template the script copies. -->
 <html lang="en">
 <head>
@@ -40,8 +41,8 @@
   <div class="t-lost" data-lost hidden>
     <div class="t-lost-bar"><a class="t-lost-name" href="/">whysosuresh.com</a></div>
     <div class="t-lost-body">
-      <h1 class="t-lost-title">Nothing here</h1>
-      <p class="t-lost-text">There's nothing at this address.</p>
+      <h1 class="t-lost-title" data-lost-title>Nothing here</h1>
+      <p class="t-lost-text" data-lost-text>There's nothing at this address.</p>
       <p class="t-lost-text" data-sign-in hidden><a data-sign-in-link href="/threads/">Sign in</a></p>
     </div>
   </div>
