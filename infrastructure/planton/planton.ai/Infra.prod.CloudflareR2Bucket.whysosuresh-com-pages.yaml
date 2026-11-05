@@ -1,0 +1,24 @@
+# The pages saved into threads, in the Cloudflare account `whysosuresh` (../../vendors/cloudflare/README.md): each
+# version of a page is one object, `pages/<id>.html`, named by a fresh id and never overwritten, with its row in the
+# database's `pages` table naming it. The Worker reaches it through the `PAGES` binding in ../../../wrangler.jsonc
+# and serves a page only through the thread's own call, behind Access, and nothing else does: no public access, no
+# custom domain, no CORS, no lock, and no lifecycle rule, because every version is kept.
+#
+# R2 refuses to delete a bucket that holds objects, so retiring this file means emptying the bucket first. R2 is
+# turned on in the account (README.md, row 15).
+#
+#   planton apply -f Infra.prod.CloudflareR2Bucket.whysosuresh-com-pages.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareR2Bucket
+metadata:
+  name: whysosuresh-com-pages # permanent
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  bucketName: whysosuresh-com-pages
+  accountId: $var/cloudflare-whysosuresh-account-id
+  location: apac # a hint honoured only at creation, near where Suresh reads
+  jurisdiction: default
+  publicAccess: false # only the Worker reads or writes a page

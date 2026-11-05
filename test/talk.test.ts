@@ -106,6 +106,9 @@ describe("a good note", () => {
       filed_link: null,
       moved_at: null,
       activity_at: row?.created_at,
+      main: "text",
+      link_url: null,
+      link_title: null,
     });
     expect(String(row?.created_at) >= before).toBe(true);
     expect(await rows("events")).toEqual([
@@ -308,7 +311,7 @@ describe("privacy", () => {
     const tables = (
       await database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'").all<{ name: string }>()
     ).results.map((t) => t.name);
-    expect(tables.sort()).toEqual(["comments", "events", "talk_days", "talk_senders", "threads"]);
+    expect(tables.sort()).toEqual(["comments", "events", "pages", "talk_days", "talk_senders", "threads"]);
     const everything = JSON.stringify(await Promise.all(tables.map((table) => rows(table))));
     for (const needle of ["203.0.113.77", "2001:db8:aa:bb", "2001:0db8:00aa:00bb"]) expect(everything).not.toContain(needle);
   });

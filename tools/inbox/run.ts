@@ -4,7 +4,9 @@
 // id is wrangler.jsonc's public var; its secret comes only from the environment (`INBOX_SYNC_CLIENT_SECRET`), is
 // sent only in the Access header, and is never printed or written anywhere. Every answer is one JSON line on
 // stdout; a refusal exits non-zero with the Worker's reason. Words (a comment, a summary, a main text) come on
-// stdin, so quotes and line breaks need no escaping. This module is the logic, with fetch, the environment and
+// stdin, so quotes and line breaks need no escaping. A page (a Claude artifact's own HTML) comes from a file,
+// because pages are large, and is refused here past the Worker's 16 MiB before it is sent; a link is an address on
+// claude.ai. This module is the logic, with fetch, the environment and
 // the streams handed in, so the tests drive it with a played fetch; tools/inbox/inbox.ts is the entry point
 // that hands it the real ones.
 
@@ -17,6 +19,8 @@ export const SECRET_VARIABLE = "INBOX_SYNC_CLIENT_SECRET";
 const TABS = ["look", "act", "discuss", "done"];
 const ACTIONS = ["act", "discuss", "unsort", "done", "drop", "reopen", "space", "file"];
 const FIELDS = ["summary", "body"];
+/** The largest page the Worker keeps: 16 MiB, claude.ai's own limit. */
+export const MAX_PAGE_BYTES = 16 * 1024 * 1024;
 /** The pages one `list` follows at most: 50 threads each, far beyond what any tab holds. */
 const MAX_PAGES = 200;
 /** A thread's number: no sign, no leading zero, at most nine digits. */
@@ -33,7 +37,14 @@ export const USAGE = `Usage: inbox <verb> [arguments]
   comment <number>                a comment from stdin (Markdown), added to the thread
   edit <number> <summary|body>    the thread's living summary or main text, replaced by stdin;
                                   an empty summary clears it
-  show <number>                   the thread with its comments and history, as one JSON line
+  show <number>                   the thread with its comments and history, its page's versions and its
+                                  link, as one JSON line
+  page <number> <file> [--from <claude.ai address>]
+                                  the HTML file as the thread's page, a new version of it; --from names the
+                                  artifact it was read from
+  link <number> <claude.ai address> [--title <text>]
+                                  the thread's link to an artifact that only works on claude.ai
+  link <number> --clear           the link removed; the thread shows its page again, or its text
 
 The service token's secret is read from ${SECRET_VARIABLE}; the client id from wrangler.jsonc.
 Exit status: 0 when every request was answered as asked, 1 on any refusal, 2 on a usage error.
@@ -45,6 +56,8 @@ export interface Io {
   readonly env: Readonly<Record<string, string | undefined>>;
   /** The whole of stdin, read only by `add`, `comment` and `edit`. */
   readonly stdin: () => Promise<string>;
+  /** A file's bytes, read only by `page`; throws when it can't be read. */
+  readonly readFile: (path: string) => Uint8Array;
   readonly out: (line: string) => void;
   readonly err: (line: string) => void;
   /** The service token's client id. */
@@ -66,13 +79,15 @@ interface Answer {
 
 class Usage extends Error {}
 
-async function call(io: Io, secret: string, path: string, init: { method: string; body?: string }): Promise<Answer> {
+async function call(io: Io, secret: string, path: string, init: { method: string; body?: string | Uint8Array; type?: string }): Promise<Answer> {
   const headers: Record<string, string> = { "CF-Access-Client-Id": io.clientId, "CF-Access-Client-Secret": secret };
-  if (init.body !== undefined) headers["Content-Type"] = "application/json";
+  if (init.body !== undefined) headers["Content-Type"] = init.type ?? "application/json";
   let response: Response;
   try {
     // A refused service token is sent to Access's sign-in page; following it would only fetch HTML.
-    response = await io.fetch(`${ORIGIN}${path}`, { ...init, headers, redirect: "manual" });
+    const sent: RequestInit = { method: init.method, headers, redirect: "manual" };
+    if (init.body !== undefined) sent.body = init.body;
+    response = await io.fetch(`${ORIGIN}${path}`, sent);
   } catch {
     return { status: 0, body: { reason: "unreachable" } };
   }
@@ -203,6 +218,47 @@ async function show(io: Io, secret: string, args: readonly string[]): Promise<nu
   return report(io, "show", await call(io, secret, `${THREADS}/${number}`, { method: "GET" }), null);
 }
 
+/** A file as a new version of the thread's page, refused here when it is larger than the Worker keeps. */
+async function page(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const [given, file, ...rest] = args;
+  const number = numberOf("page", given);
+  if (file === undefined || file.startsWith("--")) throw new Usage("page takes a thread's number and an HTML file");
+  let from: string | null = null;
+  if (rest.length > 0) {
+    if (rest.length !== 2 || rest[0] !== "--from" || rest[1] === undefined) throw new Usage("page takes only --from <claude.ai address> after the file");
+    from = rest[1];
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = io.readFile(file);
+  } catch {
+    io.err(`inbox: page can't read ${file}`);
+    return 1;
+  }
+  if (bytes.byteLength > MAX_PAGE_BYTES) {
+    io.err(`inbox: page refused (${file} is ${bytes.byteLength} bytes; the most is ${MAX_PAGE_BYTES})`);
+    return 1;
+  }
+  const query = from === null ? "" : `?${new URLSearchParams({ from }).toString()}`;
+  return report(io, "page", await call(io, secret, `${THREADS}/${number}/pages${query}`, { method: "POST", body: bytes, type: "text/html; charset=utf-8" }), "version");
+}
+
+/** A thread's link to an artifact on claude.ai, with a title, or removed with --clear. */
+async function link(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const [given, address, ...rest] = args;
+  const number = numberOf("link", given);
+  if (address === undefined) throw new Usage("link takes a thread's number and a claude.ai address, or --clear");
+  let change: { url: string; title: string };
+  if (address === "--clear") {
+    if (rest.length > 0) throw new Usage("link --clear takes nothing more");
+    change = { url: "", title: "" };
+  } else {
+    if (rest.length !== 0 && (rest.length !== 2 || rest[0] !== "--title" || rest[1] === undefined)) throw new Usage("link takes only --title <text> after the address");
+    change = { url: address, title: rest[1] ?? "" };
+  }
+  return report(io, "link", await call(io, secret, `${THREADS}/${number}/link`, { method: "POST", body: JSON.stringify(change) }), "thread");
+}
+
 /** Runs one command line; answers the exit status. */
 export async function run(argv: readonly string[], io: Io): Promise<number> {
   const [verb, ...args] = argv;
@@ -222,6 +278,8 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     if (verb === "comment") return await comment(io, secret, args);
     if (verb === "edit") return await edit(io, secret, args);
     if (verb === "show") return await show(io, secret, args);
+    if (verb === "page") return await page(io, secret, args);
+    if (verb === "link") return await link(io, secret, args);
     throw new Usage(`unknown verb: ${verb}`);
   } catch (error) {
     if (error instanceof Usage) {

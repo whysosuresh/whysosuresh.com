@@ -70,7 +70,8 @@ const EXPECTED_HEADERS: Record<string, string> = {
     "style-src 'self'",
     "img-src 'self'",
     "connect-src 'self'",
-    `frame-src ${originsOf([...EXTERNAL_RESOURCES, ...SCRIPT_RESOURCES])}`,
+    // The site's own frames are the pages saved into threads, each sealed by its own answer's CSP (src/page.ts).
+    `frame-src 'self' ${originsOf([...EXTERNAL_RESOURCES, ...SCRIPT_RESOURCES])}`,
     "base-uri 'none'",
     "form-action 'none'",
     "frame-ancestors 'none'",

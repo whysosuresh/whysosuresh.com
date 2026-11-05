@@ -804,9 +804,10 @@ p { margin: 0; }
 .threads .t-summary { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 10px 14px 12px; display: grid; gap: 6px; }
 .t-summary-head { display: flex; align-items: center; gap: 8px; color: var(--faint); font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .t-summary-head span:last-child:not(:first-child) { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 11.5px; }
-.t-sum-lines { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 14px; margin: 0; font-size: 14px; line-height: 1.5; }
-.t-sum-lines dt { color: var(--muted); font-weight: 600; font-size: 12.5px; padding-top: 1px; }
-.t-sum-lines dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.t-sum-grid { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 6px 18px; }
+.t-sum-grid div { min-width: 0; }
+.t-sum-grid dt { font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.t-sum-grid dd { margin: 0; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
 .threads .t-summary-empty { border-style: dashed; background: transparent; color: var(--muted); font-size: 13px; display: block; }
 
 /* Prose: the main text, comments and previews, drawn from Markdown. */
@@ -824,6 +825,28 @@ p { margin: 0; }
 .t-ref { font-weight: 600; }
 .t-plain { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; max-width: 70ch; margin: 0; }
 .t-prose[lang="te"], .t-plain[lang="te"] { line-height: 1.9; }
+
+/* A page: an artifact's own HTML in a sealed frame, under a bar; full screen fills the window, its bar in view. */
+.t-page { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); box-shadow: 0 10px 30px -22px var(--shadow); }
+.t-page[data-full="true"] { position: fixed; inset: 0; z-index: 25; border: 0; border-radius: 0; display: flex; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); }
+.t-page-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 7px 10px; border-bottom: 1px solid var(--line); background: var(--surface); font-size: 12px; color: var(--muted); }
+.t-page-bar b { color: var(--ink); }
+.t-page-bar .t-btn { padding: 3px 9px; font-size: 12px; }
+.t-page-old { color: var(--ink); font-weight: 600; }
+.t-page-frame { display: block; width: 100%; height: 600px; border: 0; background: #fff; }
+.t-page[data-full="true"] .t-page-frame { flex: 1; height: auto; }
+.t-row-mark { display: inline-flex; vertical-align: -2px; margin-right: 5px; color: var(--muted); }
+.t-row-mark .t-i { width: 13px; height: 13px; }
+
+/* A link: a card that opens an artifact on claude.ai. */
+.t-link-card { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); align-items: center; }
+.t-link-thumb { aspect-ratio: 16 / 9; border-radius: 8px; background: var(--ink); color: var(--accent-ink); display: grid; align-content: end; padding: 12px; gap: 2px; min-width: 0; }
+.t-link-thumb b { font-size: 16px; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.t-link-thumb span { font-size: 10px; opacity: 0.7; }
+.t-link-main { display: grid; gap: 6px; min-width: 0; justify-items: start; }
+.t-link-main b { font-size: 15px; }
+.t-link-main small { color: var(--muted); font: 11.5px var(--mono); overflow-wrap: anywhere; }
+.t-link-main p { margin: 0; color: var(--muted); font-size: 12.5px; }
 
 /* History and comments, in order. */
 .t-feed { display: grid; position: relative; padding-top: 6px; border-top: 1px solid var(--line); }
@@ -979,8 +1002,9 @@ textarea.t-field { resize: vertical; line-height: 1.5; }
   .t-thread { padding: 14px var(--gutter-r) 40px var(--gutter-l); }
   .t-title { font-size: 20px; }
   .t-editor { padding: 14px var(--gutter-r) 32px var(--gutter-l); }
-  .t-sum-lines { gap: 4px 10px; font-size: 13.5px; }
   .t-summary-head span:last-child:not(:first-child) { display: none; }
+  .t-link-card { grid-template-columns: minmax(0, 1fr); }
+  .t-page-frame { height: 480px; }
   .t-dialog, .t-dialog[data-kind] { width: 100%; max-width: 100%; max-height: 92%; margin: auto 0 0; border-radius: 14px 14px 0 0; border-bottom: 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
   .t-keys { grid-template-columns: minmax(0, 1fr); }
   .t-two { grid-template-columns: 1fr; }

@@ -51,6 +51,9 @@
       "migrations_dir": "migrations"
     }
   ],
+  // The pages saved into threads (Infra.prod.CloudflareR2Bucket.whysosuresh-com-pages): one private object per
+  // version, read and written only by the code, which serves a page only through its thread's call, behind Access.
+  "r2_buckets": [{ "binding": "PAGES", "bucket_name": "whysosuresh-com-pages" }],
   // The two Access applications and their callers' public halves, from Planton's outputs: the team's sign-in
   // host (Infra.prod.CloudflareZeroTrustOrganization.whysosuresh, `authDomain`), each application's audience tag
   // (…AccessApplication.whysosuresh-com-inbox for /inbox/api/ and …AccessApplication.whysosuresh-com-threads for
