@@ -3,7 +3,10 @@
 // every row is copied with its id, fields and status, numbered from 1 by when it arrived; each copied thread's
 // history begins with a `created` event at its arrival, by the visitor or the sync, then an `imported` event
 // with where it stood; the inbox's door answers each row as the item it was, in its old names and order; and the
-// next new thread is numbered after the copies.
+// next new thread is numbered after the copies. For 0007, which retires the inbox's table a deploy later: a row
+// the old code added between 0006 and its deploy is copied with its history and numbered after the last thread;
+// a move the old code made in that gap wins, with an `imported` event; a thread moved later on the new code
+// keeps its own move; a ref a thread already holds is never kept twice; and the table is gone.
 
 import { afterEach, describe, expect, it } from "vitest";
 import { OWNER, SITE, startHarness, type Harness } from "./harness.ts";
@@ -69,7 +72,7 @@ async function inboxTab(target: Harness, tab: string): Promise<unknown> {
 describe("0006, every inbox row a thread", () => {
   it("copies every row with its id and fields, numbered from 1 by when it arrived", async () => {
     harness = await stage(ROWS);
-    await harness.migrate();
+    await harness.migrate("0006");
     const threads = (await (await harness.db()).prepare("SELECT * FROM threads ORDER BY number").all<Record<string, unknown>>()).results;
     // By arrival, and by id for the two that arrived at the same moment.
     const order = ["004", "003", "001", "002", "005"].map((n) => `00000000-0000-4000-8000-000000000${n}`);
@@ -101,7 +104,7 @@ describe("0006, every inbox row a thread", () => {
   it("starts each history with its arrival, by whoever brought it, then where it stood when copied", async () => {
     harness = await stage(ROWS);
     const before = new Date().toISOString();
-    await harness.migrate();
+    await harness.migrate("0006");
     const events = (await (await harness.db()).prepare("SELECT * FROM events ORDER BY id").all<{ id: number; thread_id: string; at: string; actor: string; type: string; data: string }>()).results;
     expect(events).toHaveLength(ROWS.length * 2);
     for (const row of ROWS) {
@@ -118,7 +121,7 @@ describe("0006, every inbox row a thread", () => {
 
   it("leaves the inbox's door answering each row as the item it always was, in its tab, newest first", async () => {
     harness = await stage(ROWS);
-    await harness.migrate();
+    await harness.migrate("0006");
     const tabs: Record<string, string[]> = { look: ["received"], act: ["act"], discuss: ["discuss"], done: ["done", "dropped", "filed"] };
     const counts = Object.fromEntries(Object.entries(tabs).map(([tab, statuses]) => [tab, ROWS.filter((row) => statuses.includes(row.status)).length]));
     for (const [tab, statuses] of Object.entries(tabs)) {
@@ -147,7 +150,7 @@ describe("0006, every inbox row a thread", () => {
 
   it("numbers the next new thread after the copies", async () => {
     harness = await stage(ROWS);
-    await harness.migrate();
+    await harness.migrate("0006");
     const response = await harness.fetch(`${SITE}/threads/api/threads`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.syncClaims("threads"), { app: "threads" }) },
@@ -159,9 +162,93 @@ describe("0006, every inbox row a thread", () => {
 
   it("copies an empty inbox into no threads", async () => {
     harness = await stage([]);
-    await harness.migrate();
+    await harness.migrate("0006");
     const database = await harness.db();
     expect((await database.prepare("SELECT COUNT(*) AS n FROM threads").first<{ n: number }>())?.n).toBe(0);
     expect((await database.prepare("SELECT COUNT(*) AS n FROM events").first<{ n: number }>())?.n).toBe(0);
+  });
+});
+
+describe("0007, the inbox retired a deploy later", () => {
+  /** The live inbox after 0006, then what the old code wrote before the new code was deployed. */
+  async function gap(): Promise<Harness> {
+    const staged = await stage(ROWS);
+    await staged.migrate("0006");
+    const database = await staged.db();
+    await database.batch([
+      // A note that arrived in the gap.
+      database
+        .prepare("INSERT INTO inbox (id, received_at, source, topic, body, name, email, status) VALUES (?1, ?2, 'talk', 'stigmer', 'Sent in the gap.', NULL, NULL, 'received')")
+        .bind("00000000-0000-4000-8000-000000000006", "2026-11-05T06:44:15.000Z"),
+      // A move made in the gap: To look at to To discuss.
+      database.prepare("UPDATE inbox SET status = 'discuss', kind = 'idea', moved_at = '2026-11-05T06:44:16.000Z' WHERE id = ?1").bind("00000000-0000-4000-8000-000000000005"),
+      // A move made in the gap on a thread the new code then moved again, later: the thread's own move stands.
+      database.prepare("UPDATE inbox SET status = 'done', moved_at = '2026-11-05T06:44:17.000Z' WHERE id = ?1").bind("00000000-0000-4000-8000-000000000003"),
+      database.prepare("UPDATE threads SET status = 'discuss', kind = 'idea', moved_at = '2026-11-05T07:00:00.000Z' WHERE id = ?1").bind("00000000-0000-4000-8000-000000000003"),
+      // A gap add whose ref the new code then kept as a thread of its own.
+      database
+        .prepare("INSERT INTO inbox (id, received_at, source, body, status, title, ref) VALUES (?1, '2026-11-05T06:44:18.000Z', 'self', 'Twice.', 'received', 'Twice', 'chat:twice')")
+        .bind("00000000-0000-4000-8000-000000000007"),
+      database
+        .prepare("INSERT INTO threads (id, number, created_at, source, body, status, title, origin_ref) VALUES (?1, 6, '2026-11-05T06:50:00.000Z', 'self', 'Twice.', 'received', 'Twice', 'chat:twice')")
+        .bind("00000000-0000-4000-8000-000000000008"),
+    ]);
+    return staged;
+  }
+
+  async function thread(target: Harness, id: string): Promise<Record<string, unknown> | null> {
+    return (await target.db()).prepare("SELECT * FROM threads WHERE id = ?1").bind(id).first<Record<string, unknown>>();
+  }
+
+  async function eventsOf(target: Harness, id: string): Promise<[string, string, unknown][]> {
+    const rows = (await (await target.db()).prepare("SELECT actor, type, data FROM events WHERE thread_id = ?1 ORDER BY id").bind(id).all<{ actor: string; type: string; data: string }>()).results;
+    return rows.map((row) => [row.actor, row.type, JSON.parse(row.data)]);
+  }
+
+  it("copies a row the gap added, numbered after the last thread, with its history", async () => {
+    harness = await gap();
+    await harness.migrate();
+    const copied = await thread(harness, "00000000-0000-4000-8000-000000000006");
+    expect(copied).toMatchObject({ number: 7, source: "talk", space: "stigmer", body: "Sent in the gap.", status: "received", created_at: "2026-11-05T06:44:15.000Z" });
+    expect(await eventsOf(harness, "00000000-0000-4000-8000-000000000006")).toEqual([
+      ["visitor", "created", { source: "talk" }],
+      ["import", "imported", { status: "received" }],
+    ]);
+  });
+
+  it("replays a move the gap made, with an imported event", async () => {
+    harness = await gap();
+    await harness.migrate();
+    expect(await thread(harness, "00000000-0000-4000-8000-000000000005")).toMatchObject({ status: "discuss", kind: "idea", moved_at: "2026-11-05T06:44:16.000Z" });
+    expect(await eventsOf(harness, "00000000-0000-4000-8000-000000000005")).toEqual([
+      ["visitor", "created", { source: "talk" }],
+      ["import", "imported", { status: "received" }],
+      ["import", "imported", { status: "discuss" }],
+    ]);
+  });
+
+  it("keeps a thread's own later move over the gap's earlier one", async () => {
+    harness = await gap();
+    await harness.migrate();
+    expect(await thread(harness, "00000000-0000-4000-8000-000000000003")).toMatchObject({ status: "discuss", kind: "idea", moved_at: "2026-11-05T07:00:00.000Z" });
+    expect(await eventsOf(harness, "00000000-0000-4000-8000-000000000003")).toHaveLength(2);
+  });
+
+  it("never keeps a ref twice, and leaves every other thread as it was", async () => {
+    harness = await gap();
+    const before = (await (await harness.db()).prepare("SELECT * FROM threads WHERE id NOT IN (?1, ?2) ORDER BY number").bind("00000000-0000-4000-8000-000000000003", "00000000-0000-4000-8000-000000000005").all()).results;
+    await harness.migrate();
+    const database = await harness.db();
+    expect((await database.prepare("SELECT COUNT(*) AS n FROM threads WHERE origin_ref = 'chat:twice'").first<{ n: number }>())?.n).toBe(1);
+    expect(await thread(harness, "00000000-0000-4000-8000-000000000007")).toBeNull();
+    const after = (await database.prepare("SELECT * FROM threads WHERE id NOT IN (?1, ?2, ?3) ORDER BY number").bind("00000000-0000-4000-8000-000000000003", "00000000-0000-4000-8000-000000000005", "00000000-0000-4000-8000-000000000006").all()).results;
+    expect(after).toEqual(before);
+  });
+
+  it("drops the inbox's table", async () => {
+    harness = await gap();
+    await harness.migrate();
+    const tables = (await (await harness.db()).prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'inbox'").all()).results;
+    expect(tables).toEqual([]);
   });
 });

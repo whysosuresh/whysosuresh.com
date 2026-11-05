@@ -1,28 +1,39 @@
-// The inbox's command-line client: how the recorder sync, and any session on Suresh's Mac, lists, adds and
-// moves items in the private inbox at whysosuresh.com/inbox through its calls (src/inbox.ts), as the sync's
-// Cloudflare Access service token. Its client id is wrangler.jsonc's public var; its secret comes only from
-// the environment (`INBOX_SYNC_CLIENT_SECRET`), is sent only in the Access header, and is never printed or
-// written anywhere. Every answer is one JSON line on stdout; a refusal exits non-zero with the Worker's
-// reason. This module is the logic, with fetch, the environment and the streams handed in, so the tests
-// drive it with a played fetch; tools/inbox/inbox.ts is the entry point that hands it the real ones.
+// The inbox's command-line client: how the recorder sync, and any session on Suresh's Mac, lists, adds, moves,
+// comments on, rewrites and reads the threads in Suresh's private inbox through the threads' calls
+// (src/threads.ts), naming each thread by its number, as the sync's Cloudflare Access service token. Its client
+// id is wrangler.jsonc's public var; its secret comes only from the environment (`INBOX_SYNC_CLIENT_SECRET`), is
+// sent only in the Access header, and is never printed or written anywhere. Every answer is one JSON line on
+// stdout; a refusal exits non-zero with the Worker's reason. Words (a comment, a summary, a main text) come on
+// stdin, so quotes and line breaks need no escaping. This module is the logic, with fetch, the environment and
+// the streams handed in, so the tests drive it with a played fetch; tools/inbox/inbox.ts is the entry point
+// that hands it the real ones.
 
 import { readFileSync } from "node:fs";
 
-/** Where the inbox's calls live. */
+/** The site the calls go to. */
 export const ORIGIN = "https://whysosuresh.com";
 /** The environment variable that carries the service token's secret. */
 export const SECRET_VARIABLE = "INBOX_SYNC_CLIENT_SECRET";
 const TABS = ["look", "act", "discuss", "done"];
-const ACTIONS = ["act", "discuss", "unsort", "done", "drop", "reopen", "topic", "file"];
-/** The pages one `list` follows at most: 50 items each, far beyond what any tab holds. */
+const ACTIONS = ["act", "discuss", "unsort", "done", "drop", "reopen", "space", "file"];
+const FIELDS = ["summary", "body"];
+/** The pages one `list` follows at most: 50 threads each, far beyond what any tab holds. */
 const MAX_PAGES = 200;
+/** A thread's number: no sign, no leading zero, at most nine digits. */
+const NUMBER_SHAPE = /^[1-9]\d{0,8}$/;
+/** Where the threads' calls live. */
+const THREADS = "/threads/api/threads";
 
 export const USAGE = `Usage: inbox <verb> [arguments]
 
-  list <look|act|discuss|done>    every item in that tab, newest first, one JSON line each
-  add                             items from stdin, one JSON object per line; one result line each
-  move <id> <action> [--reason <text>] [--topic <topic>] [--link <issue address>]
-                                  one move: act, discuss, unsort, done, drop, reopen, topic, file
+  list <look|act|discuss|done>    every thread in that tab, newest number first, one JSON line each
+  add                             threads from stdin, one JSON object per line; one result line each
+  move <number> <action> [--reason <text>] [--space <space>] [--link <issue address>]
+                                  one move: act, discuss, unsort, done, drop, reopen, space, file
+  comment <number>                a comment from stdin (Markdown), added to the thread
+  edit <number> <summary|body>    the thread's living summary or main text, replaced by stdin;
+                                  an empty summary clears it
+  show <number>                   the thread with its comments and history, as one JSON line
 
 The service token's secret is read from ${SECRET_VARIABLE}; the client id from wrangler.jsonc.
 Exit status: 0 when every request was answered as asked, 1 on any refusal, 2 on a usage error.
@@ -32,7 +43,7 @@ Exit status: 0 when every request was answered as asked, 1 on any refusal, 2 on 
 export interface Io {
   readonly fetch: (url: string, init: RequestInit) => Promise<Response>;
   readonly env: Readonly<Record<string, string | undefined>>;
-  /** The whole of stdin, read only by `add`. */
+  /** The whole of stdin, read only by `add`, `comment` and `edit`. */
   readonly stdin: () => Promise<string>;
   readonly out: (line: string) => void;
   readonly err: (line: string) => void;
@@ -81,20 +92,36 @@ function reasonOf(answer: Answer): string {
   return typeof answer.body.reason === "string" ? answer.body.reason : `http-${answer.status}`;
 }
 
+/** The thread's number from the command line, or a usage error naming the verb. */
+function numberOf(verb: string, given: string | undefined): string {
+  if (given === undefined || !NUMBER_SHAPE.test(given)) throw new Usage(`${verb} takes a thread's number, such as 42`);
+  return given;
+}
+
+/** Prints one key of a 200 or 201 answer, or reports the refusal; answers the exit status. */
+function report(io: Io, verb: string, answer: Answer, key: string | null): number {
+  if (answer.status !== 200 && answer.status !== 201) {
+    io.err(`inbox: ${verb} refused (${answer.status} ${reasonOf(answer)})`);
+    return 1;
+  }
+  io.out(JSON.stringify(key === null ? answer.body : (answer.body[key] ?? null)));
+  return 0;
+}
+
 async function list(io: Io, secret: string, args: readonly string[]): Promise<number> {
   const [tab, ...rest] = args;
   if (tab === undefined || !TABS.includes(tab) || rest.length > 0) throw new Usage(`list takes one tab: ${TABS.join(", ")}`);
   let before: string | null = null;
   for (let page = 0; page < MAX_PAGES; page += 1) {
-    const query: string = `?tab=${tab}${before === null ? "" : `&before=${encodeURIComponent(before)}`}`;
-    const answer = await call(io, secret, `/inbox/api/items${query}`, { method: "GET" });
+    const query: string = `?tab=${tab}${before === null ? "" : `&before=${before}`}`;
+    const answer = await call(io, secret, `${THREADS}${query}`, { method: "GET" });
     if (answer.status !== 200) {
       io.err(`inbox: list refused (${answer.status} ${reasonOf(answer)})`);
       return 1;
     }
-    const items = Array.isArray(answer.body.items) ? (answer.body.items as unknown[]) : [];
-    for (const one of items) io.out(JSON.stringify(one));
-    before = typeof answer.body.next === "string" ? answer.body.next : null;
+    const threads = Array.isArray(answer.body.threads) ? (answer.body.threads as unknown[]) : [];
+    for (const one of threads) io.out(JSON.stringify(one));
+    before = typeof answer.body.next === "number" && NUMBER_SHAPE.test(String(answer.body.next)) ? String(answer.body.next) : null;
     if (before === null) return 0;
   }
   io.err(`inbox: list stopped after ${MAX_PAGES} pages`);
@@ -102,7 +129,7 @@ async function list(io: Io, secret: string, args: readonly string[]): Promise<nu
 }
 
 async function add(io: Io, secret: string, args: readonly string[]): Promise<number> {
-  if (args.length > 0) throw new Usage("add takes its items on stdin, one JSON object per line");
+  if (args.length > 0) throw new Usage("add takes its threads on stdin, one JSON object per line");
   const lines = (await io.stdin()).split("\n");
   let failed = false;
   let any = false;
@@ -117,24 +144,25 @@ async function add(io: Io, secret: string, args: readonly string[]): Promise<num
       failed = true;
       continue;
     }
-    const answer = await call(io, secret, "/inbox/api/items", { method: "POST", body: text });
+    const answer = await call(io, secret, THREADS, { method: "POST", body: text });
     if (answer.status === 200 || answer.status === 201) {
-      io.out(JSON.stringify({ line, status: answer.status, item: answer.body.item ?? null }));
+      io.out(JSON.stringify({ line, status: answer.status, thread: answer.body.thread ?? null }));
     } else {
       io.out(JSON.stringify({ line, status: answer.status, reason: reasonOf(answer) }));
       failed = true;
     }
   }
-  if (!any) throw new Usage("add read no items on stdin");
+  if (!any) throw new Usage("add read no threads on stdin");
   return failed ? 1 : 0;
 }
 
 /** The flags `move` takes, each with a value, and the change key each fills. */
-const FLAGS: Record<string, string> = { "--reason": "reason", "--topic": "topic", "--link": "link" };
+const FLAGS: Record<string, string> = { "--reason": "reason", "--space": "space", "--link": "link" };
 
 async function move(io: Io, secret: string, args: readonly string[]): Promise<number> {
-  const [id, action, ...rest] = args;
-  if (id === undefined || action === undefined || !ACTIONS.includes(action)) throw new Usage(`move takes an id and an action: ${ACTIONS.join(", ")}`);
+  const [given, action, ...rest] = args;
+  const number = numberOf("move", given);
+  if (action === undefined || !ACTIONS.includes(action)) throw new Usage(`move takes a thread's number and an action: ${ACTIONS.join(", ")}`);
   const change: Record<string, string> = { action };
   for (let i = 0; i < rest.length; i += 2) {
     const key = FLAGS[rest[i] ?? ""];
@@ -144,13 +172,35 @@ async function move(io: Io, secret: string, args: readonly string[]): Promise<nu
   }
   // The inbox requires a drop's reason key, and an empty one means none.
   if (action === "drop" && change.reason === undefined) change.reason = "";
-  const answer = await call(io, secret, `/inbox/api/items/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify(change) });
-  if (answer.status !== 200) {
-    io.err(`inbox: move refused (${answer.status} ${reasonOf(answer)})`);
-    return 1;
-  }
-  io.out(JSON.stringify(answer.body.item ?? null));
-  return 0;
+  return report(io, "move", await call(io, secret, `${THREADS}/${number}`, { method: "POST", body: JSON.stringify(change) }), "thread");
+}
+
+/** A comment's Markdown from stdin, as is: quotes and line breaks need no escaping. */
+async function comment(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const [given, ...rest] = args;
+  const number = numberOf("comment", given);
+  if (rest.length > 0) throw new Usage("comment takes a thread's number, and its words on stdin");
+  const body = await io.stdin();
+  if (body.trim() === "") throw new Usage("comment read nothing on stdin");
+  return report(io, "comment", await call(io, secret, `${THREADS}/${number}/comments`, { method: "POST", body: JSON.stringify({ body }) }), "comment");
+}
+
+/** A thread's living summary or main text, replaced by stdin; nothing on stdin clears the summary. */
+async function edit(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const [given, field, ...rest] = args;
+  const number = numberOf("edit", given);
+  if (field === undefined || !FIELDS.includes(field) || rest.length > 0) throw new Usage(`edit takes a thread's number and ${FIELDS.join(" or ")}, and the text on stdin`);
+  const text = await io.stdin();
+  if (field === "body" && text.trim() === "") throw new Usage("edit body read nothing on stdin; a thread always has a main text");
+  return report(io, "edit", await call(io, secret, `${THREADS}/${number}/text`, { method: "POST", body: JSON.stringify({ field, text }) }), "thread");
+}
+
+/** A thread with its comments and history, as the Worker answers it. */
+async function show(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const [given, ...rest] = args;
+  const number = numberOf("show", given);
+  if (rest.length > 0) throw new Usage("show takes one thread's number");
+  return report(io, "show", await call(io, secret, `${THREADS}/${number}`, { method: "GET" }), null);
 }
 
 /** Runs one command line; answers the exit status. */
@@ -169,6 +219,9 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     if (verb === "list") return await list(io, secret, args);
     if (verb === "add") return await add(io, secret, args);
     if (verb === "move") return await move(io, secret, args);
+    if (verb === "comment") return await comment(io, secret, args);
+    if (verb === "edit") return await edit(io, secret, args);
+    if (verb === "show") return await show(io, secret, args);
     throw new Usage(`unknown verb: ${verb}`);
   } catch (error) {
     if (error instanceof Usage) {
