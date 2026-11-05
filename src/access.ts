@@ -7,8 +7,8 @@
 // `isInvited`): this check reads no database, so it stays a pure check of Access's signature. The door names its
 // application's audience tag, so a token Access signed for any other application never opens it. Anything Access
 // didn't sign for that application is refused, so a request that slipped past the edge's path match (a changed
-// case, an encoded slash) still meets this check. The signature, issuer and time checks are also the ones the
-// answer to Access's sign-in question uses (src/evaluate.ts), on a token that is not an application's.
+// case, an encoded slash) still meets this check. The signature and time checks are also the ones the answer to
+// Access's sign-in question uses (src/evaluate.ts), on a token that is not an application's and names no issuer.
 //
 // The keys are fetched from the team's certs address and kept in the isolate. A token naming a key the
 // isolate doesn't hold fetches them again, which is how Cloudflare's key rotation arrives, but at most once a
@@ -150,7 +150,7 @@ function base64UrlJson(part: string): Record<string, unknown> | null {
 
 /**
  * The token's claims when one of the team's keys signed it, RS256; null otherwise. Nothing about the claims is
- * checked here; `unheld` checks the issuer and the times. Throws KeysUnavailable when the keys can't be read.
+ * checked here; `timely` checks the times. Throws KeysUnavailable when the keys can't be read.
  */
 export async function signedClaims(token: string, team: string): Promise<Record<string, unknown> | null> {
   const parts = token.split(".");
@@ -169,19 +169,17 @@ export async function signedClaims(token: string, team: string): Promise<Record<
   return claims;
 }
 
-/** The first of a signed token's issuer and times that doesn't hold (`issuer`, `times`), or null when both do. */
-export function unheld(claims: Record<string, unknown>, team: string): "issuer" | "times" | null {
-  if (claims.iss !== `https://${team}`) return "issuer";
+/** Whether a signed token is within its times: an expiry not yet passed, and a not-before, when it has one, reached. */
+export function timely(claims: Record<string, unknown>): boolean {
   const now = Date.now() / 1000;
-  if (typeof claims.exp !== "number" || claims.exp + LEEWAY_S < now) return "times";
-  if (claims.nbf !== undefined && (typeof claims.nbf !== "number" || claims.nbf - LEEWAY_S > now)) return "times";
-  return null;
+  if (typeof claims.exp !== "number" || claims.exp + LEEWAY_S < now) return false;
+  return claims.nbf === undefined || (typeof claims.nbf === "number" && claims.nbf - LEEWAY_S <= now);
 }
 
 /** An application token's claims when its signature, issuer, times, audience and type all hold; null otherwise. */
 async function verifiedClaims(token: string, settings: AccessSettings, aud: string): Promise<Record<string, unknown> | null> {
   const claims = await signedClaims(token, settings.ACCESS_TEAM_DOMAIN);
-  if (claims === null || unheld(claims, settings.ACCESS_TEAM_DOMAIN) !== null) return null;
+  if (claims === null || claims.iss !== `https://${settings.ACCESS_TEAM_DOMAIN}` || !timely(claims)) return null;
   const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
   if (!audiences.includes(aud)) return null;
   if (claims.type !== "app") return null;

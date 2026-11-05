@@ -14,19 +14,21 @@
 // Yes means the address has an invitation that stands, to any thread: `isInvited` in src/store.ts, the same
 // question the threads' door asks of every invited caller (src/threads.ts), so the edge and the Worker can't
 // disagree about who is invited. The owner is let in by his own policy before this one is asked, and the sync
-// never signs in by email. The token is checked by src/access.ts's own signature, issuer and time checks; its
-// audience and type are not, because the page names neither, and a token only Access can sign, naming an
-// address and a nonce, answers one yes-or-no about that address. An application token sent here has no
-// `identity` or `nonce`, so it is refused. A signed token missing either, or failing its issuer or times, logs the
-// check it failed and its claims' names (never a value), so a sign-in that fails because Access's shape differs
-// from the example says how on the first try. Every answer logs only whether it said yes.
+// never signs in by email. The token is checked by src/access.ts's own signature and time checks, and nothing
+// else about where it came from: as Access sent it on 2026-11-05 it carries `aud`, `exp`, `iat`, `identity`,
+// `nonce` and `request_url`, and no `iss` (an application token's issuer check refused the first live sign-in),
+// and the page names neither its audience nor its issuer. A token only the team's keys can sign, naming an address
+// and a nonce, answers one yes-or-no about that address. An application token sent here has no `identity` or
+// `nonce`, so it is refused. A signed token missing either, or out of its times, logs the check it failed and its
+// claims' names (never a value), so a sign-in that fails because Access's shape changes says how on the first
+// try. Every answer logs only whether it said yes.
 //
 // The evaluation key is the Worker secret THREADS_EVALUATION_KEY, an RSA private key as a JWK, handed over by the
 // deploy from the GitHub environment `production`; its public half is derived from it here, with every private
 // part left out, and named by its RFC 7638 thumbprint, so there is no second copy to drift. Without it, both
 // addresses answer 503, which Access counts as no.
 
-import { KeysUnavailable, MAX_TOKEN, signedClaims, unheld } from "./access.ts";
+import { KeysUnavailable, MAX_TOKEN, signedClaims, timely } from "./access.ts";
 import type { Bindings } from "./bindings.ts";
 import { json } from "./json.ts";
 import { isInvited } from "./store.ts";
@@ -130,9 +132,8 @@ async function cappedText(request: Request, max: number): Promise<string | null>
 }
 
 /** The address and nonce a signed token names, or the first thing about it that doesn't hold. */
-function question(claims: Record<string, unknown>, team: string): { email: string; nonce: string } | { failed: string } {
-  const held = unheld(claims, team);
-  if (held !== null) return { failed: held };
+function question(claims: Record<string, unknown>): { email: string; nonce: string } | { failed: string } {
+  if (!timely(claims)) return { failed: "times" };
   const email = isRecord(claims.identity) ? claims.identity.email : undefined;
   if (typeof email !== "string" || email === "") return { failed: "identity" };
   if (typeof claims.nonce !== "string" || claims.nonce === "") return { failed: "nonce" };
@@ -162,7 +163,7 @@ export async function handleEvaluate(request: Request, env: Bindings): Promise<R
     throw error;
   }
   if (claims === null) return refuse(403, "token");
-  const asked = question(claims, env.ACCESS_TEAM_DOMAIN);
+  const asked = question(claims);
   if ("failed" in asked) {
     // Names only, never a value: what the token carried, and what it was missing or failed.
     const identity = isRecord(claims.identity) ? Object.keys(claims.identity).sort() : null;
