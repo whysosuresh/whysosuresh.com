@@ -1,13 +1,14 @@
 // @ts-check
 // The threads page's keys, as one map: it names what each key does for the page's key handler
 // (site/app/threads.js) and draws the keyboard sheet (`?`), so the two never disagree. The one-key moves are the
-// inbox's, kept as they were, plus M (comment), W (edit), N (new) and ⌘K (find). A key pressed while typing in
-// a field, or inside a page shown in a thread, never reaches here. Plain data and one pure function, so a test
-// can read it without a page.
+// inbox's, kept as they were, plus M (comment), W (edit), N (new), S (share) and ⌘K (find). A person the owner
+// invited reads and comments, so their page answers only the keys on their own sheet (`MEMBER_SHEET`,
+// `MEMBER_COMMANDS`). A key pressed while typing in a field, or inside a page shown in a thread, never reaches
+// here. Plain data and pure functions, so a test can read them without a page.
 
 /**
  * @typedef {'next' | 'prev' | 'open' | 'back' | 'tab-look' | 'tab-act' | 'tab-discuss' | 'tab-done' | 'find' | 'act'
- *   | 'discuss' | 'drop' | 'done' | 'reopen' | 'space' | 'undo' | 'comment' | 'edit' | 'reply' | 'new' | 'keys'} Command
+ *   | 'discuss' | 'drop' | 'done' | 'reopen' | 'space' | 'undo' | 'comment' | 'edit' | 'reply' | 'new' | 'share' | 'keys'} Command
  * @typedef {{ keys: string, label: string }} KeyRow
  */
 
@@ -44,6 +45,7 @@ export const SHEET = Object.freeze([
       { keys: 'W', label: 'Edit title, summary and text' },
       { keys: 'R', label: 'Reply by email to a note' },
       { keys: 'N', label: 'New thread' },
+      { keys: 'S', label: 'Share the thread' },
       { keys: '⌘↵', label: 'Save, or send the comment' },
       { keys: '?', label: 'These keys' },
     ],
@@ -73,8 +75,36 @@ const PLAIN = Object.freeze({
   w: 'edit',
   r: 'reply',
   n: 'new',
+  s: 'share',
   '?': 'keys',
 });
+
+/** An invited person's keyboard sheet: moving among their threads, finding, and commenting. */
+/** @type {readonly { title: string, rows: readonly KeyRow[] }[]} */
+export const MEMBER_SHEET = Object.freeze([
+  {
+    title: 'Move around',
+    rows: [
+      { keys: 'J', label: 'Next thread' },
+      { keys: 'K', label: 'Previous thread' },
+      { keys: '↵', label: 'Open the thread' },
+      { keys: 'Esc', label: 'Back to your threads' },
+      { keys: '⌘K', label: 'Find in your threads' },
+    ],
+  },
+  {
+    title: 'Write',
+    rows: [
+      { keys: 'M', label: 'Comment' },
+      { keys: '⌘↵', label: 'Send the comment' },
+      { keys: '?', label: 'These keys' },
+    ],
+  },
+]);
+
+/** The commands an invited person's page answers; every other key does nothing there. */
+/** @type {ReadonlySet<Command>} */
+export const MEMBER_COMMANDS = new Set(/** @type {Command[]} */ (['next', 'prev', 'open', 'back', 'find', 'comment', 'keys']));
 
 /**
  * What a key press asks for, or null for a key that does nothing here. ⌘K (Ctrl+K elsewhere) is find; every

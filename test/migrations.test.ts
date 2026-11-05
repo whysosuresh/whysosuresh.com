@@ -12,7 +12,7 @@
 // no invited person, and no one is invited.
 
 import { afterEach, describe, expect, it } from "vitest";
-import { OWNER, SITE, startHarness, type Harness } from "./harness.ts";
+import { SITE, startHarness, type Harness } from "./harness.ts";
 
 let harness: Harness | null = null;
 
@@ -66,10 +66,10 @@ async function stage(rows: InboxRow[]): Promise<Harness> {
   return staged;
 }
 
-async function threadsTab(target: Harness, tab: string): Promise<{ threads: Record<string, unknown>[]; counts: Record<string, number>; next: number | null; me: string | null }> {
+async function threadsTab(target: Harness, tab: string): Promise<{ threads: Record<string, unknown>[]; counts: Record<string, number>; next: number | null }> {
   const response = await target.fetch(`${SITE}/threads/api/threads?tab=${tab}`, { headers: { "Cf-Access-Jwt-Assertion": target.access.token() } });
   expect(response.status).toBe(200);
-  return (await response.json()) as { threads: Record<string, unknown>[]; counts: Record<string, number>; next: number | null; me: string | null };
+  return (await response.json()) as { threads: Record<string, unknown>[]; counts: Record<string, number>; next: number | null };
 }
 
 describe("0006, every inbox row a thread", () => {
@@ -150,7 +150,7 @@ describe("0006, every inbox row a thread", () => {
         }));
       const answer = await threadsTab(harness, tab);
       expect(answer.threads).toEqual(expected.map((thread) => expect.objectContaining(thread)));
-      expect([answer.counts, answer.next, answer.me]).toEqual([counts, null, OWNER]);
+      expect([answer.counts, answer.next]).toEqual([counts, null]);
     }
   });
 

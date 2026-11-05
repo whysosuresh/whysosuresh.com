@@ -1,9 +1,10 @@
 // The threads page's keys (site/app/keys.js), one map for the key handler and the keyboard sheet. What it holds:
 // every key the sheet lists does what the sheet says, ⌘K and Ctrl+K find, the browser's own shortcuts stay its own,
-// and a key the page doesn't use does nothing.
+// and a key the page doesn't use does nothing. An invited person's sheet lists only keys their page answers, and
+// their page answers no move, edit, reply, new thread or share.
 
 import { describe, expect, it } from "vitest";
-import { SHEET, commandFor } from "../site/app/keys.js";
+import { MEMBER_COMMANDS, MEMBER_SHEET, SHEET, commandFor } from "../site/app/keys.js";
 
 const press = (key: string, mods: { metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean } = {}) => ({ key, metaKey: false, ctrlKey: false, altKey: false, ...mods });
 
@@ -28,6 +29,7 @@ describe("the keys", () => {
     ["w", "edit"],
     ["r", "reply"],
     ["n", "new"],
+    ["s", "share"],
     ["?", "keys"],
   ])("reads %s as %s", (key, command) => {
     expect(commandFor(press(key))).toBe(command);
@@ -52,5 +54,16 @@ describe("the keys", () => {
     const single = listed.filter((keys) => /^[A-Z?]$/.test(keys));
     for (const key of single) expect([key, commandFor(press(key === "?" ? "?" : key.toLowerCase()))]).not.toEqual([key, null]);
     expect(single.length).toBeGreaterThan(10);
+  });
+
+  it("gives an invited person only the keys their own sheet lists", () => {
+    const listed = MEMBER_SHEET.flatMap((group) => group.rows.map((row) => row.keys));
+    for (const key of listed.filter((keys) => /^[A-Z?]$/.test(keys))) {
+      const command = commandFor(press(key === "?" ? "?" : key.toLowerCase()));
+      expect([key, command !== null && MEMBER_COMMANDS.has(command)]).toEqual([key, true]);
+    }
+    for (const owners of ["act", "discuss", "drop", "done", "reopen", "space", "undo", "edit", "reply", "new", "share", "tab-look"] as const) {
+      expect(MEMBER_COMMANDS.has(owners)).toBe(false);
+    }
   });
 });

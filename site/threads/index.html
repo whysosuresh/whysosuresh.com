@@ -5,7 +5,8 @@
      /app/threads.js draws all of it from the threads' private calls under /threads/api/, behind Cloudflare Access;
      the page itself holds no data. Until a call answers, nothing shows: a visitor who isn't signed in sees the
      same "Nothing here" a missing thread shows at a thread's address, and a small "Sign in" there only on a device that
-     has signed in before; at /threads/ itself, which names no thread, it always offers "Sign in".
+     has signed in before; at /threads/ itself, which names no thread, it always offers "Sign in". A person Suresh
+     invited to a thread gets the same page, drawn for them: their threads, and each with a comment box.
      Every link and file is root-absolute; the icons are a template the script copies. -->
 <html lang="en">
 <head>
@@ -77,6 +78,7 @@
     <svg class="t-i" data-name="reopen" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v3h3"/></svg>
     <svg class="t-i" data-name="mic" viewBox="0 0 16 16" aria-hidden="true"><rect x="6" y="1.5" width="4" height="8" rx="2"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V15"/></svg>
     <svg class="t-i" data-name="space" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11Z"/></svg>
+    <svg class="t-i" data-name="people" viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="5.5" r="2.5"/><path d="M1.5 13.5a4.5 4.5 0 0 1 9 0"/><circle cx="11.5" cy="6" r="2"/><path d="M11.2 9.6a3.6 3.6 0 0 1 3.3 3.9"/></svg>
   </template>
 </body>
 </html>
