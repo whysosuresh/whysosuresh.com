@@ -163,8 +163,8 @@ async function seed(): Promise<void> {
   // Public too, and not shared with the invited person, so they read it in the public view, its page from the public address.
   await asPerson(owner, `/${pricing}`, { action: "publish" });
   // A page that asks questions, shared with the guest and Asha: their answers under two of its questions, a discussion
-  // on its words with a reply, one on words of version 1 that version 2 cut, and a reply under a general comment. The
-  // meeting is made up.
+  // on its words with a reply, one on words of version 1 that version 2 cut, a reply under a general comment, and an
+  // Only me comment with his own reply, which the guest never sees. The meeting is made up.
   const review = await add("chat:seed-review", { title: "The review on Wednesday: how it runs", status: "discuss", space: "company", body: "The plan for the half hour, as a page." });
   const asha = harness.access.memberClaims("asha@example.com");
   const guestClaims = harness.access.memberClaims(guest);
@@ -183,6 +183,8 @@ async function seed(): Promise<void> {
   await asPerson(owner, `/${review}/people`, { add: { email: "asha@example.com", name: "Asha" } });
   const asked = await commentAs(owner, { body: "The plan for Wednesday. Answer the questions at the end, or select anything you would change." });
   await commentAs(asha, { body: "Will do tonight.", parent: asked });
+  const secret = await commentAs(owner, { body: "Ask Dev about the budget before the meeting.", audience: "owner" });
+  await commentAs(owner, { body: "Asked. It holds.", parent: secret });
   const cut = await commentAs(asha, { body: "Twenty is a lot for this room. Fifteen?", quote: "twenty minutes of demo", prefix: "Then ", suffix: ", told as a story", version: 1 });
   await commentAs(owner, { body: "Agreed. Version 2 cuts it to twelve.", parent: cut });
   await page(review, new TextEncoder().encode(reviewPage(2)), "https://claude.ai/artifact/example-review");
