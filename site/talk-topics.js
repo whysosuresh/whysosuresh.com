@@ -25,6 +25,7 @@ export const TOPICS = Object.freeze([
     slug: 'stigmer',
     label: 'Stigmer',
     hint: 'The product, the site, the docs or a demo',
+    ask: 'stigmer',
     questions: [
       'Where did you get lost: the site, the docs, the install, or a demo?',
       'Would you put it in your product? What would stop you?',
@@ -45,6 +46,7 @@ export const TOPICS = Object.freeze([
     slug: 'capsjump',
     label: 'CapsJump',
     hint: 'The Mac app',
+    ask: 'capsjump',
     questions: [
       'What did you try to set up, and where did it fight you?',
       "What do you reach for Caps Lock to do that it can't yet?",
