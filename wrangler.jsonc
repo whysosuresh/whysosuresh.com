@@ -1,7 +1,8 @@
 // whysosuresh.com: one Cloudflare Worker that serves the folder ./site, and runs code only for /api/* (the
-// note flow's one public write, src/talk.ts) and /threads/* (the threads' private calls under /threads/api/,
+// note flow's one public write, src/talk.ts), /threads/* (the threads' private calls under /threads/api/,
 // src/threads.ts, and the threads page at every other path, src/pages.ts, which hands over
-// site/threads/index.html through the assets binding), all on the database bound below. Every other page comes
+// site/threads/index.html through the assets binding) and /me (the same page, everyone's door after sign-in),
+// all on the database bound below. Every other page comes
 // straight from ./site, with no code in its path, and /inbox, the threads' old address, redirects to /threads/
 // (site/_redirects); Cloudflare Access guards /threads/api and everything under it (infrastructure/), never a
 // thread's page. This
@@ -29,9 +30,9 @@
     "not_found_handling": "404-page",
     // /feedback serves feedback.html; /feedback.html and /index.html redirect to the clean address.
     "html_handling": "auto-trailing-slash",
-    // Only these paths reach the code; everything else is a file from ./site. The threads page's scripts live
-    // under /app/, so they stay files.
-    "run_worker_first": ["/api/*", "/threads/*"],
+    // Only these paths reach the code; everything else is a file from ./site. /me is the threads page too, the
+    // door everyone signed in enters by. The threads page's scripts live under /app/, so they stay files.
+    "run_worker_first": ["/api/*", "/threads/*", "/me"],
     // How the code hands over a file from ./site: the threads page, with site/_headers on it.
     "binding": "ASSETS"
   },

@@ -3,3 +3,6 @@
 /inbox /threads/ 301
 /inbox/ /threads/ 301
 /inbox/* /threads/ 301
+
+# /me is the door everyone signed in enters by, served by the Worker; its address ends without a slash.
+/me/ /me 301

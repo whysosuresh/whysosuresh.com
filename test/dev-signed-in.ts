@@ -296,7 +296,7 @@ createServer((request, response) => {
   });
 }).listen(PORT, "127.0.0.1", () => {
   const as = signedOut ? "signed out" : member === null ? "signed in as the owner" : `signed in as ${member}, invited to one thread`;
-  console.log(`The threads, ${as}: ${LOCAL}/threads/ (Ctrl-C stops it)`);
+  console.log(`whysosuresh.com/me, ${as}: ${LOCAL}/me (Ctrl-C stops it)`);
 });
 process.on("SIGINT", () => {
   void harness.dispose().then(() => process.exit(0));
