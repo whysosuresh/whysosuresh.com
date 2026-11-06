@@ -60,6 +60,22 @@ async function reasonOf(response: Response): Promise<[number, string]> {
   return [response.status, ((await response.json()) as { reason: string }).reason];
 }
 
+/**
+ * A body refused by its declared length before it is read: the Worker answers 413 at once, and while the local runtime
+ * may close the connection before the rest of a large body is written, the client then sees the write fail instead.
+ * Either is the refusal, and the test checks after it that nothing was kept.
+ */
+async function refusedUnread(sent: Promise<Response>): Promise<string> {
+  try {
+    const [status, reason] = await reasonOf(await sent);
+    return `${status} ${reason}`;
+  } catch (error) {
+    const cause = error instanceof Error && error.cause instanceof Error ? (error.cause as Error & { code?: string }).code : undefined;
+    if (cause === "ECONNRESET" || cause === "EPIPE") return "413 too-large";
+    throw error;
+  }
+}
+
 async function count(table: string): Promise<number> {
   return (await (await harness.db()).prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>())?.n ?? 0;
 }
@@ -238,8 +254,9 @@ describe("saving", () => {
     const text = new TextEncoder().encode(JSON.stringify({ text: day("X"), base: 0 }));
     const wrongType = await harness.fetch(`${JOURNAL}/2026-03-03`, { method: "POST", headers: { ...headersFor("sync"), "Content-Type": "text/plain" }, body: text });
     expect(await reasonOf(wrongType)).toEqual([415, "type"]);
-    const large = await harness.fetch(`${JOURNAL}/2026-03-03`, { method: "POST", headers: { ...headersFor("sync"), "Content-Type": "application/json" }, body: new Uint8Array(400 * 1024 + 1) });
-    expect(await reasonOf(large)).toEqual([413, "too-large"]);
+    const large = harness.fetch(`${JOURNAL}/2026-03-03`, { method: "POST", headers: { ...headersFor("sync"), "Content-Type": "application/json" }, body: new Uint8Array(400 * 1024 + 1) });
+    expect(await refusedUnread(large)).toBe("413 too-large");
+    expect(await count("journal_versions")).toBe(0);
   });
 });
 
@@ -334,7 +351,7 @@ describe("photos", () => {
     expect(await reasonOf(await upload(JPEG, "text/html"))).toEqual([415, "type"]);
     const large = new Uint8Array(4 * 1024 * 1024 + 1);
     large.set(JPEG);
-    expect(await reasonOf(await upload(large))).toEqual([413, "too-large"]);
+    expect(await refusedUnread(upload(large))).toBe("413 too-large");
     expect(await objects()).toEqual([]);
     expect(await count("journal_photos")).toBe(0);
   });
