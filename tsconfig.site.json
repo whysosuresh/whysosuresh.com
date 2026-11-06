@@ -1,6 +1,6 @@
-// The type check for the site's browser scripts: plain JavaScript under `// @ts-check`, checked by the
-// same strict rules as the TypeScript, against the browser's own library. It sits here, not in site/,
-// because every file in site/ is served.
+// The type check for the site's browser scripts and the bridge every saved page carries (frame/bridge.js): plain
+// JavaScript under `// @ts-check`, checked by the same strict rules as the TypeScript, against the browser's own
+// library. It sits here, not in site/, because every file in site/ is served.
 {
   "compilerOptions": {
     "target": "es2023",
@@ -20,5 +20,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["site/**/*.js"]
+  "include": ["site/**/*.js", "frame/**/*.js"]
 }

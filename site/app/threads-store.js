@@ -38,8 +38,10 @@
  * @typedef {{
  *   id: string, author: 'owner' | 'sync' | 'member' | 'visitor' | string, name: string | null, audience: Audience | string,
  *   state: 'shown' | 'pending' | 'dropped' | string, body: string, createdAt: string, senderEmail?: string | null,
- *   personNumber?: number
+ *   personNumber?: number, parent?: string | null, question?: string | null, quote?: Quote | null, mine?: boolean
  * }} Comment
+ * @typedef {{ text: string, prefix: string, suffix: string, version: number }} Quote
+ * @typedef {{ parent: string } | { question: string } | { quote: string, prefix: string, suffix: string, version: number }} Place
  * @typedef {{
  *   number: number, title: string | null, summary: string | null, space: string | null, main: 'text' | 'page' | 'link',
  *   body: string | null, link: { url: string, title: string | null } | null, createdAt: string
@@ -208,14 +210,16 @@ export async function move(number, action) {
 
 /**
  * Adds a comment to a thread: for everyone in it, for him only (`owner`, the owner's alone), or on a public thread
- * for anyone (`public`).
+ * for anyone (`public`); or one that sits somewhere (`Place`): under another comment, in its audience, as an answer to
+ * the page's question, or on words of a version of the page, each for everyone in the thread.
  * @param {number} number
  * @param {string} body
- * @param {Audience} audience
+ * @param {Audience | Place} place
  * @returns {Promise<Comment>}
  */
-export async function comment(number, body, audience) {
-  return /** @type {{ comment: Comment }} */ (await post(`/threads/${number}/comments`, audience === 'thread' ? { body } : { body, audience })).comment;
+export async function comment(number, body, place) {
+  const sent = typeof place === 'string' ? (place === 'thread' ? { body } : { body, audience: place }) : { body, ...place };
+  return /** @type {{ comment: Comment }} */ (await post(`/threads/${number}/comments`, sent)).comment;
 }
 
 /**

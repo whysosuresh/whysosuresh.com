@@ -8,7 +8,8 @@
     "node": ">=22.22.0 <23"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.site.json && tsc -p tsconfig.worker.json && deploy/node_modules/.bin/wrangler types --check --config wrangler.jsonc",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.site.json && tsc -p tsconfig.worker.json && deploy/node_modules/.bin/wrangler types --check --config wrangler.jsonc && node tools/frame/frame.ts --check",
+    "frame": "node tools/frame/frame.ts",
     "types": "deploy/node_modules/.bin/wrangler types --config wrangler.jsonc",
     "dry-run": "deploy/node_modules/.bin/wrangler deploy --dry-run --config wrangler.jsonc --outdir dist",
     "test": "npm run dry-run && vitest run",

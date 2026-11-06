@@ -12,14 +12,20 @@
 //   blob:, and no connection anywhere (`connect-src 'none'`), so a page can't send what it shows, or call the
 //   threads' calls with the owner's cookie. `frame-ancestors 'self'` lets only the site frame it. An artifact that
 //   needs more (claude.ai's runtime, several files, compiling in the browser) is kept as a link instead.
-// - One small script is added at the document's end. It tells the parent the page's height, addressed to the
-//   site's own origin (from the request, never `*`), so the frame grows to fit and the thread scrolls as one.
+// - The bridge (frame/bridge.js, as text in src/frame-bridge.ts) is added at the document's end, after a JSON script
+//   naming the site's own origin (from the request, never `*`), which is where it addresses everything it says. It
+//   tells the parent the page's height, so the frame grows to fit and the thread scrolls as one; in a signed-in
+//   thread it also draws answer boxes under the page's questions and marks the words its discussions are on, and
+//   it never saves anything itself. Both are inline scripts, which the CSP already allows; nothing widens.
 // - A version never changes, so the answer is cached and revalidated (`private, no-cache`) with an ETag built from
-//   the object's own and the added script's version: opening a thread again costs a 304, every open still passes
-//   Access and the Worker's check, and a deploy that changes the script is never answered from a stale copy.
+//   the object's own and the bridge's version (a hash of its text): opening a thread again costs a 304, every open
+//   still passes Access and the Worker's check, and a deploy that changes the bridge is never answered from a stale
+//   copy.
 //
 // A document that doesn't start with `<!doctype` gets the skeleton claude.ai wraps every published page in, when
 // it is saved (`withSkeleton`), so a file written by hand looks as it would on claude.ai.
+
+import { BRIDGE, SCRIPT_VERSION } from "./frame-bridge.ts";
 
 /** The CSP every page is served with; test/pages.test.ts holds the exact string. */
 export const PAGE_CSP = [
@@ -37,8 +43,7 @@ export const PAGE_CSP = [
   "frame-ancestors 'self'",
 ].join("; ");
 
-/** The added script's version: bumped whenever `heightScript` changes, so no browser keeps the old one. */
-export const SCRIPT_VERSION = "h1";
+export { SCRIPT_VERSION } from "./frame-bridge.ts";
 
 /** The head claude.ai publishes every page with, put in front of a document that has none of its own. */
 export const SKELETON =
@@ -50,12 +55,12 @@ export function withSkeleton(html: string): string {
 }
 
 /**
- * The script added at a page's end: it posts the document's height to the site, and again whenever it changes. The
- * height is the document's own box, not its scroll height, which never drops below the frame's, so a short page
- * lets its frame shrink to fit.
+ * What is added at a page's end: the site's origin as JSON (`<` escaped, so nothing in it can end the tag), then the
+ * bridge as a module script, which runs once the document is parsed.
  */
-export function heightScript(origin: string): string {
-  return `\n<script>(()=>{const o=${JSON.stringify(origin)};let h=0;const s=()=>{const n=Math.ceil(document.documentElement.getBoundingClientRect().height);if(n!==h){h=n;parent.postMessage({whysosureshPageHeight:n},o)}};new ResizeObserver(s).observe(document.documentElement);addEventListener('load',s);s()})();</script>\n`;
+export function frameScripts(origin: string): string {
+  const config = JSON.stringify({ origin }).replace(/</g, "\\u003c");
+  return `\n<script type="application/json" data-whysosuresh-frame>${config}</script>\n<script type="module">${BRIDGE}</script>\n`;
 }
 
 /** The ETag of a version as served: the object's own, joined to the added script's version. */
@@ -81,7 +86,7 @@ export function pageHeaders(tag: string): Record<string, string> {
   };
 }
 
-/** Answers one stored version: 304 when the browser holds it already, else the document with the height script. */
+/** Answers one stored version: 304 when the browser holds it already, else the document with the bridge. */
 export async function servePage(bucket: R2Bucket, objectKey: string, request: Request): Promise<Response | null> {
   const origin = new URL(request.url).origin;
   const known = objectTagFrom(request.headers.get("If-None-Match"));
@@ -89,6 +94,6 @@ export async function servePage(bucket: R2Bucket, objectKey: string, request: Re
   if (object === null) return null;
   const tag = pageTag(object.etag);
   if (!("body" in object)) return new Response(null, { status: 304, headers: pageHeaders(tag) });
-  const page = new Blob([await object.arrayBuffer(), heightScript(origin)]);
+  const page = new Blob([await object.arrayBuffer(), frameScripts(origin)]);
   return new Response(page, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", ...pageHeaders(tag) } });
 }

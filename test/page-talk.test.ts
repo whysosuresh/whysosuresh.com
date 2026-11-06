@@ -1,0 +1,156 @@
+// The thread's half of what a page and its thread say to each other (site/app/page-talk.js). What it holds: a
+// message from a page's frame is taken only as exactly one of its six kinds, in range, a selection's words with their
+// spaces and an answer trimmed; a thread's comments sort into the four places a comment sits, replies under their
+// parent; the page is told each person's newest answer, by name and never by address or number, and every
+// discussion's words with the one being written; and cards beside the page sit level with their words, pushed down
+// where two would overlap.
+
+import { describe, expect, it } from "vitest";
+import { DRAFT, KEY, MAX_ANSWER, MAX_QUOTE, discussionFor, newestAnswers, placesOf, readPageMessage, stack } from "../site/app/page-talk.js";
+
+/** A comment as the thread's call answers it (site/app/threads-store.js), with the fields these tests set. */
+interface Comment {
+  id: string;
+  author: string;
+  name: string | null;
+  audience: string;
+  state: string;
+  body: string;
+  createdAt: string;
+  personNumber?: number;
+  parent?: string | null;
+  question?: string | null;
+  quote?: { text: string; prefix: string; suffix: string; version: number } | null;
+  mine?: boolean;
+}
+
+const ID = "6f1c1d6e-3a1b-4a8e-9b1d-0c2f4e5a6b7c";
+let made = 0;
+function said(fields: Partial<Comment> = {}): Comment {
+  made += 1;
+  return {
+    id: `00000000-0000-4000-8000-${String(made).padStart(12, "0")}`,
+    author: "member",
+    name: "Dev",
+    audience: "thread",
+    state: "shown",
+    body: `Words ${made}.`,
+    createdAt: `2026-11-09T10:${String(made).padStart(2, "0")}:00.000Z`,
+    parent: null,
+    question: null,
+    quote: null,
+    mine: false,
+    ...fields,
+  };
+}
+
+describe("a message from a page's frame", () => {
+  it("is taken as exactly one of its six kinds", () => {
+    expect(readPageMessage({ [KEY]: "height", height: 420 })).toEqual({ kind: "height", height: 420 });
+    expect(readPageMessage({ [KEY]: "ready", questions: ["order", "missing", "order"] })).toEqual({ kind: "ready", questions: ["order", "missing"] });
+    expect(readPageMessage({ [KEY]: "selected", quote: " the words\n", prefix: "", suffix: "x", top: 120 })).toEqual({ kind: "selected", quote: " the words\n", prefix: "", suffix: "x", top: 120 });
+    expect(readPageMessage({ [KEY]: "answer", question: "order", body: "  Fine as is.  " })).toEqual({ kind: "answer", question: "order", body: "Fine as is." });
+    expect(readPageMessage({ [KEY]: "anchors", anchors: [{ id: ID, top: 300 }, { id: DRAFT, missing: true }], questions: [{ id: "order", top: 900 }] })).toEqual({
+      kind: "anchors",
+      anchors: [
+        { id: ID, top: 300 },
+        { id: DRAFT, top: null },
+      ],
+      questions: [{ id: "order", top: 900 }],
+    });
+    expect(readPageMessage({ [KEY]: "open", id: ID })).toEqual({ kind: "open", id: ID });
+  });
+
+  it.each([
+    ["the old height", { whysosureshPageHeight: 420 }],
+    ["a height that isn't a number", { [KEY]: "height", height: "420" }],
+    ["a malformed question", { [KEY]: "ready", questions: ["Order"] }],
+    ["blank words", { [KEY]: "selected", quote: "  ", prefix: "", suffix: "", top: 0 }],
+    ["words over 500", { [KEY]: "selected", quote: "w".repeat(MAX_QUOTE + 1), prefix: "", suffix: "", top: 0 }],
+    ["words with no place", { [KEY]: "selected", quote: "w", prefix: "", suffix: "" }],
+    ["words with a name", { [KEY]: "selected", quote: "w", prefix: "", suffix: "", top: 0, name: "Suresh" }],
+    ["an answer that says who wrote it", { [KEY]: "answer", question: "order", body: "x", author: "owner" }],
+    ["a blank answer", { [KEY]: "answer", question: "order", body: " " }],
+    ["an answer over 32,000", { [KEY]: "answer", question: "order", body: "x".repeat(MAX_ANSWER + 1) }],
+    ["an anchor that is neither placed nor missing", { [KEY]: "anchors", anchors: [{ id: ID }], questions: [] }],
+    ["an anchor at no place", { [KEY]: "anchors", anchors: [{ id: ID, top: Number.NaN }], questions: [] }],
+    ["opening the composer's draft", { [KEY]: "open", id: DRAFT }],
+    ["a kind the page never sends", { [KEY]: "hello" }],
+    ["nothing", null],
+  ])("refuses %s", (_, data) => {
+    expect(readPageMessage(data)).toBeNull();
+  });
+});
+
+describe("where a thread's comments sit", () => {
+  it("sorts them into general comments, answers, words and replies by parent, leaving dropped notes out", () => {
+    const root = said();
+    const words = said({ quote: { text: "the demo", prefix: "", suffix: "", version: 2 } });
+    const answer = said({ question: "order" });
+    const reply = said({ parent: root.id });
+    const onWords = said({ parent: words.id });
+    const dropped = said({ author: "visitor", state: "dropped" });
+    const places = placesOf([root, words, answer, reply, onWords, dropped]);
+    expect(places.general).toEqual([root]);
+    expect(places.answers).toEqual([answer]);
+    expect(places.words).toEqual([words]);
+    expect(places.replies).toEqual(
+      new Map([
+        [root.id, [reply]],
+        [words.id, [onWords]],
+      ]),
+    );
+  });
+
+  it("keeps each person's newest answer to each question, in the order they answered", () => {
+    const first = said({ question: "order", body: "Fine as is." });
+    const asha = said({ question: "order", name: "Asha" });
+    const mine = said({ question: "order", author: "owner", name: null, mine: true });
+    const changed = said({ question: "order", body: "Swap them." });
+    const other = said({ question: "missing" });
+    expect(newestAnswers([first, asha, mine, changed, other])).toEqual([asha, mine, changed, other]);
+  });
+});
+
+describe("what the page is told", () => {
+  it("is each newest answer by name, the owner's as his, every discussion's words and the one being written", () => {
+    const answer = said({ question: "order", body: "Fine as is.", personNumber: 4 });
+    const his = said({ question: "order", author: "owner", name: null, body: "Agreed.", mine: true });
+    const words = said({ quote: { text: "the demo", prefix: "then ", suffix: ", then", version: 1 } });
+    const told = discussionFor(placesOf([answer, his, words]), { ownerName: "Suresh", draft: { quote: "Dev opens", prefix: "", suffix: " and" }, active: null });
+    expect(told).toEqual({
+      [KEY]: "discussion",
+      answers: [
+        { question: "order", name: "Dev", body: "Fine as is.", at: answer.createdAt, mine: false },
+        { question: "order", name: "Suresh", body: "Agreed.", at: his.createdAt, mine: true },
+      ],
+      anchors: [
+        { id: words.id, quote: "the demo", prefix: "then ", suffix: ", then" },
+        { id: DRAFT, quote: "Dev opens", prefix: "", suffix: " and" },
+      ],
+      active: null,
+    });
+    expect(JSON.stringify(told)).not.toMatch(/personNumber|@|"4"/);
+  });
+});
+
+describe("cards beside the page", () => {
+  it("sit level with their words, pushed down where two would overlap", () => {
+    const { placed, bottom } = stack(
+      [
+        { id: "b", want: 300, height: 120 },
+        { id: "a", want: 100, height: 150 },
+        { id: "c", want: 320, height: 60 },
+      ],
+      8,
+    );
+    expect(placed).toEqual(
+      new Map([
+        ["a", 100],
+        ["b", 300],
+        ["c", 428],
+      ]),
+    );
+    expect(bottom).toBe(496);
+  });
+});

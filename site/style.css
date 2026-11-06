@@ -620,7 +620,8 @@ p { margin: 0; }
 .t-dpeople small { color: var(--faint); font-weight: 500; }
 
 /* The details beside a thread. */
-.t-details { display: grid; align-content: start; font-size: 12px; position: sticky; top: 20px; }
+.t-rail { display: grid; align-content: start; gap: 14px; min-width: 0; position: sticky; top: 20px; }
+.t-details { display: grid; align-content: start; font-size: 12px; }
 .t-drow { display: grid; gap: 4px; padding: 10px 0; border-top: 1px solid var(--line); min-width: 0; }
 .t-drow:first-child { border-top: 0; padding-top: 2px; }
 .t-dlabel { color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
@@ -759,7 +760,8 @@ textarea.t-field { resize: vertical; line-height: 1.5; }
 .t-level .t-i { width: 13px; height: 13px; }
 
 @media (max-width: 999px) {
-  .t-thread { grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 18px 22px 48px; }
+  .t-thread, .t-thread[data-rail] { grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 18px 22px 48px; }
+  .t-rail { position: static; }
   .t-details { position: static; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0 16px; padding-top: 8px; border-top: 1px solid var(--line); }
   .t-drow, .t-drow:first-child { padding: 8px 0; border-top: 0; }
   .t-drow[data-wide] { grid-column: 1 / -1; }
@@ -830,6 +832,59 @@ textarea.t-field { resize: vertical; line-height: 1.5; }
 .t-person-main { grid-area: main; min-width: 0; display: grid; gap: 20px; align-content: start; }
 .t-person-side { grid-area: side; min-width: 0; display: grid; gap: 16px; align-content: start; position: sticky; top: 20px; }
 .t-person-side .t-details { position: static; }
+
+/* Pages that take answers and comments in place, from their design page. A thread whose page has discussions on its
+   words widens its side column to hold them under the details, each card level with its words (placed by the page's
+   script) and pushed down where two would overlap; the column then stops following the scroll. Below 1000 px and in
+   full screen they are listed under the page and open in a sheet, or a drawer at the window's right. Every comment
+   that can have replies shows them under it, smaller, with Reply; the history has one line for each answer and
+   discussion, in italics where it quotes. */
+.t-thread[data-rail] { grid-template-columns: minmax(0, 1fr) 264px; max-width: 1090px; }
+.t-thread[data-rail] .t-rail { position: static; }
+.t-rail-head { color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; padding-top: 10px; border-top: 1px solid var(--line); }
+.t-rail-cards { position: relative; min-height: 1px; }
+.t-rail-cards > .t-disc { position: absolute; left: 0; right: 0; transition: top 0.18s ease; }
+.t-disc { display: grid; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 12.5px; box-shadow: 0 6px 18px -16px var(--shadow); }
+.t-disc[aria-current="true"] { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink), 0 10px 24px -18px var(--shadow); z-index: 2; }
+.t-rail .t-disc:not([aria-current="true"]) { cursor: pointer; }
+.t-disc-quote { margin: 0; padding: 8px 12px 0; color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: baseline; }
+.t-disc-quote q { min-width: 0; border-left: 2px solid var(--ink); padding-left: 7px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.t-disc-old { margin-left: auto; }
+.t-msg { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; padding: 8px 12px; }
+.t-msg + .t-msg { border-top: 1px solid var(--line); }
+.t-msg .t-av, .t-replies .t-av { width: 20px; height: 20px; font-size: 9.5px; }
+.t-msg > div { min-width: 0; }
+.t-msg-head { display: flex; gap: 6px; align-items: baseline; color: var(--muted); font-size: 11.5px; }
+.t-msg-head b { color: var(--ink); font-size: 12px; }
+.t-msg-head time { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.t-msg-body .t-prose { font-size: 12.5px; line-height: 1.5; gap: 6px; }
+.t-disc-reply { display: grid; gap: 6px; padding: 6px 10px 8px; border-top: 1px solid var(--line); }
+.t-disc-reply textarea { width: 100%; min-height: 54px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); resize: vertical; font-size: 12.5px; line-height: 1.45; }
+.t-disc-reply textarea:focus { outline: none; border-color: var(--muted); }
+.t-disc-bar { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; align-items: center; }
+.t-disc-bar .t-note { margin-right: auto; font-size: 11px; }
+.t-disc-bar .t-btn { padding: 3px 9px; font-size: 12px; }
+.t-disc-open { border: 0; background: none; padding: 2px; color: var(--muted); font-size: 12px; font-weight: 600; text-align: left; }
+.t-disc-open:hover { color: var(--ink); }
+.t-disc-list { display: grid; gap: 10px; }
+.t-page-discs { display: grid; gap: 8px; }
+.t-page-discs .t-section-head { padding: 0; }
+.t-gone { display: grid; gap: 4px; padding-bottom: 6px; }
+.t-gone > .t-disc { margin-left: 34px; }
+.t-replies { display: grid; margin-left: 34px; padding-bottom: 2px; }
+.t-replies .t-cm { grid-template-columns: 20px minmax(0, 1fr); gap: 8px; padding: 4px 0; }
+.t-replies .t-cm-head { padding: 4px 10px; }
+.t-replies .t-cm-body { padding: 6px 10px; }
+.t-replies .t-composer { grid-template-columns: 20px minmax(0, 1fr); gap: 8px; padding-top: 4px; }
+.t-replies .t-composer textarea { min-height: 48px; font-size: 13px; }
+.t-reply-to { justify-self: start; display: inline-flex; align-items: center; gap: 5px; margin: 0 0 4px 34px; padding: 2px 0; border: 0; background: none; color: var(--muted); font-size: 12px; font-weight: 600; }
+.t-reply-to:hover { color: var(--ink); }
+.t-reply-to .t-i { width: 13px; height: 13px; }
+.t-ev-on { color: var(--muted); font-style: italic; overflow-wrap: anywhere; }
+.t-dialog[data-kind="drawer"] { width: min(360px, 100%); max-width: 100%; height: 100%; max-height: 100%; margin: 0 0 0 auto; border-radius: 0; border-width: 0 0 0 1px; }
+@media (prefers-reduced-motion: reduce) {
+  .t-rail-cards > .t-disc { transition: none; }
+}
 .t-said { display: grid; gap: 8px; }
 .t-said .t-cm { grid-template-columns: minmax(0, 1fr); padding: 0; }
 .t-said .t-cm-head { flex-wrap: nowrap; }
