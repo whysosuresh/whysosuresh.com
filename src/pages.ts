@@ -1,9 +1,11 @@
-// The threads page's addresses, which the Worker answers because no file can sit at every thread's number:
-// /me (the door everyone signed in enters by: Today for the owner, their threads for an invited person),
-// /threads/ (the list, with its tab and space in the query), /threads/<n>, with the thread's
-// title after the number or not (/threads/42-who-owns-what), and the people pages, /threads/people and
-// /threads/people/<n> with the person's name after it or not (/threads/people/7-meera), which read nothing: a
-// person's address gets the plain shell whatever the number, so it never says whether that person exists. Each gets the one page, site/threads/index.html,
+// The threads page's addresses, which the Worker answers because no file can sit at every thread's number: the
+// rooms, each at the top level beside the others: /me (the door everyone signed in enters by: Today for the owner,
+// their threads for an invited person), /meetings, /threads/ (the list, with its tab and space in the query), and the
+// people pages, /people and /people/<n> with the person's name after it or not (/people/7-meera), which read nothing:
+// a person's address gets the plain shell whatever the number, so it never says whether that person exists; and a
+// thread, /threads/<n>, with its title after the number or not (/threads/42-who-owns-what). People lived under
+// /threads/ before the rooms were peers: /threads/people and every person's address there redirect to /people for
+// good, and /people/ to /people, as /me/ does to /me. Each gets the one page, site/threads/index.html,
 // handed over from the site's own files through the assets binding, so it carries site/_headers (the CSP among
 // them) exactly as a file served straight from site/ would. The status is 200 whatever the number: the page asks
 // the calls for the thread, and a missing thread, a thread this browser may not read and a signed-out visitor all
@@ -25,8 +27,11 @@ import { parse, type Inline } from "../site/app/markdown.js";
 import type { Bindings } from "./bindings.ts";
 import { publicPreview, type PreviewRow } from "./store.ts";
 
-/** /me, the list, a thread by its number with any title after it, everyone, and a person by their number. */
-const PAGE = /^(?:\/me|\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?|people(?:\/(?:[1-9]\d{0,8}(?:-[^/]*)?)?)?)?)$/;
+/** /me, the meetings, everyone and a person by their number, the list, and a thread by its number with any title after it. */
+const PAGE = /^(?:\/me|\/meetings|\/people(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?)?)$/;
+
+/** People's addresses from before the rooms, everyone and a person with anything after the number, and /people/. */
+const OLD_PEOPLE = /^\/threads\/people(?:\/((?:[1-9]\d{0,8}(?:-[^/]*)?)?))?$|^\/people\/$/;
 
 /** The page's own address among the site's files. */
 const SHELL = "/threads/";
@@ -100,9 +105,14 @@ function rewritten(shell: Response, row: PreviewRow, origin: string): Response {
   return new Response(transformed.body, { status: transformed.status, headers });
 }
 
-/** Answers a path under /threads/ that isn't one of the threads' calls. */
+/** Answers a room's address, and a path under /threads/ that isn't one of the threads' calls. */
 export async function handlePage(request: Request, env: Bindings): Promise<Response> {
   const url = new URL(request.url);
+  const moved = OLD_PEOPLE.exec(url.pathname);
+  if (moved !== null && (request.method === "GET" || request.method === "HEAD")) {
+    const person = moved[1] === undefined || moved[1] === "" ? "" : `/${moved[1]}`;
+    return new Response(null, { status: 301, headers: { Location: `/people${person}${url.search}` } });
+  }
   const page = PAGE.exec(url.pathname);
   if (page === null || (request.method !== "GET" && request.method !== "HEAD")) return env.ASSETS.fetch(request);
   const shell = new URL(SHELL, url.origin);

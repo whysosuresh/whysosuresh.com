@@ -89,10 +89,11 @@ export function isTab(value: string): value is Tab {
 // The last activity reads the arrival time when it was never set: a thread the code before 0008 created between
 // that migration and its deploy. A plain expression, so it is safe in RETURNING.
 // Who a thread is from is read with their number, so a page can link the name; a subquery, which RETURNING allows.
-// So are a meeting's people, as one JSON array of their numbers and names (`[]` for none), in no promised order:
-// SQLite doesn't order an aggregate, so the door sorts them.
+// So are a meeting's people, as one JSON array of their numbers, names and addresses (`[]` for none), in no promised
+// order: SQLite doesn't order an aggregate, so the door sorts them, and it never emits an address; it reads one only
+// to tell an invited reader which attendee is them.
 export const COLUMNS =
-  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at, person_id, (SELECT people.number FROM people WHERE people.id = threads.person_id) AS sender_number, meeting_when, meeting_minutes, meeting_where, (SELECT json_group_array(json_object('number', people.number, 'name', people.name)) FROM attendees JOIN people ON people.id = attendees.person_id WHERE attendees.thread_id = threads.id) AS meeting_people";
+  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at, person_id, (SELECT people.number FROM people WHERE people.id = threads.person_id) AS sender_number, meeting_when, meeting_minutes, meeting_where, (SELECT json_group_array(json_object('number', people.number, 'name', people.name, 'email', people.email)) FROM attendees JOIN people ON people.id = attendees.person_id WHERE attendees.thread_id = threads.id) AS meeting_people";
 
 export interface ThreadRow {
   id: string;
@@ -126,7 +127,7 @@ export interface ThreadRow {
   meeting_when: string | null;
   meeting_minutes: number | null;
   meeting_where: string | null;
-  /** Its meeting's people, as a JSON array of `{number, name}` in no promised order. */
+  /** Its meeting's people, as a JSON array of `{number, name, email}` in no promised order; the address is never shown. */
   meeting_people: string;
   /** On a list's rows only (`LIST_EXTRAS`): how many people the thread is shared with now. */
   shared?: number;

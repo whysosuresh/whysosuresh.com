@@ -1,20 +1,20 @@
 // @ts-check
 // People, as the threads page says them (site/app/threads.js draws the pages): everyone Suresh deals with is a
 // person with a number (the Worker's src/people.ts), and these are the words and addresses their pages use: a
-// person's name (their address when they gave no name), their initials, their page's address
-// (/threads/people/7-meera, as a thread's is /threads/42-who-owns-what), the line that says how he knows them, the
+// person's name (their address when they gave no name), their initials, their page's address (/people/7-meera, a
+// room of its own beside the threads, as a thread's is /threads/42-who-owns-what), the line that says how he knows them, the
 // words for how they are in a thread, the line under their name about their address, and Everyone split into the
 // people still in touch and those only ever in threads he dropped. Plain data and pure functions, so a test can read
 // them without a page.
 
 /**
- * @typedef {{ sent: number, told: number, invited: number, removed: number, commented: number, noted: number }} Counts
+ * @typedef {{ sent: number, told: number, invited: number, removed: number, commented: number, noted: number, met?: number }} Counts
  * @typedef {{ number: number, name: string | null, email: string | null, invited: boolean, dropped: boolean, counts: Counts }} Known
  */
 
 /** A person's page addresses: everyone, and one person by their number with any name after it. */
-export const PEOPLE_PATH = /^\/threads\/people\/?$/;
-export const PERSON_PATH = /^\/threads\/people\/([1-9]\d{0,8})(?:-[^/]*)?$/;
+export const PEOPLE_PATH = /^\/people$/;
+export const PERSON_PATH = /^\/people\/([1-9]\d{0,8})(?:-[^/]*)?$/;
 
 /**
  * What a person is called: the name he knows them by, else the address they typed, else their number.
@@ -47,7 +47,7 @@ export function personPath(person) {
     .replace(/^-+|-+$/g, '')
     .slice(0, 40)
     .replace(/-+$/, '');
-  return `/threads/people/${person.number}${slug === '' ? '' : `-${slug}`}`;
+  return `/people/${person.number}${slug === '' ? '' : `-${slug}`}`;
 }
 
 /** @param {number} n @param {string} one @param {string} many */
@@ -67,6 +67,7 @@ export function howLine(counts) {
     ...(counts.removed > 0 ? [`invitation taken back on ${count(counts.removed, 'thread', 'threads')}`] : []),
     ...(counts.commented > 0 ? [count(counts.commented, 'comment', 'comments')] : []),
     ...(counts.noted > 0 ? [count(counts.noted, 'note on a public thread', 'notes on public threads')] : []),
+    ...((counts.met ?? 0) > 0 ? [`in ${count(counts.met ?? 0, 'meeting', 'meetings')}`] : []),
   ];
   const line = parts.join(' · ');
   return line === '' ? 'Nothing from them yet' : `${line.charAt(0).toUpperCase()}${line.slice(1)}`;
@@ -79,6 +80,7 @@ const ROLE_WORDS = {
   invited: 'invited',
   removed: 'invitation taken back',
   wrote: 'wrote here',
+  met: 'in the meeting',
 };
 
 /**
