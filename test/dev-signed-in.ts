@@ -7,9 +7,11 @@
 // person, Meera, at that address or meera@example.com, who has the last word on it, beside an "Only me" comment of
 // the owner's: the owner's Today shows it waiting on him, and the invited person never sees the note. One thread of
 // his own is public ("Shipping Stigmer 0.1.0, in public"), shared with the same person, with a comment of his
-// written for anyone, a visitor's note he OK'd and one waiting for his OK, whose words hold Markdown and a link that
-// must show as typed; signed out, its address shows the public view. The pricing page thread is public as well, and
-// not shared, so the invited person reads it in the public view too. Everyone in the seed is a person: Asha wrote
+// written for anyone and two visitors' notes, one of whose words hold Markdown and a link that must show as typed;
+// signed out, its address shows the public view. The pricing page thread is public as well, and not shared, so the
+// invited person reads it in the public view too. A third public thread's page asks questions ("A cold read"), with
+// two visitors' answers from two browsers' keys, both named Sam, so signed out the page takes answers with a name,
+// shows a visitor other people's answers once they gave their own, and opens in full screen at `?full`. Everyone in the seed is a person: Asha wrote
 // from the site and was then invited to the meetup thread, Dev K. told him something in person, Meera is invited
 // (with his own notes on her), Tomás wrote on the public thread with an address (Priya gave none, so she is no
 // person), and Rex's only note was junk he dropped, so Rex sits under the people only in dropped threads. Four
@@ -226,9 +228,31 @@ async function seed(): Promise<void> {
     if (response.status !== 201) throw new Error(`seeding a note on #${shipping} answered ${response.status}: ${await response.text()}`);
   };
   await note("Followed along from the install page. The Linux steps worked first time.", "Priya", "");
-  const okd = await database.prepare("SELECT id FROM comments WHERE author = 'visitor' ORDER BY created_at LIMIT 1").first<{ id: string }>();
-  await asPerson(owner, `/${shipping}/comments/${okd?.id ?? ""}`, { action: "show" });
   await note("Loved the install video. **not bold**\n[a link that stays text](https://example.com/should-not-link)\nWhen does Windows land?", "Tomás", "tomas@example.com");
+
+  // A public page that asks questions, with two visitors' answers, from two browsers' keys, under the same typed name.
+  const cold = await add("chat:seed-cold-read", { title: "A cold read of the install page", status: "discuss", space: "stigmer", body: "Questions for a developer meeting the site for the first time." });
+  const questions = `<!doctype html><html><head><meta charset="utf-8"><title>A cold read</title><style>body{font:16px/1.6 system-ui;margin:28px;max-width:640px}.q{padding:14px 0;border-bottom:1px solid #ddd}.q p{margin:0;font-weight:600}</style></head><body>
+<h1>A cold read</h1><p>Open the site in another tab and start cold. Each answer holds up to 4,000 characters.</p>
+<p data-outside-thread>Open the link you were sent to answer these.</p>
+<div class="q" data-thread-question="what-is-it"><p>In your own words, what is it?</p></div>
+<div class="q" data-thread-question="first-job"><p>Did your first job work, and where did you get stuck?</p></div>
+<div class="q" data-thread-question="would-you"><p>Would you use it: yes, not yet, or no?</p></div>
+${"<p>A line to make the page tall.</p>".repeat(12)}</body></html>`;
+  await page(cold, new TextEncoder().encode(questions), null);
+  await asPerson(owner, `/${cold}`, { action: "publish" });
+  const visitorAnswer = async (key: string, question: string, words: string): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const response = await harness.fetch(`${SITE}/api/threads/${cold}/answers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: SITE, "CF-Connecting-IP": "203.0.113.60" },
+      body: new TextEncoder().encode(JSON.stringify({ question, body: words, name: "Sam", token: "pass", key })),
+    });
+    if (response.status !== 201) throw new Error(`seeding an answer on #${cold} answered ${response.status}: ${await response.text()}`);
+  };
+  await visitorAnswer("5a".repeat(32), "what-is-it", "Somewhere to run AI agents, I think. The headline lost me.");
+  await visitorAnswer("5a".repeat(32), "first-job", "It ran after I found the install page, about ten minutes.");
+  await visitorAnswer("6b".repeat(32), "what-is-it", "A CLI and a server for agents, with **workflows**.");
 
   // Meetings, set as the sync sets them, relative to now: later today, next Wednesday (at least two days out), a day
   // four days out with no time, and one three days ago. Times are on the hour or half hour in UTC, as people book them.

@@ -13,8 +13,10 @@
 //
 // A thread Suresh made public is also read with no sign-in, from the public call outside Access (`showPublic`,
 // /api/threads/<n>, src/public.ts): what the thread says and the comments written as Public that are shown, in the
-// private answer's own field names, so one renderer draws both. Its page loads from the public address too. His OK on
-// a visitor's note (`judge`: show, drop, or hold to put it back to waiting) is a private call of his own.
+// private answer's own field names, so one renderer draws both. Its page loads from the public address too. A visitor
+// who answers the page's questions sends their browser's key with the read (`X-Visitor-Key`), so the call says which
+// answers are theirs and opens other people's under a question they answered. His ruling on a visitor's note or answer
+// (`judge`: drop it, or show it again) is a private call of his own.
 //
 // Everyone he deals with is a person with a number (src/people.ts): `listPeople` reads everyone, `showPerson` one
 // person with their threads and what they said, and `editPerson` changes their name, their address once, or his notes
@@ -30,15 +32,16 @@
  *   status: Status, kind: 'feedback' | 'idea' | null, dropReason: string | null, replyOpenedAt: string | null,
  *   ref: string | null, filedLink: string | null, movedAt: string | null, activityAt: string,
  *   main: 'text' | 'page' | 'link', link: { url: string, title: string | null } | null, publicAt: string | null,
- *   senderNumber?: number | null, shared?: number, waiting?: boolean, pending?: number
+ *   senderNumber?: number | null, shared?: number, waiting?: boolean
  * }} Thread
  * @typedef {{ version: number, savedAt: string, actor: string, bytes: number, source: string | null }} PageVersion
  * @typedef {{ version: number, savedAt: string, source: string | null, versions: PageVersion[] }} Page
  * @typedef {'thread' | 'owner' | 'public'} Audience
  * @typedef {{
  *   id: string, author: 'owner' | 'sync' | 'member' | 'visitor' | string, name: string | null, audience: Audience | string,
- *   state: 'shown' | 'pending' | 'dropped' | string, body: string, createdAt: string, senderEmail?: string | null,
- *   personNumber?: number, parent?: string | null, question?: string | null, quote?: Quote | null, mine?: boolean
+ *   state: 'shown' | 'dropped' | string, body: string, createdAt: string, senderEmail?: string | null,
+ *   personNumber?: number, parent?: string | null, question?: string | null, quote?: Quote | null, mine?: boolean,
+ *   visitor?: string
  * }} Comment
  * @typedef {{ text: string, prefix: string, suffix: string, version: number }} Quote
  * @typedef {{ parent: string } | { question: string } | { quote: string, prefix: string, suffix: string, version: number }} Place
@@ -47,9 +50,9 @@
  *   body: string | null, link: { url: string, title: string | null } | null, createdAt: string
  * }} PublicThread
  * @typedef {{ version: number, savedAt: string, versions: { version: number, savedAt: string }[] }} PublicPage
- * @typedef {{ author: 'owner' | 'member' | 'visitor' | string, name: string | null, body: string, createdAt: string }} PublicComment
+ * @typedef {{ author: 'owner' | 'member' | 'visitor' | string, name: string | null, body: string, createdAt: string, question?: string | null, mine?: boolean }} PublicComment
  * @typedef {{ thread: PublicThread, page: PublicPage | null, comments: PublicComment[], truncated: boolean }} PublicShown
- * @typedef {'show' | 'drop' | 'hold'} Judgement
+ * @typedef {'show' | 'drop'} Judgement
  * @typedef {{ id?: string, number?: number, name: string | null, email?: string, addedAt?: string, owner?: boolean }} Person
  * @typedef {{ sent: number, told: number, invited: number, removed: number, commented: number, noted: number }} Counts
  * @typedef {{
@@ -223,7 +226,7 @@ export async function comment(number, body, place) {
 }
 
 /**
- * His ruling on a visitor's note: shown on the thread, dropped, or back to waiting; answers the note as it now is.
+ * His ruling on a visitor's note or answer: dropped, or shown again; answers it as it now is.
  * @param {number} number
  * @param {string} note
  * @param {Judgement} action
@@ -234,15 +237,19 @@ export async function judge(number, note, action) {
 }
 
 /**
- * A public thread, as anyone reads it with no sign-in: Missing for any number that isn't one.
+ * A public thread, as anyone reads it with no sign-in: Missing for any number that isn't one. `key` is the visitor's
+ * browser's key, when it has one, which the call reads to say which answers are theirs.
  * @param {number} number
+ * @param {string | null} key
  * @returns {Promise<PublicShown>}
  */
-export async function showPublic(number) {
+export async function showPublic(number, key) {
   /** @type {Response} */
   let response;
   try {
-    response = await fetch(`/api/threads/${number}`, { redirect: 'manual', credentials: 'omit', cache: 'no-store' });
+    /** @type {Record<string, string>} */
+    const headers = key === null ? {} : { 'X-Visitor-Key': key };
+    response = await fetch(`/api/threads/${number}`, { redirect: 'manual', credentials: 'omit', cache: 'no-store', headers });
   } catch {
     throw new Failed('network');
   }

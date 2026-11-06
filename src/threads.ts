@@ -15,7 +15,7 @@
 //   POST /threads/api/threads/<n>/comments    {"body": ..., "audience"?: ...}  everyone
 //                                             {"body", "parent"} | {"body", "question"} | {"body", "quote", "prefix", "suffix", "version"}
 //                                             owner and invited people
-//   POST /threads/api/threads/<n>/comments/<id>   {"action": "show" | "drop" | "hold"}   owner
+//   POST /threads/api/threads/<n>/comments/<id>   {"action": "show" | "drop"}   owner
 //   POST /threads/api/threads/<n>/text        {"field": ..., "text": ...}      owner and sync
 //   POST /threads/api/threads/<n>/pages[?from=<claude.ai address>]   an HTML document   sync
 //   GET  /threads/api/threads/<n>/pages/<version>                             everyone
@@ -62,9 +62,8 @@
 // made public (`publicAt`). A comment's audience is the writer's own choice: `public` (anyone, on a public thread
 // only, 409 `not-public` elsewhere) from the owner or an invited person, never from the sync, so nothing it
 // transcribes is published without him. A visitor's note on a public thread, and a visitor's answer to its page's
-// questions (src/public.ts), are shown at once: he drops either at its own address, shows it again (the page's Undo),
-// or sends it back to waiting, and the owner's list counts the notes waiting on each thread (`pending`) and says a
-// thread waits on him when a visitor wrote last. An invited person never reads words that aren't shown, and nobody but
+// questions (src/public.ts), are shown at once: he drops either at its own address, or shows it again (the page's
+// Undo), and the owner's list says a thread waits on him when a visitor wrote last. An invited person never reads words that aren't shown, and nobody but
 // the owner and the sync ever reads a visitor's email. A visitor's answer names the key it came from (`visitor`, the
 // first 16 hex characters of the key's hash), so the page shows each visitor's newest answer apart from another
 // visitor who typed the same name; it can't be used to answer as anyone.
@@ -351,7 +350,7 @@ async function list(url: URL, env: Bindings, caller: Writer): Promise<Response> 
   const shown = rows.slice(0, PAGE);
   const last = shown[shown.length - 1];
   return json(200, {
-    threads: shown.map((row) => ({ ...thread(row, caller), shared: row.shared ?? 0, waiting: row.waiting === 1, pending: row.pending ?? 0 })),
+    threads: shown.map((row) => ({ ...thread(row, caller), shared: row.shared ?? 0, waiting: row.waiting === 1 })),
     counts,
     next: rows.length > PAGE && last !== undefined ? last.number : null,
   });
@@ -630,13 +629,13 @@ async function readPeople(number: number, env: Bindings, caller: Caller): Promis
   return peopleAnswer(row, env, caller);
 }
 
-/** His ruling on a visitor's note or answer: dropped, shown again (Undo), or back to waiting. The owner's alone. */
+/** His ruling on a visitor's note or answer: dropped, or shown again (Undo). The owner's alone. */
 async function judge(request: Request, number: number, noteId: string, env: Bindings, caller: Caller): Promise<Response> {
   const length = lengthRefusal(request, MAX_CHANGE_BYTES);
   if (length !== null) return length;
   const fields = exactly(await readJson(request), ["action"]);
   const action = fields?.action;
-  if (action !== "show" && action !== "drop" && action !== "hold") return refuse(400, "change");
+  if (action !== "show" && action !== "drop") return refuse(400, "change");
   if (!ID_SHAPE.test(noteId)) return refuse(404, "no-note");
   const judged = await judgeNote(env.DB, number, noteId, action satisfies Judgement);
   if (judged === "no-thread" || judged === "no-note") return refuse(404, judged);

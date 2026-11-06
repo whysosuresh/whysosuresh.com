@@ -1,7 +1,8 @@
 // @ts-check
-// Every visitor note's sender: the bot check and the upload. talk.js sends a note about a topic (send(), to
-// /api/talk); the threads page sends a note on a public thread (sendTo(), to /api/threads/<n>/notes, which waits
-// for his OK). Both share one budget on the server and one sender here. prepare() starts loading Cloudflare's
+// Every visitor's sender: the bot check and the upload. talk.js sends a note about a topic (send(), to /api/talk); the
+// threads page sends a note on a public thread and an answer to its page's questions (sendTo(), to
+// /api/threads/<n>/notes and /answers), each shown at once. Notes share one daily budget on the server, answers have
+// their own, and all share one sender here. prepare() starts loading Cloudflare's
 // Turnstile when a note opens, so nobody who only looks loads it and it is ready long before Send. Each send gets a
 // fresh token from the invisible widget and posts the note as JSON. The widget runs only at Send, because a token
 // lasts 5 minutes and writing a note can outlast one.

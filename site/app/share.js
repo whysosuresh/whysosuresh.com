@@ -140,7 +140,7 @@ export function publicLines(number, source, on) {
     label,
     allowed: true,
     note: on
-      ? 'Anyone who opens the link or tries the number reads the title, the summary, the text and the comments you write as Public. Earlier comments, Only me notes, the people and the history stay yours. Search engines are told not to list it.'
+      ? "Anyone who opens the link or tries the number reads the title, the summary, the text and the comments you write as Public, and with no sign-in can send you a note and answer its page's questions. What they write shows at once; you can drop it. Earlier comments, Only me notes, the people and the history stay yours. Search engines are told not to list it."
       : 'Off: only you and the people above read it.',
   };
 }

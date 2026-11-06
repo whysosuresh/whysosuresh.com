@@ -2,7 +2,8 @@
 // because its start runs only in a document. What it holds: quoted words are found again by their text either side,
 // in a later version too, and are missing once a version cuts them; a selection's words keep their spaces and line
 // breaks, with up to 64 characters either side, and a blank one or one over 500 is no quote; and a message from the
-// thread is taken only as exactly one of its four kinds, in range, so nothing else the parent posts reaches the page.
+// thread is taken only as exactly one of its four kinds, in range, so nothing else the parent posts reaches the page:
+// a hello is the signed-in thread's or a visitor's, and a save that failed may say why in one short line.
 
 import { describe, expect, it } from "vitest";
 
@@ -73,7 +74,8 @@ describe("a message from the thread", () => {
   const anchor = { id: ID, quote: "The live app", prefix: "", suffix: " is shown" };
 
   it("is taken as exactly one of hello, discussion, focus and saved", () => {
-    expect(readFromThread({ [KEY]: "hello" })).toEqual({ kind: "hello" });
+    expect(readFromThread({ [KEY]: "hello" })).toEqual({ kind: "hello", visitor: false });
+    expect(readFromThread({ [KEY]: "hello", visitor: true })).toEqual({ kind: "hello", visitor: true });
     expect(readFromThread({ [KEY]: "discussion", answers: [answer], anchors: [anchor, { ...anchor, id: "draft" }], active: ID })).toEqual({
       kind: "discussion",
       answers: [answer],
@@ -81,13 +83,24 @@ describe("a message from the thread", () => {
       active: ID,
     });
     expect(readFromThread({ [KEY]: "focus", id: ID, scroll: true })).toEqual({ kind: "focus", id: ID, scroll: true });
-    expect(readFromThread({ [KEY]: "saved", question: "order", ok: false })).toEqual({ kind: "saved", question: "order", ok: false });
+    expect(readFromThread({ [KEY]: "saved", question: "order", ok: false })).toEqual({ kind: "saved", question: "order", ok: false, problem: null });
+    expect(readFromThread({ [KEY]: "saved", question: "order", ok: false, problem: "Add your name above the page first." })).toEqual({
+      kind: "saved",
+      question: "order",
+      ok: false,
+      problem: "Add your name above the page first.",
+    });
   });
 
   it.each([
     ["the frame's old height", { whysosureshPageHeight: 400 }],
     ["an unknown kind", { [KEY]: "save", body: "x" }],
     ["hello with more", { [KEY]: "hello", name: "Meera" }],
+    ["a visitor's hello that says no", { [KEY]: "hello", visitor: false }],
+    ["a visitor's hello that isn't a yes", { [KEY]: "hello", visitor: "yes" }],
+    ["a save's blank problem", { [KEY]: "saved", question: "order", ok: false, problem: "  " }],
+    ["a save's problem too long to be a line", { [KEY]: "saved", question: "order", ok: false, problem: "x".repeat(201) }],
+    ["a save's problem that isn't text", { [KEY]: "saved", question: "order", ok: false, problem: 7 }],
     ["an answer with an address", { [KEY]: "discussion", answers: [{ ...answer, email: "dev@example.com" }], anchors: [], active: null }],
     ["an answer to a malformed question", { [KEY]: "discussion", answers: [{ ...answer, question: "Order" }], anchors: [], active: null }],
     ["words with too much context", { [KEY]: "discussion", answers: [], anchors: [{ ...anchor, prefix: "p".repeat(MAX_CONTEXT + 1) }], active: null }],
