@@ -15,6 +15,11 @@
 // /api/threads/<n>, src/public.ts): what the thread says and the comments written as Public that are shown, in the
 // private answer's own field names, so one renderer draws both. Its page loads from the public address too. His OK on
 // a visitor's note (`judge`: show, drop, or hold to put it back to waiting) is a private call of his own.
+//
+// Everyone he deals with is a person with a number (src/people.ts): `listPeople` reads everyone, `showPerson` one
+// person with their threads and what they said, and `editPerson` changes their name, their address once, or his notes
+// on them; an address another person holds is refused as Failed `email-taken`, whose `detail` names that person's
+// number. A search answers the people whose name or address holds the words beside the threads, for him alone.
 
 /**
  * @typedef {'look' | 'act' | 'discuss' | 'done'} Tab
@@ -25,14 +30,15 @@
  *   status: Status, kind: 'feedback' | 'idea' | null, dropReason: string | null, replyOpenedAt: string | null,
  *   ref: string | null, filedLink: string | null, movedAt: string | null, activityAt: string,
  *   main: 'text' | 'page' | 'link', link: { url: string, title: string | null } | null, publicAt: string | null,
- *   shared?: number, waiting?: boolean, pending?: number
+ *   senderNumber?: number | null, shared?: number, waiting?: boolean, pending?: number
  * }} Thread
  * @typedef {{ version: number, savedAt: string, actor: string, bytes: number, source: string | null }} PageVersion
  * @typedef {{ version: number, savedAt: string, source: string | null, versions: PageVersion[] }} Page
  * @typedef {'thread' | 'owner' | 'public'} Audience
  * @typedef {{
  *   id: string, author: 'owner' | 'sync' | 'member' | 'visitor' | string, name: string | null, audience: Audience | string,
- *   state: 'shown' | 'pending' | 'dropped' | string, body: string, createdAt: string, senderEmail?: string | null
+ *   state: 'shown' | 'pending' | 'dropped' | string, body: string, createdAt: string, senderEmail?: string | null,
+ *   personNumber?: number
  * }} Comment
  * @typedef {{
  *   number: number, title: string | null, summary: string | null, space: string | null, main: 'text' | 'page' | 'link',
@@ -42,7 +48,20 @@
  * @typedef {{ author: 'owner' | 'member' | 'visitor' | string, name: string | null, body: string, createdAt: string }} PublicComment
  * @typedef {{ thread: PublicThread, page: PublicPage | null, comments: PublicComment[], truncated: boolean }} PublicShown
  * @typedef {'show' | 'drop' | 'hold'} Judgement
- * @typedef {{ id?: string, name: string | null, email?: string, addedAt?: string, owner?: boolean }} Person
+ * @typedef {{ id?: string, number?: number, name: string | null, email?: string, addedAt?: string, owner?: boolean }} Person
+ * @typedef {{ sent: number, told: number, invited: number, removed: number, commented: number, noted: number }} Counts
+ * @typedef {{
+ *   number: number, name: string | null, email: string | null, createdAt: string, lastContact: string,
+ *   invited: boolean, dropped: boolean, counts: Counts, note?: string | null
+ * }} Someone
+ * @typedef {Thread & { roles: string[] }} TheirThread
+ * @typedef {{
+ *   kind: 'note' | 'comment' | 'public-note', thread: { number: number, title: string | null }, body: string, at: string,
+ *   state: string | null, audience: string | null
+ * }} Said
+ * @typedef {{ person: Someone, threads: TheirThread[], words: Said[], truncated: boolean }} PersonShown
+ * @typedef {{ name: string } | { email: string } | { note: string }} PersonChange
+ * @typedef {{ threads: Thread[], people: Someone[] }} Found
  * @typedef {{ people: Person[], invitedCount: number }} People
  * @typedef {{ caller: 'owner' | 'sync' | 'member', email: string | null }} Me
  * @typedef {{ id: number, at: string, actor: 'owner' | 'sync' | 'visitor' | 'import' | string, type: string, data: Record<string, unknown> }} Event
@@ -65,7 +84,16 @@ export class NotShared extends Error {}
 export class Missing extends Error {}
 
 /** The call failed for any other reason: the network, or the server refusing the change. */
-export class Failed extends Error {}
+export class Failed extends Error {
+  /**
+   * @param {string} reason
+   * @param {unknown} [detail] the Worker's whole answer, when it gave one
+   */
+  constructor(reason, detail) {
+    super(reason);
+    this.detail = detail;
+  }
+}
 
 const API = '/threads/api';
 
@@ -95,7 +123,7 @@ async function call(path, init) {
   if (response.status === 403 && reason === 'caller') throw new NotShared();
   if (response.status === 403 && (reason === null || reason === 'token' || reason === 'sign-in')) throw new SignedOut();
   if (response.status === 404) throw new Missing();
-  if (!response.ok) throw new Failed(reason ?? String(response.status));
+  if (!response.ok) throw new Failed(reason ?? String(response.status), answer);
   return answer;
 }
 
@@ -274,12 +302,41 @@ export async function edit(number, field, text) {
 }
 
 /**
- * Up to 20 threads for a search: the one with that number, or those whose title, summary or text hold the words.
+ * Up to 20 threads for a search (the one with that number, or those whose title, summary or text hold the words), and
+ * for him up to 20 people whose name or address holds them; an invited person's answer has no people.
  * @param {string} words
- * @returns {Promise<Thread[]>}
+ * @returns {Promise<Found>}
  */
 export async function search(words) {
-  return /** @type {{ threads: Thread[] }} */ (await call(`/search?${new URLSearchParams({ q: words }).toString()}`, { method: 'GET' })).threads;
+  const found = /** @type {{ threads: Thread[], people?: Someone[] }} */ (await call(`/search?${new URLSearchParams({ q: words }).toString()}`, { method: 'GET' }));
+  return { threads: found.threads, people: found.people ?? [] };
+}
+
+/**
+ * Everyone he deals with, whoever was last in touch first.
+ * @returns {Promise<Someone[]>}
+ */
+export async function listPeople() {
+  return /** @type {{ people: Someone[] }} */ (await call('/people', { method: 'GET' })).people;
+}
+
+/**
+ * One person by their number, with every thread they are in and what they said, newest first.
+ * @param {number} number
+ * @returns {Promise<PersonShown>}
+ */
+export async function showPerson(number) {
+  return /** @type {PersonShown} */ (await call(`/people/${number}`, { method: 'GET' }));
+}
+
+/**
+ * Changes a person: their name, their address while they have none, or his notes on them (empty clears them).
+ * @param {number} number
+ * @param {PersonChange} change
+ * @returns {Promise<Someone>}
+ */
+export async function editPerson(number, change) {
+  return /** @type {{ person: Someone }} */ (await post(`/people/${number}`, change)).person;
 }
 
 /**

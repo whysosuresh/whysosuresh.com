@@ -547,12 +547,12 @@ describe("the sign-in", () => {
     });
   }
 
-  it.each(["/threads/", "/threads/42", "/threads/42-who-owns-what"])("sends the owner on to %s", async (next) => {
+  it.each(["/threads/", "/threads/42", "/threads/42-who-owns-what", "/threads/people", "/threads/people/7", "/threads/people/7-meera"])("sends the owner on to %s", async (next) => {
     const response = await signIn(next);
     expect([response.status, response.headers.get("location")]).toEqual([303, next]);
   });
 
-  it.each([null, "https://elsewhere.example/", "//elsewhere.example/threads/", "/inbox/", "/threads/42/../../x", "/threads/042", "/threads/42-Who"])(
+  it.each([null, "https://elsewhere.example/", "//elsewhere.example/threads/", "/inbox/", "/threads/42/../../x", "/threads/042", "/threads/42-Who", "/threads/people/07", "/threads/peoplex"])(
     "sends %j to the threads, never anywhere else",
     async (next) => {
       const response = await signIn(next);

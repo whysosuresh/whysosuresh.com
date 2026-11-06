@@ -801,3 +801,69 @@ textarea.t-field { resize: vertical; line-height: 1.5; }
   .t-toast-bar { animation: none; }
   .t-switch::after { transition: none; }
 }
+
+/* People, from their design page: Everyone (a row per person, those only in dropped threads folded away) and a
+   person's page (who they are, their threads, what they said, and his notes on them beside, dashed because only he
+   reads them). A name that opens a person is underlined faintly. Below 1000px his notes come before the threads. */
+.t-av-lg { width: 44px; height: 44px; font-size: 17px; }
+.t-av-faint { background: var(--surface); color: var(--muted); border-style: dashed; }
+.t-name-link { color: var(--ink); font-weight: 600; text-decoration: none; border-bottom: 1px solid var(--line); }
+.threads .t-name-link { color: var(--ink); }
+.t-name-link:hover { border-bottom-color: var(--ink); }
+.t-row-person { grid-template-columns: 30px minmax(0, 1fr) auto; }
+.t-row-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.t-row-name b { font-weight: 650; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t-row-name small { color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t-fold { display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 14px; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 12px; font-weight: 600; text-align: left; }
+.t-fold:hover { color: var(--ink); background: var(--hover); }
+.t-fold .t-i { width: 13px; height: 13px; transition: transform 0.15s; }
+.t-fold[aria-expanded="true"] .t-i { transform: rotate(180deg); }
+.t-fold-rows .t-row { opacity: 0.72; }
+
+.t-person { display: grid; grid-template-columns: minmax(0, 1fr) 250px; grid-template-areas: "head head" "main side"; align-items: start; gap: 22px 36px; max-width: 1000px; margin: 0 auto; padding: 20px 28px 56px; }
+.t-person-head { grid-area: head; display: grid; gap: 10px; min-width: 0; }
+.t-person-id { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 14px; align-items: center; }
+.t-person-id h1 { margin: 0; font-size: 22px; line-height: 1.2; letter-spacing: -0.02em; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.t-person-rename .t-field { max-width: 22ch; font-size: 18px; font-weight: 700; }
+.t-person-sub { display: grid; gap: 1px; color: var(--muted); font-size: 12.5px; min-width: 0; }
+.t-person-sub span { overflow-wrap: anywhere; }
+.t-person-main { grid-area: main; min-width: 0; display: grid; gap: 20px; align-content: start; }
+.t-person-side { grid-area: side; min-width: 0; display: grid; gap: 16px; align-content: start; position: sticky; top: 20px; }
+.t-person-side .t-details { position: static; }
+.t-said { display: grid; gap: 8px; }
+.t-said .t-cm { grid-template-columns: minmax(0, 1fr); padding: 0; }
+.t-said .t-cm-head { flex-wrap: nowrap; }
+.t-said .t-cm-head > :not(.t-said-on) { flex: none; }
+.t-said-on { display: inline-flex; flex: 0 1 auto; gap: 5px; align-items: baseline; min-width: 0; overflow: hidden; color: var(--muted); font-size: 12px; text-decoration: none; }
+.threads .t-said-on { color: var(--muted); }
+.threads .t-said-on:hover { color: var(--ink); }
+.t-said-on span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t-mine { display: grid; border: 1px dashed var(--line); border-radius: 10px; }
+.t-mine:focus-within { border-color: var(--muted); }
+.t-mine-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px dashed var(--line); color: var(--muted); font-size: 12px; font-weight: 700; }
+.t-mine-head span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t-mine-head .t-chip { margin-left: auto; }
+.t-mine-body { min-height: 64px; padding: 10px 12px; cursor: text; }
+.t-mine-body .t-prose { font-size: 13px; }
+.t-mine-empty { color: var(--muted); font-size: 12.5px; }
+.t-mine textarea { display: block; width: 100%; min-height: 150px; padding: 10px 12px; border: 0; background: transparent; resize: vertical; font-size: 13px; line-height: 1.5; }
+.t-mine textarea:focus { outline: none; }
+.t-mine-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px dashed var(--line); }
+.t-mine-bar .t-note { margin-right: auto; }
+.t-addr { display: grid; gap: 6px; }
+.t-addr .t-lbl { display: grid; gap: 1px; }
+.t-addr .t-lbl small { margin-left: 0; }
+.t-addr-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.threads .t-addr .t-err a { color: inherit; }
+
+@media (max-width: 999px) {
+  .t-person { grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "side" "main"; gap: 18px; padding: 18px 22px 48px; }
+  .t-person-side { position: static; }
+}
+@media (max-width: 719px) {
+  .t-person { padding: 14px var(--gutter-r) 32px var(--gutter-l); }
+  .t-row-person { grid-template-columns: 30px minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .t-fold .t-i { transition: none; }
+}

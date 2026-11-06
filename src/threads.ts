@@ -136,9 +136,10 @@ const NUMBER_SHAPE = /^[1-9]\d{0,8}$/;
 const MAX_SEARCH = 100;
 /**
  * Where the sign-in may send the owner on: the threads page's own addresses, as src/pages.ts serves them (Today
- * and the list at /threads/, a thread at /threads/<n> with its title after it), and nowhere else.
+ * and the list at /threads/, a thread at /threads/<n> with its title after it, everyone at /threads/people and a
+ * person at /threads/people/<n> with their name after it), and nowhere else.
  */
-const NEXT_SHAPE = /^\/threads\/(?:[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?$/;
+const NEXT_SHAPE = /^\/threads\/(?:[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?|people(?:\/[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?)?$/;
 /** The largest page: claude.ai holds a page to "16MB or smaller", and 16 MiB is at least that. */
 export const MAX_PAGE_BYTES = 16 * 1024 * 1024;
 /** The only place a link, or a page's source, may point: an address on claude.ai. */

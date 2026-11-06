@@ -35,12 +35,20 @@
 // written for anyone by default (Public), or for the people here, or for him alone. A visitor's words are drawn as
 // typed, never as Markdown, wherever they show.
 //
+// Everyone he deals with is a person (people.js holds their words and addresses): People, under All threads, lists
+// everyone at /threads/people, whoever was last in touch first, those only ever in threads he dropped folded away; a
+// person's page (/threads/people/7-meera) shows every thread they are in and how, what they said, newest first,
+// his own notes on them (only he reads them; Markdown, saved on ⌘↵ or on leaving the box), their name to change (W)
+// and, while they have none, their address to add once. Every name on a thread opens that person for him (who a
+// thread is from, a comment's author, a thread's people), and ⌘K finds people too. Invited people get none of this:
+// at a people address they get their own home, as the Worker refuses them every people call.
+//
 // Signed out at a thread's address, the page shows what a missing address shows ("Nothing here"), so the address
 // alone never says a thread exists; a device that has signed in before also gets a small "Sign in". The link in an
 // invitation carries `?invite`: signed out, it goes straight to the sign-in and back; signed in, the page drops it
 // from the address, so a copied link is the clean one. `?invite` on any number does the same, so it says nothing
-// about a thread. At /threads/
-// itself, which names no thread, it always says "Threads" with a Sign in button. Either sign-in goes through the
+// about a thread. At /threads/ itself, and at a people address, which says nothing about whether a person exists,
+// it always says "Threads" with a Sign in button. Either sign-in goes through the
 // threads' sign-in call and comes back to the same address. When the sign-in ends mid-use, a line says so and nothing typed
 // is lost. Every element is built with DOM calls and every text is set as text, so nothing anyone wrote becomes
 // markup; Markdown is parsed into blocks first (markdown.js). The CSP allows no inline script or style attribute.
@@ -48,7 +56,8 @@
 import { SPACES } from '../spaces.js';
 import { MEMBER_COMMANDS, MEMBER_SHEET, SHEET, commandFor } from './keys.js';
 import { parse, summaryLines } from './markdown.js';
-import { addressOf, invitation, invitationProblem, levelOf, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
+import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, takenLine } from './people.js';
+import { addressOf, invitation, invitationProblem, isAddress, levelOf, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
 import { prepare as prepareBotCheck, sendTo } from '../talk-send.js';
 import {
   Failed,
@@ -57,10 +66,12 @@ import {
   SignedOut,
   comment,
   edit,
+  editPerson,
   invite,
   judge,
   listAll,
   listMine,
+  listPeople,
   me,
   move,
   pageAddress,
@@ -68,6 +79,7 @@ import {
   publicPageAddress,
   search,
   show,
+  showPerson,
   showPublic,
   signInAddress,
   start,
@@ -88,16 +100,21 @@ import {
  * @typedef {import('./threads-store.js').Audience} Audience
  * @typedef {import('./threads-store.js').PublicShown} PublicShown
  * @typedef {import('./threads-store.js').Judgement} Judgement
+ * @typedef {import('./threads-store.js').Someone} Someone
+ * @typedef {import('./threads-store.js').PersonShown} PersonShown
+ * @typedef {import('./threads-store.js').PersonChange} PersonChange
  * @typedef {import('./markdown.js').Inline} Inline
  * @typedef {import('./keys.js').Command} Command
- * @typedef {{ view: 'today' } | { view: 'list', tab: Tab, space: string | null } | { view: 'thread', number: number }} Route
+ * @typedef {{ view: 'today' } | { view: 'list', tab: Tab, space: string | null } | { view: 'thread', number: number } | { view: 'people' }
+ *   | { view: 'person', number: number }} Route
  * @typedef {{ to: string, subject: string, body: string }} Draft
  * @typedef {{ title: string, summary: string, body: string }} Editing
  * @typedef {{ title: string, space: string, status: 'received' | 'act' | 'discuss', body: string }} NewDraft
  * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share'} Overlay
  * @typedef {{ number: number, people: Person[], count: number, email: string, name: string, problem: string,
  *   invited: { name: string, email: string } | null, busy: boolean }} Sharing
- * @typedef {{ label: string, sub: string, side: string, number: number | null, run: () => void }} FindItem
+ * @typedef {{ label: string, sub: string, side: string, number: number | null, person: number | null, run: () => void }} FindItem
+ * @typedef {{ text: string } | { email: string, holder: { number: number, name: string | null, email: string | null } }} AddressProblem
  * @typedef {{ name: string, email: string, body: string, sent: boolean, busy: boolean, problem: string }} NoteForm
  */
 
@@ -438,10 +455,18 @@ function isThreadAddress(address) {
   return THREAD_PATH.test(address);
 }
 
+/** Everyone's address or a person's, which a signed-out page treats as /threads/ itself. @param {string} address */
+function isPeopleAddress(address) {
+  return PEOPLE_PATH.test(address) || PERSON_PATH.test(address);
+}
+
 /** @param {Location} at @returns {Route} */
 function routeOf(at) {
   const thread = THREAD_PATH.exec(at.pathname);
   if (thread) return { view: 'thread', number: Number(thread[1]) };
+  if (PEOPLE_PATH.test(at.pathname)) return { view: 'people' };
+  const person = PERSON_PATH.exec(at.pathname);
+  if (person) return { view: 'person', number: Number(person[1]) };
   const query = new URLSearchParams(at.search);
   const tab = query.get('tab') ?? '';
   const space = query.get('space') ?? '';
@@ -449,9 +474,14 @@ function routeOf(at) {
   return { view: 'today' };
 }
 
-/** @param {Route} route @param {Map<number, Thread>} threads */
-function pathOf(route, threads) {
+/** @param {Route} route @param {Map<number, Thread>} threads @param {readonly Someone[]} [people] */
+function pathOf(route, threads, people = []) {
   if (route.view === 'today') return '/threads/';
+  if (route.view === 'people') return '/threads/people';
+  if (route.view === 'person') {
+    const someone = people.find((one) => one.number === route.number);
+    return someone ? personPath(someone) : `/threads/people/${route.number}`;
+  }
   if (route.view === 'list') {
     const query = new URLSearchParams({ tab: route.tab });
     if (route.space !== null) query.set('space', route.space);
@@ -648,8 +678,28 @@ class Threads {
 
     /** @type {Route} */
     this.route = routeOf(location);
-    /** Where a thread was opened from, so Esc and the pager go back there. @type {'today' | 'list'} */
+    /** Where a thread was opened from, so Esc and the pager go back there. @type {'today' | 'list' | 'person'} */
     this.from = 'today';
+    /** The person whose page a thread was opened from. @type {number | null} */
+    this.fromPerson = null;
+    /** Everyone he deals with, as the people call answered. @type {Someone[]} */
+    this.people = [];
+    /** The open person with their threads and words. @type {PersonShown | null} */
+    this.person = null;
+    /** The person's number the page couldn't find. @type {number | null} */
+    this.personMissing = null;
+    /** Whether Everyone shows the people only in dropped threads. */
+    this.peopleFold = false;
+    /** What of the open person is being changed: his notes on them, or their name. @type {'note' | 'name' | null} */
+    this.personEdit = null;
+    /** His notes as typed so far, kept across a redraw. @type {string | null} */
+    this.personDraft = null;
+    /** The address being added to a person, as typed. */
+    this.personAddress = '';
+    /** Why that address wasn't added. @type {AddressProblem | null} */
+    this.personProblem = null;
+    /** Bumped on every person load, so an answer for a person no longer shown is dropped. */
+    this.personLoading = 0;
     /** The list's tab and space, kept while a thread is open. @type {Tab} */
     this.tab = 'look';
     /** @type {string | null} */
@@ -720,6 +770,14 @@ class Threads {
     document.addEventListener('input', (event) => this.onInput(event));
     document.addEventListener('change', (event) => this.onChange(event));
     document.addEventListener('submit', (event) => this.onSubmit(event));
+    // His notes on a person, and their name, are saved when he leaves the box for anywhere outside its own form.
+    document.addEventListener('focusout', (event) => {
+      const box = event.target;
+      const next = event.relatedTarget;
+      if (!(box instanceof HTMLElement) || (next instanceof Element && box.closest('form') !== null && next.closest('form') === box.closest('form'))) return;
+      if (box.id === 'person-note') void this.savePersonNote();
+      if (box.id === 'person-name') void this.savePersonName();
+    });
     window.addEventListener('popstate', () => this.go(routeOf(location), false));
     window.addEventListener('message', (event) => this.onPageHeight(event));
     // A dialog's close arrives as a task, after another may already have opened in its place; only a dialog still
@@ -754,8 +812,9 @@ class Threads {
       const who = await me();
       this.caller = who.caller === 'member' ? 'member' : 'owner';
       this.me = who.email ?? '';
-      if (this.caller === 'member' && route.view === 'list') this.route = { view: 'today' };
-      await Promise.all([this.loadAll(), thread]);
+      if (this.caller === 'member' && (route.view === 'list' || route.view === 'people' || route.view === 'person')) this.route = { view: 'today' };
+      const person = this.caller === 'owner' && route.view === 'person' ? this.loadPerson(route.number) : Promise.resolve();
+      await Promise.all([this.loadAll(), thread, person]);
     } catch (error) {
       if (error instanceof SignedOut && inviting) location.replace(signInAddress(location.pathname));
       else if (error instanceof SignedOut) {
@@ -765,7 +824,7 @@ class Threads {
       } else this.fail(error, "The threads didn't load.");
       return;
     }
-    if (inviting || (this.caller === 'member' && route.view === 'list')) history.replaceState(null, '', this.route.view === 'thread' ? location.pathname : '/threads/');
+    if (inviting || (this.caller === 'member' && (route.view === 'list' || route.view === 'people' || route.view === 'person'))) history.replaceState(null, '', this.route.view === 'thread' ? location.pathname : '/threads/');
     this.applyCaller();
     rememberSignedIn();
     if (this.member && this.missing !== null && (await this.tryPublic(route))) return;
@@ -793,10 +852,53 @@ class Threads {
       const mine = await listMine();
       this.threads = new Map(mine.map((thread) => [thread.number, thread]));
     } else {
-      const pages = await Promise.all(TABS.map((tab) => listAll(tab)));
+      const [pages, people] = await Promise.all([Promise.all(TABS.map((tab) => listAll(tab))), listPeople()]);
       this.threads = new Map(pages.flatMap((page) => page.threads).map((thread) => [thread.number, thread]));
+      this.people = people;
     }
     this.loaded = true;
+  }
+
+  /** Everyone again, as the people call answers now, drawn when People is still shown. */
+  async loadPeople() {
+    try {
+      this.people = await listPeople();
+    } catch (error) {
+      this.fail(error, "People didn't load.");
+      return;
+    }
+    if (this.route.view === 'people') {
+      this.keepScroll = true;
+      this.render();
+    }
+  }
+
+  /** @param {number} number */
+  async loadPerson(number) {
+    const ticket = ++this.personLoading;
+    try {
+      const shown = await showPerson(number);
+      if (ticket !== this.personLoading) return;
+      this.person = shown;
+      this.personMissing = null;
+    } catch (error) {
+      if (ticket !== this.personLoading) return;
+      if (error instanceof Missing) {
+        this.person = null;
+        this.personMissing = number;
+        return;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Keeps a person as the change call answered them, on their page and in Everyone.
+   * @param {Someone} saved
+   */
+  rememberPerson(saved) {
+    if (this.person?.person.number === saved.number) this.person = { ...this.person, person: saved };
+    this.people = this.people.map((one) => (one.number === saved.number ? { ...one, ...saved } : one));
   }
 
   get member() {
@@ -825,7 +927,7 @@ class Threads {
    */
   applyCaller() {
     if (!this.member) return;
-    for (const owners of document.querySelectorAll('.t-side-new, .t-tabbar [data-go="list"], .t-tabbar [data-act="new"]')) {
+    for (const owners of document.querySelectorAll('.t-side-new, .t-tabbar [data-go="list"], .t-tabbar [data-go="people"], .t-tabbar [data-act="new"]')) {
       if (owners instanceof HTMLElement) owners.hidden = true;
     }
     const today = this.tabbar.querySelector('[data-go="today"]');
@@ -864,8 +966,9 @@ class Threads {
     this.app.hidden = true;
     this.lost.hidden = false;
     const here = location.pathname;
-    this.signInLink.href = signInAddress(here === '/threads/' || isThreadAddress(here) ? here : '/threads/');
-    if (here === '/threads/') {
+    const index = here === '/threads/' || isPeopleAddress(here);
+    this.signInLink.href = signInAddress(index || isThreadAddress(here) ? here : '/threads/');
+    if (index) {
       this.lostTitle.textContent = 'Threads';
       this.lostText.textContent = "Suresh's private threads. Sign in to open them.";
       this.signInLink.className = 't-btn t-btn-primary';
@@ -900,7 +1003,7 @@ class Threads {
     }
     if (error instanceof SignedOut) {
       const here = location.pathname;
-      const link = el('a', { href: signInAddress(here === '/threads/' || isThreadAddress(here) ? here : '/threads/') }, ['Sign in again']);
+      const link = el('a', { href: signInAddress(here === '/threads/' || isThreadAddress(here) || isPeopleAddress(here) ? here : '/threads/') }, ['Sign in again']);
       this.banner.replaceChildren(icon('lock'), 'Your sign-in ended. Nothing you did was lost. ', link);
     } else {
       this.banner.replaceChildren(`${what} Check your connection and try again.`);
@@ -919,7 +1022,7 @@ class Threads {
    * @param {boolean} [push]
    */
   async go(route, push = true) {
-    if (this.member && route.view === 'list') route = { view: 'today' };
+    if (this.member && (route.view === 'list' || route.view === 'people' || route.view === 'person')) route = { view: 'today' };
     this.closeOverlay();
     this.pageFull = false;
     this.editing = null;
@@ -932,7 +1035,31 @@ class Threads {
     }
     if (route.view === 'today') this.from = 'today';
     this.route = route;
-    if (push) history.pushState(null, '', pathOf(route, this.threads));
+    this.personEdit = null;
+    this.personDraft = null;
+    this.personAddress = '';
+    this.personProblem = null;
+    if (push) history.pushState(null, '', pathOf(route, this.threads, this.people));
+    if (route.view === 'person') {
+      this.shown = null;
+      this.missing = null;
+      if (this.person?.person.number !== route.number) this.person = null;
+      this.personMissing = null;
+      this.render();
+      this.main.scrollTop = 0;
+      try {
+        await this.loadPerson(route.number);
+      } catch (error) {
+        this.fail(error, "The person didn't load.");
+        return;
+      }
+      if (this.route.view === 'person' && this.route.number === route.number) {
+        this.keepScroll = true;
+        this.render();
+      }
+      return;
+    }
+    if (route.view === 'people') void this.loadPeople();
     if (route.view !== 'thread') {
       this.shown = null;
       this.missing = null;
@@ -964,7 +1091,9 @@ class Threads {
   }
 
   back() {
-    void this.go(this.from === 'today' ? { view: 'today' } : { view: 'list', tab: this.tab, space: this.space });
+    if (this.route.view === 'person') void this.go({ view: 'people' });
+    else if (this.from === 'person' && this.fromPerson !== null) void this.go({ view: 'person', number: this.fromPerson });
+    else void this.go(this.from === 'today' ? { view: 'today' } : { view: 'list', tab: this.tab, space: this.space });
   }
 
   /** Threads in a tab, in the chosen space, newest number first. @param {Tab} tab */
@@ -1005,6 +1134,7 @@ class Threads {
   /** The threads J and K walk: an invited person's own, Today's, or the list's. */
   walk() {
     if (this.member) return this.mine().map((thread) => thread.number);
+    if (this.from === 'person' && this.person) return this.person.threads.map((thread) => thread.number);
     if (this.from !== 'today') return this.inTab(this.tab).map((thread) => thread.number);
     const seen = new Set();
     return [...this.noting(), ...this.waiting(), ...this.fresh(), ...this.sat()]
@@ -1015,11 +1145,13 @@ class Threads {
   /** The thread a key acts on: the open one, or the selected row. */
   target() {
     if (this.route.view === 'thread') return this.shown?.thread ?? null;
+    if (this.route.view === 'people' || this.route.view === 'person') return null;
     return this.sel === null ? null : (this.threads.get(this.sel) ?? null);
   }
 
   /** @param {number} by */
   step(by) {
+    if (this.route.view === 'people' || this.route.view === 'person') return;
     const list = this.walk();
     if (list.length === 0) return;
     if (this.route.view === 'thread') {
@@ -1049,6 +1181,14 @@ class Threads {
       const thread = this.shown?.thread;
       document.title = thread ? `#${thread.number} ${titleOf(thread)} · Threads` : 'Threads';
       if (thread && location.pathname !== threadPath(thread)) history.replaceState(null, '', threadPath(thread));
+    } else if (this.route.view === 'people') {
+      this.main.replaceChildren(this.peopleView());
+      document.title = 'People · Threads';
+    } else if (this.route.view === 'person') {
+      this.main.replaceChildren(this.personView());
+      const someone = this.person?.person;
+      document.title = someone ? `${nameOf(someone)} · People · Threads` : 'People · Threads';
+      if (someone && location.pathname !== personPath(someone)) history.replaceState(null, '', personPath(someone));
     } else if (this.route.view === 'list') {
       this.ensureSel();
       this.main.replaceChildren(this.listView());
@@ -1082,6 +1222,12 @@ class Threads {
     const today = this.noting().length + this.waiting().length + this.fresh().length + this.sat().length;
     const todayItem = el('a', { class: 't-nav-item', href: '/threads/', 'data-go': 'today' }, [icon('sun'), 'Today', el('span', { class: 't-nav-count' }, [String(today)])]);
     const allItem = el('a', { class: 't-nav-item', href: '/threads/?tab=look', 'data-go': 'list' }, [icon('list'), 'All threads']);
+    const peopleItem = el('a', { class: 't-nav-item', href: '/threads/people', 'data-go': 'people' }, [
+      icon('person'),
+      'People',
+      el('span', { class: 't-nav-count' }, [String(folded(this.people).live.length)]),
+    ]);
+    if (view === 'people' || view === 'person') peopleItem.setAttribute('aria-current', 'page');
     if (view === 'today') todayItem.setAttribute('aria-current', 'page');
     if (view === 'list' && this.space === null) allItem.setAttribute('aria-current', 'page');
     const spaces = SPACES.map((space) => {
@@ -1093,12 +1239,12 @@ class Threads {
       if (view === 'list' && this.space === space.slug) item.setAttribute('aria-current', 'page');
       return item;
     });
-    this.nav.replaceChildren(todayItem, allItem, el('div', { class: 't-nav-label' }, ['Spaces']), ...spaces);
+    this.nav.replaceChildren(todayItem, allItem, peopleItem, el('div', { class: 't-nav-label' }, ['Spaces']), ...spaces);
   }
 
   renderTabbar() {
     for (const button of this.tabbar.querySelectorAll('[data-go]')) {
-      const current = button instanceof HTMLElement && button.dataset.go === this.route.view;
+      const current = button instanceof HTMLElement && button.dataset.go === (this.route.view === 'person' ? 'people' : this.route.view);
       if (current) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     }
@@ -1108,13 +1254,14 @@ class Threads {
    * One thread as a row: its number, title, the line under it, its space, where it stands and when it last moved.
    * @param {Thread} thread
    * @param {string} sub
+   * @param {boolean} [selectable] whether the row may show as selected; a person's page selects none
    */
-  row(thread, sub) {
+  row(thread, sub, selectable = true) {
     const meta = el('span', { class: 't-row-meta' }, [el('span', { class: 't-chip' }, [spaceLabel(thread.space)])]);
     if (thread.status !== 'received') meta.append(el('span', {}, [STATUS_NAMES[thread.status]]));
     if ((thread.shared ?? 0) > 0) meta.append(el('span', { class: 't-people-mark', title: `Shared with ${thread.shared}` }, [icon('people'), String(thread.shared)]));
     meta.append(el('span', {}, [ago(thread.activityAt)]));
-    const row = el('a', { class: 't-row', href: threadPath(thread), 'data-thread': String(thread.number), 'aria-selected': String(this.sel === thread.number) }, [
+    const row = el('a', { class: 't-row', href: threadPath(thread), 'data-thread': String(thread.number), 'aria-selected': String(selectable && this.sel === thread.number) }, [
       el('span', { class: 't-num' }, [`#${thread.number}`]),
       el('span', { class: 't-row-main' }, [el('span', { class: 't-row-title' }, [...rowMark(thread), titleOf(thread)]), el('span', { class: 't-row-sub' }, [sub])]),
       meta,
@@ -1249,15 +1396,14 @@ class Threads {
       ...(thread.publicAt ? [publicChip()] : []),
       pager,
     ]);
+    const sender = thread.senderName?.trim() || 'Someone';
     const by = this.member
-      ? 'Suresh shared this with you'
+      ? ['Suresh shared this with you']
       : visitor
-      ? `${thread.senderName?.trim() || 'Someone'} sent this from the site`
-      : thread.source === 'told'
-        ? `${thread.senderName?.trim() || 'Someone'} told you this`
-        : this.shown.events[0]?.actor === 'owner'
-          ? 'You started this'
-          : 'You said this; the recorder sync wrote it down';
+        ? [this.nameNode(thread.senderNumber, sender), ' sent this from the site']
+        : thread.source === 'told'
+          ? [this.nameNode(thread.senderNumber, sender), ' told you this']
+          : [this.shown.events[0]?.actor === 'owner' ? 'You started this' : 'You said this; the recorder sync wrote it down'];
     const summary = thread.summary
       ? el('section', { class: 't-summary', 'aria-label': 'Summary' }, [
           el('div', { class: 't-summary-head' }, [el('span', {}, ['Summary']), el('span', {}, ['kept current by the recorder sync'])]),
@@ -1270,7 +1416,7 @@ class Threads {
     const doc = el('article', { class: 't-doc' }, [
       crumbs,
       el('h1', { class: 't-title' }, [el('span', { class: 't-tn' }, [`#${thread.number}`]), ' ', titleOf(thread)]),
-      el('div', { class: 't-byline' }, [`${by}, ${when(thread.createdAt)} · updated ${ago(thread.activityAt)} ago`]),
+      el('div', { class: 't-byline' }, [...by, `, ${when(thread.createdAt)} · updated ${ago(thread.activityAt)} ago`]),
       ...(this.member ? [] : [this.moves(thread)]),
       summary,
       ...(this.reply ? [this.replyPanel(this.reply)] : []),
@@ -1297,7 +1443,7 @@ class Threads {
     return [
       el('div', { class: 't-byline' }, [
         avatar('visitor', thread.senderName ?? ''),
-        el('span', {}, [el('b', {}, [name]), ` wrote, ${when(thread.createdAt)}${thread.senderEmail ? ` · ${thread.senderEmail}` : ''}`]),
+        el('span', {}, [el('b', {}, [this.nameNode(thread.senderNumber, name)]), ` wrote, ${when(thread.createdAt)}${thread.senderEmail ? ` · ${thread.senderEmail}` : ''}`]),
       ]),
       plain(thread.body),
     ];
@@ -1563,7 +1709,7 @@ class Threads {
         avatar(who, name),
         el('div', { class: 't-cm-box' }, [
           el('div', { class: 't-cm-head' }, [
-            el('b', {}, [name]),
+            el('b', {}, [who === 'member' || who === 'visitor' ? this.nameNode(said.personNumber, name) : name]),
             ...(who === 'sync' ? [el('span', { class: 't-chip' }, ['Recorder sync'])] : []),
             ...(onlyMe ? [el('span', { class: 't-chip' }, [icon('lock'), 'Only me'])] : []),
             ...(said.audience === 'public' ? [publicChip()] : []),
@@ -1598,7 +1744,7 @@ class Threads {
         el('div', { class: 't-cm-head' }, [
           el('b', {}, ['Waits for your OK']),
           el('span', {}, ['·']),
-          el('b', {}, [name]),
+          el('b', {}, [this.nameNode(said.personNumber, name)]),
           ...(said.senderEmail ? [el('span', { class: 't-cm-from' }, [`${said.senderEmail} · only you see this`])] : []),
           el('time', { datetime: said.createdAt }, [when(said.createdAt)]),
         ]),
@@ -1689,6 +1835,309 @@ class Threads {
     ]);
   }
 
+  /**
+   * A person's name as a link to their page, for the owner; plain words for an invited person, and for a name that
+   * names no person (a visitor who gave no address).
+   * @param {number | null | undefined} number
+   * @param {string} name
+   * @returns {Node | string}
+   */
+  nameNode(number, name) {
+    if (this.member || typeof number !== 'number') return name;
+    const known = this.people.find((one) => one.number === number);
+    return el('a', { class: 't-name-link', href: known ? personPath(known) : `/threads/people/${number}`, 'data-person': String(number) }, [name]);
+  }
+
+  /** Who a thread is from, as the details column's Started row says it, the name opening their page. @param {Thread} thread */
+  fromNodes(thread) {
+    const name = thread.senderName?.trim();
+    if (thread.source === 'talk') return [this.nameNode(thread.senderNumber, name || 'Someone'), ' · from the site'];
+    if (thread.source === 'told') return ['told to you by ', this.nameNode(thread.senderNumber, name || 'someone')];
+    return [fromWords(thread)];
+  }
+
+  /** A person's round mark: their initials, dashed while they have no address. @param {Someone} someone @param {boolean} large */
+  personMark(someone, large) {
+    const letters = initials(nameOf(someone));
+    if (large) return someone.email === null ? el('span', { class: 't-av t-av-lg t-av-faint', 'aria-hidden': 'true' }, [letters]) : el('span', { class: 't-av t-av-lg', 'aria-hidden': 'true' }, [letters]);
+    return someone.email === null ? el('span', { class: 't-av t-av-faint', 'aria-hidden': 'true' }, [letters]) : el('span', { class: 't-av', 'aria-hidden': 'true' }, [letters]);
+  }
+
+  /** Everyone, whoever was last in touch first; those only in threads he dropped fold away. */
+  peopleView() {
+    const { live, dropped } = folded(this.people);
+    /** @param {Someone} someone */
+    const rowOf = (someone) =>
+      el('a', { class: 't-row t-row-person', href: personPath(someone), 'data-person': String(someone.number) }, [
+        this.personMark(someone, false),
+        el('span', { class: 't-row-main' }, [
+          el('span', { class: 't-row-name' }, [el('b', {}, [nameOf(someone)]), el('small', {}, [someone.name?.trim() ? (someone.email ?? 'no address') : ''])]),
+          el('span', { class: 't-row-sub' }, [howLine(someone.counts)]),
+        ]),
+        el('span', { class: 't-row-meta' }, [
+          ...(someone.invited ? [el('span', { class: 't-people-mark', title: 'Invited to a thread' }, [icon('people')])] : []),
+          el('span', {}, [ago(someone.lastContact)]),
+        ]),
+      ]);
+    const fold = el('button', { type: 'button', class: 't-fold', 'data-act': 'people-fold', 'aria-expanded': String(this.peopleFold) }, [
+      icon('down'),
+      `Only in dropped threads (${dropped.length})`,
+    ]);
+    return el('div', { class: 't-wrap' }, [
+      el('div', { class: 't-head' }, [el('div', {}, [el('h1', {}, ['People']), el('p', {}, ['Everyone you deal with, whoever was last in touch first.'])])]),
+      el('section', { class: 't-section' }, [
+        el('div', { class: 't-section-head' }, [el('h2', {}, ['Everyone']), el('span', { class: 't-n' }, [String(live.length)])]),
+        el('div', { class: 't-list' }, [
+          ...(live.length > 0 ? live.map(rowOf) : [el('div', { class: 't-empty' }, ['Nobody yet. People arrive with the threads: a note from the site, an invite, or something someone told you.'])]),
+          ...(dropped.length > 0 ? [fold, ...(this.peopleFold ? [el('div', { class: 't-fold-rows' }, dropped.map(rowOf))] : [])] : []),
+        ]),
+      ]),
+      el('p', { class: 't-note' }, ["People come from the threads: you invite them, they write to you, or the recorder hears that they told you something. There's no new person button."]),
+    ]);
+  }
+
+  /** A person's page: who they are, every thread they are in and how, what they said, and his notes on them. */
+  personView() {
+    if (this.person === null) {
+      return el('div', { class: 't-wrap' }, [
+        el('div', { class: 't-missing' }, [
+          el('h1', {}, [this.personMissing !== null ? 'Nothing here' : 'Loading…']),
+          el('p', {}, [this.personMissing !== null ? `There's no person #${this.personMissing}.` : '']),
+          el('a', { href: '/threads/people', 'data-go': 'people' }, ['Back to People']),
+        ]),
+      ]);
+    }
+    const { person, threads, words, truncated } = this.person;
+    const name = nameOf(person);
+    const first = name.split(/\s+/)[0] ?? name;
+    const crumbs = el('div', { class: 't-crumbs' }, [
+      el('a', { href: '/threads/people', 'data-go': 'people' }, ['People']),
+      el('span', {}, ['/']),
+      el('span', {}, [`#${person.number}`]),
+      ...(person.invited ? [el('span', { class: 't-chip' }, [icon('people'), 'Invited'])] : []),
+      el('span', { class: 't-pager' }, [el('button', { type: 'button', 'data-act': 'back', 'aria-label': 'Back to People (Esc)' }, [icon('x')])]),
+    ]);
+    const title =
+      this.personEdit === 'name'
+        ? el('form', { class: 't-person-rename', 'data-submit': 'person-name' }, [
+            el('input', { class: 't-field', id: 'person-name', value: person.name ?? '', maxlength: '80', autocomplete: 'off', 'aria-label': 'Name' }),
+          ])
+        : el('h1', {}, [name, el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'person-rename', 'aria-label': 'Rename (W)' }, [icon('pen'), kbd('W')])]);
+    const head = el('header', { class: 't-person-head' }, [
+      crumbs,
+      el('div', { class: 't-person-id' }, [
+        this.personMark(person, true),
+        el('div', {}, [title, el('div', { class: 't-person-sub' }, [el('span', {}, [addressLine(person)]), el('span', {}, [howLine(person.counts)])])]),
+      ]),
+    ]);
+    const rows = threads.map((thread) => this.row(thread, roleLine(thread.roles), false));
+    const said = words.map((word) => {
+      const number = word.thread.number;
+      const known = this.threads.get(number);
+      const pending = word.state === 'pending';
+      const chip =
+        word.kind === 'note'
+          ? el('span', { class: 't-chip' }, ['From the site'])
+          : word.state === 'dropped'
+            ? el('span', { class: 't-chip' }, ['Dropped'])
+            : word.audience === 'public'
+              ? publicChip()
+              : el('span', { class: 't-chip' }, [icon('people'), 'People here']);
+      const on = el('a', { class: 't-said-on', href: `/threads/${number}`, 'data-thread': String(number) }, [
+        'on ',
+        el('b', {}, [`#${number}`]),
+        el('span', {}, [known ? titleOf(known) : (word.thread.title ?? '')]),
+      ]);
+      return el('div', pending ? { class: 't-cm t-cm-pending' } : { class: 't-cm' }, [
+        el('div', { class: 't-cm-box' }, [
+          el('div', { class: 't-cm-head' }, [...(pending ? [el('b', {}, ['Waits for your OK']), el('span', {}, ['·'])] : []), on, chip, el('time', { datetime: word.at }, [when(word.at)])]),
+          el('div', { class: 't-cm-body' }, [word.kind === 'comment' ? prose(word.body) : plain(word.body)]),
+          ...(pending ? [el('div', { class: 't-cm-actions' }, [el('a', { class: 't-btn', href: `/threads/${number}`, 'data-thread': String(number) }, [`Open #${number} to OK it`])])] : []),
+        ]),
+      ]);
+    });
+    /** @param {string} label @param {(Node | string)[]} value */
+    const row = (label, value) => el('div', { class: 't-drow' }, [el('span', { class: 't-dlabel' }, [label]), ...value]);
+    return el('div', { class: 't-person' }, [
+      head,
+      el('div', { class: 't-person-main' }, [
+        el('section', { class: 't-section' }, [
+          el('div', { class: 't-section-head' }, [el('h2', {}, ['Threads']), el('span', { class: 't-n' }, [String(threads.length)]), el('span', { class: 't-hint' }, ["how they're in each"])]),
+          el('div', { class: 't-list' }, rows.length > 0 ? rows : [el('div', { class: 't-empty' }, ['No threads yet.'])]),
+        ]),
+        el('section', { class: 't-section' }, [
+          el('div', { class: 't-section-head' }, [el('h2', {}, ['What they said']), el('span', { class: 't-n' }, [String(words.length)]), el('span', { class: 't-hint' }, ['newest first'])]),
+          el('div', { class: 't-said' }, said.length > 0 ? said : [el('p', { class: 't-note' }, [`Nothing in ${first}'s own words yet. What they told you is in the threads above, in yours.`])]),
+        ]),
+        ...(truncated ? [el('p', { class: 't-note' }, ['Only the newest 200 threads and words are shown.'])] : []),
+      ]),
+      el('div', { class: 't-person-side' }, [
+        this.notesBox(person, first),
+        ...(person.email === null ? [this.addressForm()] : []),
+        el('aside', { class: 't-details', 'aria-label': `About ${name}` }, [
+          row('Their page', [el('span', { class: 't-linkline' }, [`whysosuresh.com${personPath(person)}`])]),
+          row('First in touch', [el('span', { class: 't-dval t-dval-soft' }, [when(person.createdAt)])]),
+          row('Last in touch', [el('span', { class: 't-dval t-dval-soft' }, [`${ago(person.lastContact)} ago`])]),
+        ]),
+      ]),
+    ]);
+  }
+
+  /**
+   * His notes on a person, which only he reads: drawn as Markdown, and a box to write in once he clicks them.
+   * @param {Someone} person
+   * @param {string} first
+   */
+  notesBox(person, first) {
+    const head = el('div', { class: 't-mine-head' }, [el('span', {}, [`Your notes on ${first}`]), el('span', { class: 't-chip' }, [icon('lock'), 'Only you'])]);
+    if (this.personEdit === 'note') {
+      return el('form', { class: 't-mine', 'data-submit': 'person-note', 'aria-label': `Your notes on ${first}` }, [
+        head,
+        el('textarea', { id: 'person-note', 'aria-label': `Your notes on ${first}`, placeholder: 'How you know them, what they care about, what you owe them. Markdown works.' }, [this.personDraft ?? person.note ?? '']),
+        el('div', { class: 't-mine-bar' }, [el('span', { class: 't-note' }, ['Saved when you leave the box']), el('button', { type: 'submit', class: 't-btn t-btn-primary' }, ['Save ', kbd('⌘↵')])]),
+      ]);
+    }
+    return el('section', { class: 't-mine', 'aria-label': `Your notes on ${first}` }, [
+      head,
+      el('div', { class: 't-mine-body', role: 'button', tabindex: '0', 'data-act': 'person-note', 'aria-label': `Edit your notes on ${first}` }, [
+        person.note ? prose(person.note) : el('span', { class: 't-mine-empty' }, [`Nothing yet. Write how you know ${first}, what they care about, what you owe them.`]),
+      ]),
+    ]);
+  }
+
+  /** Adding an address to a person who has none: once, never one another person holds. */
+  addressForm() {
+    const problem = this.personProblem;
+    /** @type {(Node | string)[]} */
+    const said =
+      problem === null
+        ? []
+        : 'text' in problem
+          ? [problem.text]
+          : [takenLine(problem.email, problem.holder), ' ', this.nameNode(problem.holder.number, `Open ${nameOf(problem.holder)}`)];
+    return el('form', { class: 't-addr', 'data-submit': 'person-email' }, [
+      el('label', { class: 't-lbl', for: 'person-email' }, ['Add their email', el('small', {}, ['Once. An invite to this address then lands on this person.'])]),
+      el('div', { class: 't-addr-row' }, [
+        el('input', { class: 't-field', id: 'person-email', type: 'email', autocomplete: 'off', placeholder: 'name@example.com', value: this.personAddress }),
+        el('button', { type: 'submit', class: 't-btn' }, ['Add']),
+      ]),
+      ...(said.length > 0 ? [el('p', { class: 't-err', role: 'alert' }, said)] : []),
+    ]);
+  }
+
+  /** Starts changing a person's notes or name, the box focused with its text. @param {'note' | 'name'} what */
+  startPersonEdit(what) {
+    if (this.person === null) return;
+    this.personEdit = what;
+    this.personDraft = null;
+    this.keepScroll = true;
+    this.render();
+    const box = this.main.querySelector(what === 'note' ? '#person-note' : '#person-name');
+    if (box instanceof HTMLTextAreaElement || box instanceof HTMLInputElement) {
+      box.focus();
+      if (what === 'name') box.select();
+      else box.setSelectionRange(box.value.length, box.value.length);
+    }
+  }
+
+  /**
+   * Saves a change to a person, shown at once and put back with a line when the server refuses it; the toast offers
+   * `undo`, the change that puts it back, when there is one.
+   * @param {Someone} person
+   * @param {PersonChange} change
+   * @param {string} said
+   * @param {PersonChange | null} undo
+   */
+  async changePerson(person, change, said, undo) {
+    const before = this.person;
+    if (this.person?.person.number === person.number) {
+      const shown = 'note' in change ? { ...person, note: change.note === '' ? null : change.note } : 'name' in change ? { ...person, name: change.name } : person;
+      this.person = { ...this.person, person: shown };
+    }
+    this.keepScroll = true;
+    this.render();
+    try {
+      this.rememberPerson(await editPerson(person.number, change));
+    } catch (error) {
+      this.person = before;
+      this.keepScroll = true;
+      this.render();
+      this.fail(error, "That change wasn't saved.");
+      return;
+    }
+    this.keepScroll = true;
+    this.render();
+    const saved = this.person?.person;
+    this.say(said, undo === null || !saved ? null : async () => this.changePerson(saved, undo, 'Undone', null));
+  }
+
+  async savePersonNote() {
+    const person = this.person?.person;
+    if (this.personEdit !== 'note' || !person) return;
+    const box = this.main.querySelector('#person-note');
+    const text = box instanceof HTMLTextAreaElement ? box.value.trim() : (this.personDraft ?? '').trim();
+    this.personEdit = null;
+    this.personDraft = null;
+    const before = person.note ?? '';
+    if (text === before) {
+      this.keepScroll = true;
+      this.render();
+      return;
+    }
+    await this.changePerson(person, { note: text }, `Saved your notes on ${nameOf(person)}.`, { note: before });
+  }
+
+  async savePersonName() {
+    const person = this.person?.person;
+    if (this.personEdit !== 'name' || !person) return;
+    const box = this.main.querySelector('#person-name');
+    const name = box instanceof HTMLInputElement ? box.value.trim() : '';
+    this.personEdit = null;
+    if (name === '' || name === (person.name ?? '')) {
+      this.keepScroll = true;
+      this.render();
+      return;
+    }
+    if (name.length > 80) {
+      this.keepScroll = true;
+      this.render();
+      this.say('Keep the name to one short line.', null);
+      return;
+    }
+    await this.changePerson(person, { name }, `Renamed to ${name}. Threads and their history keep the name they were written with.`, person.name ? { name: person.name } : null);
+  }
+
+  async savePersonEmail() {
+    const person = this.person?.person;
+    if (!person || person.email !== null) return;
+    const typed = this.personAddress;
+    const email = addressOf(typed);
+    const problem = !isAddress(typed) ? "That isn't an email address." : this.me !== '' && email === this.me.toLowerCase() ? "That's your own address. No person can hold it." : null;
+    if (problem === null) {
+      try {
+        this.rememberPerson(await editPerson(person.number, { email }));
+        this.personAddress = '';
+        this.personProblem = null;
+        this.keepScroll = true;
+        this.render();
+        this.say(`${nameOf(person)}'s address is ${email}. An invite to it now lands on this person.`, null);
+        return;
+      } catch (error) {
+        if (!(error instanceof Failed) || (error.message !== 'email-taken' && error.message !== 'has-email')) {
+          this.fail(error, "The address wasn't added.");
+          return;
+        }
+        const detail = /** @type {{ number?: unknown }} */ (error.detail ?? {});
+        const number = typeof detail.number === 'number' ? detail.number : null;
+        const holder = number === null ? null : (this.people.find((one) => one.number === number) ?? { number, name: null, email });
+        this.personProblem = holder === null ? { text: takenLine(email, null) } : { email, holder };
+      }
+    } else this.personProblem = { text: problem };
+    this.keepScroll = true;
+    this.render();
+    focusIn(this.main, '#person-email');
+  }
+
   /** @param {Thread} thread */
   details(thread) {
     const select = el(
@@ -1708,7 +2157,7 @@ class Threads {
       ]),
       row('Space', [el('span', { class: 't-dval' }, [select])]),
       row('Who can see it', [this.level(thread), el('span', {}, [el('button', { type: 'button', class: 't-text-btn', 'data-act': 'share' }, ['Share…'])])]),
-      row('Started', [el('span', { class: 't-dval t-dval-soft' }, [`${when(thread.createdAt)}, ${fromWords(thread)}`])]),
+      row('Started', [el('span', { class: 't-dval t-dval-soft' }, [`${when(thread.createdAt)}, `, ...this.fromNodes(thread)])]),
       row('Last activity', [el('span', { class: 't-dval t-dval-soft' }, [`${ago(thread.activityAt)} ago`])]),
       ...(origin ? [row('Moved from', [el('a', { class: 't-linkline', href: origin.href, target: '_blank', rel: 'noopener' }, [origin.name])], true)] : []),
       ...(issue ? [row('Filed as', [el('a', { class: 't-linkline', href: issue.href, target: '_blank', rel: 'noopener' }, [issue.name])], true)] : []),
@@ -1717,7 +2166,7 @@ class Threads {
         [
           (this.shown?.people ?? []).length === 0
             ? el('span', { class: 't-dval t-dval-soft' }, ['Only you'])
-            : el('span', { class: 't-dpeople' }, (this.shown?.people ?? []).map((person) => el('span', {}, [person.name ?? 'Someone', ' ', el('small', {}, [person.email ?? ''])]))),
+            : el('span', { class: 't-dpeople' }, (this.shown?.people ?? []).map((person) => el('span', {}, [this.nameNode(person.number, person.name ?? 'Someone'), ' ', el('small', {}, [person.email ?? ''])]))),
           el('span', {}, [el('button', { type: 'button', class: 't-text-btn', 'data-act': 'share' }, ['Share…'])]),
         ],
         true,
@@ -1963,12 +2412,13 @@ class Threads {
       : [
           { label: 'Go to Today', hay: 'today', key: '', run: () => void this.go({ view: 'today' }) },
           { label: 'Go to all threads', hay: 'threads all list', key: '', run: () => void this.go({ view: 'list', tab: this.tab, space: null }) },
+          { label: 'Go to people', hay: 'people person everyone who', key: '', run: () => void this.go({ view: 'people' }) },
           { label: 'New thread', hay: 'new thread start create', key: 'N', run: () => this.openNew({ title: words !== '' && !/^#?\d+$/.test(words) ? words : '' }) },
           { label: 'Show the keys', hay: 'keys keyboard shortcuts help', key: '?', run: () => this.openKeys() },
         ];
     return actions
       .filter((action) => query === '' || action.hay.includes(query) || action.label.toLowerCase().includes(query))
-      .map((action) => ({ label: action.label, sub: '', side: action.key, number: null, run: action.run }));
+      .map((action) => ({ label: action.label, sub: '', side: action.key, number: null, person: null, run: action.run }));
   }
 
   /** Searches for the words after a short pause; nothing typed shows the five most recently active. @param {string} words */
@@ -1978,13 +2428,13 @@ class Threads {
     const ticket = ++this.findTicket;
     if (trimmed === '') {
       const recent = [...this.threads.values()].sort((a, b) => b.activityAt.localeCompare(a.activityAt)).slice(0, 5);
-      this.showFound(trimmed, recent, 'Recent');
+      this.showFound(trimmed, recent, 'Recent', []);
       return;
     }
     this.findTimer = setTimeout(() => {
       search(trimmed).then(
-        (threads) => {
-          if (ticket === this.findTicket && this.overlay === 'find') this.showFound(trimmed, threads, 'Threads');
+        (found) => {
+          if (ticket === this.findTicket && this.overlay === 'find') this.showFound(trimmed, found.threads, 'Threads', found.people);
         },
         (error) => {
           if (ticket === this.findTicket) this.fail(error, "The search didn't run.");
@@ -1997,8 +2447,9 @@ class Threads {
    * @param {string} words
    * @param {Thread[]} threads
    * @param {string} group
+   * @param {Someone[]} people
    */
-  showFound(words, threads, group) {
+  showFound(words, threads, group, people) {
     const list = this.dialog.querySelector('#find-list');
     if (!(list instanceof HTMLElement)) return;
     const query = words.toLowerCase().replace(/^#/, '');
@@ -2011,7 +2462,15 @@ class Threads {
       return at < 0 ? `${spaceLabel(thread.space)} · ${STATUS_NAMES[thread.status]}` : `…${hay.slice(Math.max(0, at - 30), at + 50).trim()}…`;
     };
     this.found = [
-      ...threads.map((thread) => ({ label: titleOf(thread), sub: snippet(thread), side: ago(thread.activityAt), number: thread.number, run: () => this.openThread(thread.number) })),
+      ...people.map((someone) => ({
+        label: nameOf(someone),
+        sub: someone.name?.trim() ? (someone.email ?? 'no address') : howLine(someone.counts),
+        side: `#${someone.number}`,
+        number: null,
+        person: someone.number,
+        run: () => void this.go({ view: 'person', number: someone.number }),
+      })),
+      ...threads.map((thread) => ({ label: titleOf(thread), sub: snippet(thread), side: ago(thread.activityAt), number: thread.number, person: null, run: () => this.openThread(thread.number) })),
       ...this.findActions(words.trim()),
     ];
     this.foundSel = 0;
@@ -2025,17 +2484,19 @@ class Threads {
     const nodes = [];
     let last = '';
     this.found.forEach((item, i) => {
-      const heading = item.number === null ? 'Do' : group;
+      const heading = item.person !== null ? 'People' : item.number === null ? 'Do' : group;
       if (heading !== last) nodes.push(el('div', { class: 't-find-group', role: 'presentation' }, [(last = heading)]));
       nodes.push(
         el('button', { type: 'button', class: 't-find-item', role: 'option', id: `find-${i}`, 'data-act': 'found', 'data-index': String(i), 'aria-selected': String(i === 0) }, [
-          el('span', { class: 't-num' }, item.number === null ? [icon(item.label.startsWith('New') ? 'plus' : item.label.startsWith('Show') ? 'keys' : 'move')] : [`#${item.number}`]),
+          item.person !== null
+            ? el('span', { class: 't-num' }, [el('span', { class: 't-av', 'aria-hidden': 'true' }, [initials(item.label)])])
+            : el('span', { class: 't-num' }, item.number === null ? [icon(item.label.startsWith('New') ? 'plus' : item.label.startsWith('Show') ? 'keys' : 'move')] : [`#${item.number}`]),
           el('span', { class: 't-find-text' }, [el('span', {}, marked(item.label)), ...(item.sub ? [el('small', {}, marked(item.sub))] : [])]),
           el('span', { class: 't-find-side' }, item.side.length === 1 ? [kbd(item.side)] : [item.side]),
         ]),
       );
     });
-    if (threads.length === 0 && words.trim() !== '') {
+    if (threads.length === 0 && people.length === 0 && words.trim() !== '') {
       const none = this.member ? `None of your threads matches "${words.trim()}".` : `No thread matches "${words.trim()}". Press ↵ to start one with this title.`;
       nodes.unshift(el('div', { class: 't-empty' }, [none]));
     }
@@ -2687,13 +3148,18 @@ class Threads {
       this.onPublicClick(target);
       return;
     }
-    const link = target.closest('a[data-thread], a[data-go], a[data-space], a[data-tab]');
+    const link = target.closest('a[data-thread], a[data-go], a[data-space], a[data-tab], a[data-person]');
     if (link instanceof HTMLAnchorElement && !wantsNewTab(event)) {
       event.preventDefault();
       if (link.dataset.thread !== undefined) {
-        if (link.classList.contains('t-row')) this.from = this.route.view === 'today' ? 'today' : this.route.view === 'list' ? 'list' : this.from;
+        if (this.route.view === 'person' && this.person) {
+          this.from = 'person';
+          this.fromPerson = this.person.person.number;
+        } else if (link.classList.contains('t-row')) this.from = this.route.view === 'today' ? 'today' : this.route.view === 'list' ? 'list' : this.from;
         this.openThread(Number(link.dataset.thread));
-      } else if (link.dataset.go === 'today') void this.go({ view: 'today' });
+      } else if (link.dataset.person !== undefined) void this.go({ view: 'person', number: Number(link.dataset.person) });
+      else if (link.dataset.go === 'people') void this.go({ view: 'people' });
+      else if (link.dataset.go === 'today') void this.go({ view: 'today' });
       else if (link.dataset.go === 'list') void this.go({ view: 'list', tab: this.tab, space: null });
       else if (link.dataset.tab !== undefined && isTab(link.dataset.tab)) {
         this.sel = null;
@@ -2706,9 +3172,9 @@ class Threads {
     }
     const button = target.closest('[data-act], [data-go]');
     if (!(button instanceof HTMLElement)) return;
-    if (button.dataset.go === 'today' || button.dataset.go === 'list') {
+    if (button.dataset.go === 'today' || button.dataset.go === 'list' || button.dataset.go === 'people') {
       event.preventDefault();
-      void this.go(button.dataset.go === 'today' ? { view: 'today' } : { view: 'list', tab: this.tab, space: this.space });
+      void this.go(button.dataset.go === 'today' ? { view: 'today' } : button.dataset.go === 'people' ? { view: 'people' } : { view: 'list', tab: this.tab, space: this.space });
       return;
     }
     const thread = this.target();
@@ -2738,6 +3204,18 @@ class Threads {
       case 'note-drop':
       case 'note-hold':
         if (thread && !this.member && button.dataset.note) void this.judgeNote(thread, button.dataset.note, button.dataset.act === 'note-show' ? 'show' : button.dataset.act === 'note-drop' ? 'drop' : 'hold');
+        break;
+      case 'people-fold':
+        this.peopleFold = !this.peopleFold;
+        this.keepScroll = true;
+        this.render();
+        break;
+      case 'person-note':
+        // A link in his notes opens; anywhere else on them starts writing.
+        if (!target.closest('a')) this.startPersonEdit('note');
+        break;
+      case 'person-rename':
+        this.startPersonEdit('name');
         break;
       case 'note-peek': {
         const id = button.dataset.note ?? '';
@@ -2917,6 +3395,11 @@ class Threads {
       this.main.querySelector('#edit-preview')?.replaceChildren(...this.editorPreview(this.shown.thread, this.editing));
     } else if (target.id.startsWith('new-')) this.readNew();
     else if (target.id.startsWith('share-')) this.readShare();
+    else if (target.id === 'person-note' && target instanceof HTMLTextAreaElement) this.personDraft = target.value;
+    else if (target.id === 'person-email' && target instanceof HTMLInputElement) {
+      this.personAddress = target.value;
+      this.personProblem = null;
+    }
     else if (target.id.startsWith('note-')) {
       this.readNote();
       prepareBotCheck();
@@ -2950,6 +3433,9 @@ class Threads {
     if (kind === 'new') void this.saveNew();
     if (kind === 'invite') void this.sendInvite();
     if (kind === 'note') void this.sendNote();
+    if (kind === 'person-note') void this.savePersonNote();
+    if (kind === 'person-name') void this.savePersonName();
+    if (kind === 'person-email') void this.savePersonEmail();
   }
 
   /** @param {KeyboardEvent} event */
@@ -2984,6 +3470,18 @@ class Threads {
       this.onOverlayKey(event, typing);
       return;
     }
+    if (event.key === 'Escape' && this.personEdit === 'name') {
+      event.preventDefault();
+      this.personEdit = null;
+      this.keepScroll = true;
+      this.render();
+      return;
+    }
+    if ((event.key === 'Enter' || event.key === ' ') && target instanceof HTMLElement && target.dataset.act === 'person-note') {
+      event.preventDefault();
+      this.startPersonEdit('note');
+      return;
+    }
     if (event.key === 'Escape') {
       if (this.pageFull) {
         event.preventDefault();
@@ -3000,7 +3498,7 @@ class Threads {
         this.keepScroll = true;
         this.render();
       } else if (typing && target instanceof HTMLElement) target.blur();
-      else if (this.route.view === 'thread') {
+      else if (this.route.view === 'thread' || this.route.view === 'person') {
         event.preventDefault();
         this.back();
       }
@@ -3060,7 +3558,7 @@ class Threads {
         if (this.route.view !== 'thread' && this.sel !== null) this.openThread(this.sel);
         break;
       case 'back':
-        if (this.route.view === 'thread') this.back();
+        if (this.route.view === 'thread' || this.route.view === 'person') this.back();
         break;
       case 'tab-look':
       case 'tab-act':
@@ -3109,6 +3607,7 @@ class Threads {
       }
       case 'edit':
         if (this.route.view === 'thread' && thread) this.startEdit(thread);
+        if (this.route.view === 'person') this.startPersonEdit('name');
         break;
       case 'reply':
         if (this.route.view === 'thread' && thread && canReply(thread)) this.startReply(thread);
