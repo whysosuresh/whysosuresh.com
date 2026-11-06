@@ -3,10 +3,15 @@
 // spaces and an answer trimmed; a thread's comments sort into the four places a comment sits, replies under their
 // parent; the page is told each person's newest answer, by name and never by address or number, and every
 // discussion's words with the one being written; and cards beside the page sit level with their words, pushed down
-// where two would overlap.
+// where two would overlap. The hello each reader's page is answered with is one of four shapes the bridge takes,
+// and a public thread's and a signed-in reader's are the bytes they always were.
 
 import { describe, expect, it } from "vitest";
-import { DRAFT, KEY, MAX_ANSWER, MAX_QUOTE, discussionFor, newestAnswers, placesOf, readPageMessage, stack } from "../site/app/page-talk.js";
+import { DRAFT, KEY, MAX_ANSWER, MAX_QUOTE, discussionFor, helloFor, newestAnswers, placesOf, readPageMessage, stack } from "../site/app/page-talk.js";
+
+/** The bridge's reading of a hello, loaded by a computed path so this project's type check doesn't follow into it. */
+const bridge: string = new URL("../frame/bridge.js", import.meta.url).href;
+const { readFromThread } = (await import(bridge)) as { readFromThread(data: unknown): unknown };
 
 /** A comment as the thread's call answers it (site/app/threads-store.js), with the fields these tests set. */
 interface Comment {
@@ -171,5 +176,21 @@ describe("cards beside the page", () => {
       ]),
     );
     expect(bottom).toBe(496);
+  });
+});
+
+describe("the hello a page is answered with", () => {
+  it("keeps a signed-in reader's and a public visitor's hello byte for byte", () => {
+    expect(JSON.stringify(helloFor("member"))).toBe('{"whysosuresh":"hello"}');
+    expect(JSON.stringify(helloFor("visitor"))).toBe('{"whysosuresh":"hello","visitor":true}');
+  });
+
+  it("tells an ask's visitor and the owner reading an ask apart, as the bridge reads them", () => {
+    expect(helloFor("private")).toEqual({ [KEY]: "hello", mode: "private" });
+    expect(helloFor("read")).toEqual({ [KEY]: "hello", mode: "read" });
+    expect(readFromThread(helloFor("member"))).toEqual({ kind: "hello", visitor: false, mode: "answer" });
+    expect(readFromThread(helloFor("visitor"))).toEqual({ kind: "hello", visitor: true, mode: "answer" });
+    expect(readFromThread(helloFor("private"))).toEqual({ kind: "hello", visitor: true, mode: "private" });
+    expect(readFromThread(helloFor("read"))).toEqual({ kind: "hello", visitor: false, mode: "read" });
   });
 });

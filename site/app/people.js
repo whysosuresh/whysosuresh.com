@@ -4,7 +4,8 @@
 // person's name (their address when they gave no name), their initials, their page's address (/people/7-meera, a
 // room of its own beside the threads, as a thread's is /threads/42-who-owns-what), the line that says how he knows them, the
 // words for how they are in a thread, the line under their name about their address, and Everyone split into the
-// people still in touch and those only ever in threads he dropped. Plain data and pure functions, so a test can read
+// people still in touch and those only ever in threads he dropped, and how their words name the thread they are on
+// (an answer to one of his asks is "answered" it). Plain data and pure functions, so a test can read
 // them without a page.
 
 /**
@@ -121,4 +122,13 @@ export function folded(people) {
  */
 export function takenLine(email, holder) {
   return holder === null ? `${email} already belongs to someone. One address belongs to one person.` : `${email} is ${nameOf(holder)}'s (#${holder.number}). One address belongs to one person.`;
+}
+
+/**
+ * The words before the thread a person's words are on: "answered" for their answers to one of his asks, "on" for
+ * anything else they said.
+ * @param {string} kind
+ */
+export function saidOn(kind) {
+  return kind === 'answer' ? 'answered ' : 'on ';
 }

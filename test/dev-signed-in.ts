@@ -18,7 +18,12 @@
 // threads are meetings, set as the sync sets them, relative to now so Today always has some coming up: "Who owns
 // what" later today (with Meera, who is invited, and Dev K., who has no address), the review next Wednesday (with
 // Meera and Asha), the meetup a few days out as a day with no time (with Asha and Leela, someone new added by name),
-// and pricing for small teams three days ago (with Asha). Pages are seeded the way the sync saves them, through the threads' call with its
+// and pricing for small teams three days ago (with Asha). Three asks, each a thread of his own with a questions page:
+// "Tuesday demo", open at /ask/demo-nov-10, answered from 34 browsers (Ravi and Priya by name, Meera with the guest's
+// address, whom he invited back to her own thread, and 31 more, a few without a name), its earlier answers marked
+// read and the newest still new, so Today folds them into one row and Answered by has enough for Show all and its
+// filter; "Founders dinner", a draft at /ask/founders-dinner, which only he can open; and "October meetup", closed,
+// whose page reads with no boxes. Pages are seeded the way the sync saves them, through the threads' call with its
 // played token: the sealed probe (test/fixtures/sealed-probe.html, every line of which should read "blocked" in the
 // browser), a made-up page that asks questions ("The review on Wednesday", shared with the guest and Asha), with
 // answers, a discussion on its words, one on words its second version cut, and replies, and each file given with
@@ -83,6 +88,14 @@ function reviewPage(version: number): string {
 <div class="q" data-thread-question="missing"><p>Is there something the room will expect that isn't here?</p></div>
 </body></html>`;
 }
+
+/** The questions the made-up asks put, by their ids, as the demo template words them. */
+const ASK_QUESTIONS: Record<string, string> = {
+  "stood-out": "What stood out, good or bad?",
+  fit: "Where would this fit in what you build, if anywhere?",
+  "before-you-try": "What would you need to see or try before you'd use it?",
+  "anything-else": "Anything else?",
+};
 
 /** Made-up threads in every tab and source, so each screen has something to show. */
 async function seed(): Promise<void> {
@@ -253,6 +266,58 @@ ${"<p>A line to make the page tall.</p>".repeat(12)}</body></html>`;
   await visitorAnswer("5a".repeat(32), "what-is-it", "Somewhere to run AI agents, I think. The headline lost me.");
   await visitorAnswer("5a".repeat(32), "first-job", "It ran after I found the install page, about ten minutes.");
   await visitorAnswer("6b".repeat(32), "what-is-it", "A CLI and a server for agents, with **workflows**.");
+
+  // Asks: a questions page, made a draft by the sync and opened from his own page, as the real ones are.
+  const askPage = (title: string, ids: readonly string[]): string => `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title><style>body{font:16px/1.55 system-ui;margin:0;padding:32px 28px;max-width:640px}h1{font-size:30px;letter-spacing:-.02em;margin:0 0 8px}p.lede{color:#5c5c5c}.q{padding:16px 0;border-bottom:1px solid #e5e5e5}.q p{margin:0;font-weight:600}@media (prefers-color-scheme:dark){body{background:#0d0d0e;color:#f1f1f1}}</style></head><body>
+<h1>${title}</h1><p class="lede">A few questions, all optional. I read every answer myself.</p>
+<p data-outside-thread>On whysosuresh.com/ask, a box to answer appears under each question.</p>
+${ids.map((id) => `<div class="q" data-thread-question="${id}"><p>${ASK_QUESTIONS[id] ?? id}</p></div>`).join("\n")}
+</body></html>`;
+  const makeAsk = async (ref: string, title: string, slug: string, ids: readonly string[], space: string): Promise<number> => {
+    const number = await add(ref, { title, status: "discuss", space, body: "Questions for the people who came." });
+    await page(number, new TextEncoder().encode(askPage(title, ids)), null);
+    await asSync(`/${number}/ask`, { slug });
+    return number;
+  };
+  const DEMO = ["stood-out", "fit", "before-you-try", "anything-else"];
+  const demo = await makeAsk("chat:seed-ask-demo", "Tuesday demo", "demo-nov-10", DEMO, "stigmer");
+  await asSync(`/${demo}/text`, { field: "summary", text: "Decided: one link for the four who came.\nOpen: what it costs at their volume.\nNext: read the answers on Friday." });
+  await asPerson(owner, `/${demo}/ask`, { action: "open" });
+  /** One answer to an ask from a browser's key, as the page sends it; the name and email count only on the first. */
+  const answerAsk = async (slug: string, key: string, question: string, words: string, name = "", email = ""): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    const response = await harness.fetch(`${SITE}/api/asks/${slug}/answers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: SITE, "CF-Connecting-IP": "203.0.113.70" },
+      body: new TextEncoder().encode(JSON.stringify({ question, body: words, name, email, token: "pass", key })),
+    });
+    if (response.status !== 201) throw new Error(`seeding an answer to ${slug} answered ${response.status}: ${await response.text()}`);
+  };
+  const keyOf = (n: number): string => n.toString(16).padStart(2, "0").repeat(32);
+  const MADE_UP = ["Arjun", "Lena", "Kofi", "Sara", "Diego", "Ana", "Wei", "Noor", "Jonas", "Aisha", "Mateo", "Yuki", "Omar", "Ines", "Liam", "Zara", "Felix", "Hana", "Ivan", "Maya", "Tariq", "Elif", "Sam", "Nina"];
+  const SAID = ["The resume after the crash.", "Too much on one screen, but the CLI was clear.", "Our ticket routing, maybe.", "Pricing before anything else.", "The way runs show their steps.", "A self-hosted version."];
+  for (let i = 0; i < 31; i += 1) {
+    const name = i % 7 === 3 ? "" : `${MADE_UP[i % MADE_UP.length] ?? "Someone"} ${String.fromCharCode(65 + ((i * 7) % 26))}.`;
+    await answerAsk("demo-nov-10", keyOf(100 + i), DEMO[i % DEMO.length] ?? "fit", SAID[i % SAID.length] ?? "Fine.", name);
+  }
+  await answerAsk("demo-nov-10", keyOf(1), "stood-out", "The agent picked up the half-finished run after you killed the server. I didn't expect that to just work.", "Ravi", "ravi@example.com");
+  await answerAsk("demo-nov-10", keyOf(1), "fit", "Our support triage. Today it is three scripts and a cron job.");
+  await answerAsk("demo-nov-10", keyOf(1), "before-you-try", "How it behaves with our own model gateway, and what it costs at 2,000 runs a day.");
+  await answerAsk("demo-nov-10", keyOf(3), "fit", "Release notes, maybe. Not sure yet.", "Meera", guest);
+  // Everything so far is read; the next answers are new, so Today folds them and Answered by puts them first.
+  await asPerson(owner, `/${demo}/ask`, { action: "read" });
+  await answerAsk("demo-nov-10", keyOf(2), "stood-out", "Honestly the CLI felt slow to start. The console was clean.", "Priya");
+  await answerAsk("demo-nov-10", keyOf(2), "anything-else", "Can I get the slides?");
+  await answerAsk("demo-nov-10", keyOf(1), "fit", "Support triage, and the nightly report after it.");
+  await answerAsk("demo-nov-10", keyOf(200), "anything-else", "Probably nowhere yet, we are still on plain prompts.");
+  // Meera answered with the guest's address, and he invited her back to her own thread, so she can keep answering.
+  const meeraAnswered = (await database.prepare("SELECT number FROM threads WHERE ask_thread_id = (SELECT id FROM threads WHERE number = ?1) AND sender_name = 'Meera'").bind(demo).first<{ number: number }>())?.number ?? 0;
+  await asPerson(owner, `/${meeraAnswered}/people`, { add: { email: guest, name: "Meera" } });
+  await makeAsk("chat:seed-ask-dinner", "Founders dinner, 13 Nov", "founders-dinner", DEMO, "company");
+  const meetupAsk = await makeAsk("chat:seed-ask-meetup", "October meetup", "oct-meetup", ["stood-out", "anything-else"], "stigmer");
+  await asPerson(owner, `/${meetupAsk}/ask`, { action: "open" });
+  await answerAsk("oct-meetup", keyOf(7), "stood-out", "The talk on runners.", "Dev K.");
+  await asPerson(owner, `/${meetupAsk}/ask`, { action: "close" });
 
   // Meetings, set as the sync sets them, relative to now: later today, next Wednesday (at least two days out), a day
   // four days out with no time, and one three days ago. Times are on the hour or half hour in UTC, as people book them.

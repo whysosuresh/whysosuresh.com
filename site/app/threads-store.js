@@ -25,6 +25,13 @@
 //
 // Any thread can be one meeting (`meeting` on every thread: its when, length, where and people): `meet` sets or
 // clears it, and `attendee` adds someone by number, or someone new by name, or takes one off; each answers the thread.
+//
+// One of his own threads whose main section is a page can be an ask, a questions page anyone answers by one link,
+// /ask/<slug>, each browser that answers getting a thread of its own (`ask` on every thread says which it is).
+// `listAsks` reads every ask for Asks, `askAction` opens, closes or marks an ask's answers read. A visitor reads an ask
+// with no sign-in from its public call outside Access (`showAsk`, /api/asks/<slug>, src/asks.ts), sending their
+// browser's key so it answers their own answers and nobody else's, and its page loads from that address too. Both
+// public reads go through one fetch (`readPublic`).
 
 /**
  * @typedef {'look' | 'act' | 'discuss' | 'done'} Tab
@@ -36,8 +43,15 @@
  *   ref: string | null, filedLink: string | null, movedAt: string | null, activityAt: string,
  *   main: 'text' | 'page' | 'link', link: { url: string, title: string | null } | null, publicAt: string | null,
  *   senderNumber?: number | null, shared?: number, waiting?: boolean,
- *   meeting?: import('./meetings.js').Meeting | null
+ *   meeting?: import('./meetings.js').Meeting | null, ask?: AskMark | null
  * }} Thread
+ * @typedef {'draft' | 'open' | 'closed'} AskState
+ * @typedef {{ slug: string, state: AskState } | { number?: number, slug: string, title: string | null }} AskMark
+ *   What a thread says about asks: on an ask's own thread its slug and state; on a response thread the ask it answers
+ *   (its number for the owner alone).
+ * @typedef {{ number: number, name: string | null, at: string, waiting: boolean }} Answerer
+ * @typedef {{ number: number, title: string | null, slug: string, state: AskState, answered: number, lastAnsweredAt: string | null, topic: string | null }} Ask
+ * @typedef {{ ask: { slug: string, title: string | null, state: AskState }, page: PublicPage | null, answers: { question: string, body: string, at: string }[] }} AskShown
  * @typedef {{ version: number, savedAt: string, actor: string, bytes: number, source: string | null }} PageVersion
  * @typedef {{ version: number, savedAt: string, source: string | null, versions: PageVersion[] }} Page
  * @typedef {'thread' | 'owner' | 'public'} Audience
@@ -65,7 +79,7 @@
  * }} Someone
  * @typedef {Thread & { roles: string[] }} TheirThread
  * @typedef {{
- *   kind: 'note' | 'comment' | 'public-note', thread: { number: number, title: string | null }, body: string, at: string,
+ *   kind: 'note' | 'comment' | 'public-note' | 'answer', thread: { number: number, title: string | null }, body: string, at: string,
  *   state: string | null, audience: string | null
  * }} Said
  * @typedef {{ person: Someone, threads: TheirThread[], words: Said[], truncated: boolean }} PersonShown
@@ -74,7 +88,7 @@
  * @typedef {{ people: Person[], invitedCount: number }} People
  * @typedef {{ caller: 'owner' | 'sync' | 'member', email: string | null }} Me
  * @typedef {{ id: number, at: string, actor: 'owner' | 'sync' | 'visitor' | 'import' | string, type: string, data: Record<string, unknown> }} Event
- * @typedef {{ thread: Thread, page: Page | null, people: Person[], comments: Comment[], events: Event[], truncated: boolean }} Shown
+ * @typedef {{ thread: Thread, page: Page | null, people: Person[], comments: Comment[], events: Event[], truncated: boolean, answeredBy?: Answerer[] }} Shown
  * @typedef {{ threads: Thread[], counts: Record<Tab, number>, next: number | null }} Listing
  * @typedef {{ action: 'act' | 'discuss' | 'unsort' | 'done' | 'reopen' | 'reply-opened' | 'publish' | 'unpublish' }
  *   | { action: 'drop', reason: string }
@@ -241,6 +255,32 @@ export async function judge(number, note, action) {
 }
 
 /**
+ * One of the public calls outside Access, read with no sign-in and no cookie: Missing for a 404, which is what every
+ * public call answers for anything it won't say. `key` is the visitor's browser's key, when it has one.
+ * @param {string} path
+ * @param {string | null} key
+ * @returns {Promise<unknown>}
+ */
+async function readPublic(path, key) {
+  /** @type {Response} */
+  let response;
+  try {
+    /** @type {Record<string, string>} */
+    const headers = key === null ? {} : { 'X-Visitor-Key': key };
+    response = await fetch(path, { redirect: 'manual', credentials: 'omit', cache: 'no-store', headers });
+  } catch {
+    throw new Failed('network');
+  }
+  if (response.status === 404) throw new Missing();
+  if (!response.ok) throw new Failed(String(response.status));
+  try {
+    return /** @type {unknown} */ (await response.json());
+  } catch {
+    throw new Failed('answer');
+  }
+}
+
+/**
  * A public thread, as anyone reads it with no sign-in: Missing for any number that isn't one. `key` is the visitor's
  * browser's key, when it has one, which the call reads to say which answers are theirs.
  * @param {number} number
@@ -248,22 +288,54 @@ export async function judge(number, note, action) {
  * @returns {Promise<PublicShown>}
  */
 export async function showPublic(number, key) {
-  /** @type {Response} */
-  let response;
-  try {
-    /** @type {Record<string, string>} */
-    const headers = key === null ? {} : { 'X-Visitor-Key': key };
-    response = await fetch(`/api/threads/${number}`, { redirect: 'manual', credentials: 'omit', cache: 'no-store', headers });
-  } catch {
-    throw new Failed('network');
-  }
-  if (response.status === 404) throw new Missing();
-  if (!response.ok) throw new Failed(String(response.status));
-  try {
-    return /** @type {PublicShown} */ (await response.json());
-  } catch {
-    throw new Failed('answer');
-  }
+  return /** @type {PublicShown} */ (await readPublic(`/api/threads/${number}`, key));
+}
+
+/**
+ * An ask, as anyone reads it with no sign-in: its title, state and page, and this browser's own answers (by `key`);
+ * Missing for a draft and a slug no ask has.
+ * @param {string} slug
+ * @param {string} key
+ * @returns {Promise<AskShown>}
+ */
+export async function showAsk(slug, key) {
+  return /** @type {AskShown} */ (await readPublic(`/api/asks/${encodeURIComponent(slug)}`, key));
+}
+
+/**
+ * The address an ask's page frame loads one version from, outside Access, sealed as every page is.
+ * @param {string} slug
+ * @param {number} version
+ */
+export function askPageAddress(slug, version) {
+  return `/api/asks/${encodeURIComponent(slug)}/pages/${version}`;
+}
+
+/**
+ * Every ask, drafts first, with how many answered and when last, and the Send a note topic that opens it.
+ * @returns {Promise<Ask[]>}
+ */
+export async function listAsks() {
+  return /** @type {{ asks: Ask[] }} */ (await call('/asks', { method: 'GET' })).asks;
+}
+
+/**
+ * Opens an ask (a draft, or one closed), or closes one, and answers its thread as it now is.
+ * @param {number} number
+ * @param {'open' | 'close'} action
+ * @returns {Promise<Thread>}
+ */
+export async function askAction(number, action) {
+  return /** @type {{ thread: Thread }} */ (await post(`/threads/${number}/ask`, { action })).thread;
+}
+
+/**
+ * Marks an ask's answers read: each response thread that waits on him stops waiting. Answers how many it marked.
+ * @param {number} number
+ * @returns {Promise<number>}
+ */
+export async function markAskRead(number) {
+  return /** @type {{ marked: number }} */ (await post(`/threads/${number}/ask`, { action: 'read' })).marked;
 }
 
 /**

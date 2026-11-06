@@ -8,6 +8,7 @@
 // a thread's comments into those places once, for the history, the page and the column beside it. A public thread's
 // visitors answer too: each visitor's answers carry their key's short hash (`visitor`), so two who typed the same name
 // stay two people, and the public call answers each visitor's newest already, so its answers are told as given.
+// `helloFor` is the hello that answers a page's `ready`, by who reads it (frame/bridge.js reads the same four).
 
 /** The id a page marks a question with, as the Worker checks it. */
 export const QUESTION_SHAPE = /^[a-z0-9-]{1,40}$/;
@@ -123,6 +124,19 @@ export function readPageMessage(data) {
     default:
       return null;
   }
+}
+
+/**
+ * The `hello` that answers a page's `ready`, by who reads it: a signed-in reader (`member`, the owner or a person he
+ * invited) answers in boxes and comments on words; a public thread's visitor (`visitor`) answers in public boxes; an
+ * ask's visitor (`private`) answers in boxes only Suresh reads; and the owner on an ask (`read`) reads the answers
+ * under the questions with no box to type in. The first two are what the page always said, unchanged.
+ * @param {'member' | 'visitor' | 'private' | 'read'} as
+ */
+export function helloFor(as) {
+  if (as === 'member') return { [KEY]: 'hello' };
+  if (as === 'visitor') return { [KEY]: 'hello', visitor: true };
+  return { [KEY]: 'hello', mode: as };
 }
 
 /**
