@@ -19,7 +19,8 @@
 // other comment keeps its state, no earlier comment has a visitor's key, and the answers' budget starts empty. For
 // 0016, asks: every earlier thread is no ask and answers none, a slug is kept once, a response names a thread that is
 // there, one DELETE clears an ask's thread with the threads that answer it, which the harness's reset relies on, and
-// the asks' two budgets start empty.
+// the asks' two budgets start empty. For 0018, the home page's feed: every earlier thread, public ones included, is
+// off the home page, so nothing he made public before is listed without him, and there is no Now line.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -259,7 +260,8 @@ describe("0007, the inbox retired a deploy later", () => {
     expect((await database.prepare("SELECT COUNT(*) AS n FROM threads WHERE origin_ref = 'chat:twice'").first<{ n: number }>())?.n).toBe(1);
     expect(await thread(harness, "00000000-0000-4000-8000-000000000007")).toBeNull();
     const after = (await database.prepare("SELECT * FROM threads WHERE id NOT IN (?1, ?2, ?3) ORDER BY number").bind("00000000-0000-4000-8000-000000000003", "00000000-0000-4000-8000-000000000005", "00000000-0000-4000-8000-000000000006").all<Record<string, unknown>>()).results;
-    // Later migrations add a thread's last activity, its main section, who it is from, its meeting and its ask; everything 0007 found stays as it was.
+    // Later migrations add a thread's last activity, its main section, who it is from, its meeting, its ask and its place
+    // on the home page; everything 0007 found stays as it was.
     expect(
       after.map(
         ({
@@ -268,6 +270,7 @@ describe("0007, the inbox retired a deploy later", () => {
           link_url: _url,
           link_title: _title,
           public_at: _public,
+          feed_at: _feed,
           person_id: _person,
           meeting_when: _when,
           meeting_minutes: _minutes,
@@ -556,5 +559,24 @@ describe("0016, asks", () => {
     await database.prepare("DELETE FROM threads").run();
     expect(await database.prepare("SELECT COUNT(*) AS n FROM threads").first<{ n: number }>()).toEqual({ n: 0 });
     for (const table of ["ask_thread_senders", "ask_answer_senders"]) expect(await database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>()).toEqual({ n: 0 });
+  });
+});
+
+describe("0018, the home page's feed", () => {
+  it("leaves every earlier thread off the home page, a public one included, and starts with no Now line", async () => {
+    harness = await startHarness({ through: "0017" });
+    const database = await harness.db();
+    await database.batch([
+      database.prepare("INSERT INTO threads (id, number, created_at, source, body, status) VALUES ('t1', 1, '2026-11-01T00:00:00.000Z', 'self', 'x', 'act')"),
+      database.prepare("INSERT INTO threads (id, number, created_at, source, body, status, public_at) VALUES ('t2', 2, '2026-11-02T00:00:00.000Z', 'self', 'y', 'done', '2026-11-03T00:00:00.000Z')"),
+    ]);
+    await harness.migrate();
+    expect((await database.prepare("SELECT number, public_at, feed_at FROM threads ORDER BY number").all()).results).toEqual([
+      { number: 1, public_at: null, feed_at: null },
+      { number: 2, public_at: "2026-11-03T00:00:00.000Z", feed_at: null },
+    ]);
+    expect(await database.prepare("SELECT COUNT(*) AS n FROM now_lines").first<{ n: number }>()).toEqual({ n: 0 });
+    const index = await database.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'threads_feed'").first<{ sql: string }>();
+    expect(index?.sql).toMatch(/WHERE feed_at IS NOT NULL$/);
   });
 });

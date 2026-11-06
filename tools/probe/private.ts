@@ -2,7 +2,8 @@
 // `private`), holding no key: it asks for Suresh's private calls as a stranger would, with no sign-in and with a forged
 // one, and fails unless each stops at Cloudflare Access's sign-in, never answering a word. His journal's calls are all
 // asked, every kind of address under /threads/api/journal (the list, a day, an earlier version, a week, the storylines,
-// a photo), and the threads' own private calls beside them (a tab's list, the people, the asks, a thread). The journal's
+// a photo), and the threads' own private calls beside them (a tab's list, the people, the asks, a thread, the home
+// page's Now line). The journal's
 // pages are asked too: each must be the same shell as /me, byte for byte, because a page holds no words and reads them
 // only from the calls after sign-in. A recent day's address is asked whatever the date, since the shell is the same for
 // a day written or not. This module is the logic, with fetch handed in so a test plays the site; tools/probe/run.ts is
@@ -26,7 +27,7 @@ const PHOTO = "00000000-0000-4000-8000-000000000000";
 /** Every address the probe asks, for a day it names (`YYYY-MM-DD`) and that day's ISO week (`YYYY-Www`). */
 export function probes(day: string, week: string): Probe[] {
   const journal = ["", `/${day}`, `/${day}?version=1`, `/${week}`, "/storylines", `/photos/${PHOTO}`].map((rest) => `/threads/api/journal${rest}`);
-  const threads = ["/threads/api/threads?tab=look", "/threads/api/threads/1", "/threads/api/people", "/threads/api/asks", "/threads/api/me"];
+  const threads = ["/threads/api/threads?tab=look", "/threads/api/threads/1", "/threads/api/people", "/threads/api/asks", "/threads/api/me", "/threads/api/now"];
   return [
     ...[...journal, ...threads].map((path): Probe => ({ path, expect: "sign-in" })),
     { path: "/threads/api/journal", expect: "sign-in", headers: FORGED_TOKEN },

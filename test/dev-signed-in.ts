@@ -11,7 +11,9 @@
 // signed out, its address shows the public view. The pricing page thread is public as well, and not shared, so the
 // invited person reads it in the public view too. A third public thread's page asks questions ("A cold read"), with
 // two visitors' answers from two browsers' keys, both named Sam, so signed out the page takes answers with a name,
-// shows a visitor other people's answers once they gave their own, and opens in full screen at `?full`. Everyone in the seed is a person: Asha wrote
+// shows a visitor other people's answers once they gave their own, and opens in full screen at `?full`. All three
+// public threads are posted on the home page, a page, a text with notes and a page with answers, under his Now line,
+// so http://localhost:8790/ shows what's happening and /feed.xml its feed. Everyone in the seed is a person: Asha wrote
 // from the site and was then invited to the meetup thread, Dev K. told him something in person, Meera is invited
 // (with his own notes on her), Tomás wrote on the public thread with an address (Priya gave none, so she is no
 // person), and Rex's only note was junk he dropped, so Rex sits under the people only in dropped threads. Four
@@ -184,6 +186,7 @@ async function seed(): Promise<void> {
   await asSync(`/${pricing}/text`, { field: "summary", text: "Decided: small teams use it free until launch.\nOpen: per seat, per run, or flat.\nWaiting on: the cost per run.\nNext: pick one on Friday." });
   // Public too, and not shared with the invited person, so they read it in the public view, its page from the public address.
   await asPerson(owner, `/${pricing}`, { action: "publish" });
+  await asPerson(owner, `/${pricing}`, { action: "post" });
   // A page that asks questions, shared with the guest and Asha: their answers under two of its questions, a discussion
   // on its words with a reply, one on words of version 1 that version 2 cut, a reply under a general comment, and an
   // Only me comment with his own reply, which the guest never sees. The meeting is made up.
@@ -232,6 +235,7 @@ async function seed(): Promise<void> {
   });
   await asSync(`/${shipping}/text`, { field: "summary", text: "Decided: 0.1.0 ships when the install works on all three systems.\nOpen: the Windows runner.\nNext: a fresh install on Windows on Friday." });
   await asPerson(owner, `/${shipping}`, { action: "publish" });
+  await asPerson(owner, `/${shipping}`, { action: "post" });
   await asPerson(owner, `/${shipping}/comments`, { body: "Day one: the install works on macOS and Linux. Windows next.", audience: "public" });
   await asPerson(owner, `/${shipping}/people`, { add: { email: guest, name: "Meera" } });
   const note = async (words: string, name: string, email: string): Promise<void> => {
@@ -257,6 +261,7 @@ async function seed(): Promise<void> {
 ${"<p>A line to make the page tall.</p>".repeat(12)}</body></html>`;
   await page(cold, new TextEncoder().encode(questions), null);
   await asPerson(owner, `/${cold}`, { action: "publish" });
+  await asPerson(owner, `/${cold}`, { action: "post" });
   const visitorAnswer = async (key: string, question: string, words: string): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     const response = await harness.fetch(`${SITE}/api/threads/${cold}/answers`, {
@@ -429,8 +434,19 @@ async function serve(request: IncomingMessage, response: ServerResponse): Promis
   response.end(Buffer.from(await answer.arrayBuffer()));
 }
 
+/** His Now line, set from his own page as Today sets it. */
+async function seedNow(): Promise<void> {
+  const response = await harness.fetch(`${SITE}/threads/api/now`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()), Origin: SITE },
+    body: new TextEncoder().encode(JSON.stringify({ text: "Getting Stigmer 0.1 into the hands of its first teams" })),
+  });
+  if (!response.ok) throw new Error(`seeding the Now line answered ${response.status}: ${await response.text()}`);
+}
+
 await seed();
 await seedJournal();
+await seedNow();
 createServer((request, response) => {
   serve(request, response).catch((error: unknown) => {
     console.error(error);

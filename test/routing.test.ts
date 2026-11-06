@@ -9,7 +9,10 @@
 // /people/<n>, and the journal's /journal, a day, a week, the storylines and a storyline), every thread's address and every ask's (/ask/<slug>) answer the threads page with the site's headers (its CSP among them) and status 200, whatever the number,
 // with no sign-in; the people pages' old addresses under /threads/, and /people/, redirect to /people for good; because
 // Access guards only the threads' calls, never a thread's page; and any other path under /threads/ is what the
-// site's files make of it.
+// site's files make of it. The home page, /, and its feed, /feed.xml, reach the code too (test/home.test.ts holds what
+// they say), and `"/"` in `run_worker_first` names the root alone: every file beside it, the stylesheet, a picture,
+// a script and the other pages, still comes straight from site/ with no code in its path, and /index.html keeps its
+// redirect to /.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -54,11 +57,44 @@ describe("the Worker's code", () => {
   });
 });
 
-describe("the site's own files", () => {
+describe("the home page and its feed", () => {
+  it("answers /feed.xml from the code, as an Atom feed", async () => {
+    const response = await harness.fetch(`${SITE}/feed.xml`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/atom+xml; charset=utf-8");
+  });
+
+  it("serves / as the home page, and redirects /index.html to it", async () => {
+    const page = await harness.fetch(`${SITE}/`, { redirect: "manual" });
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain(`<title>${titleOf("index.html")}</title>`);
+    const moved = await harness.fetch(`${SITE}/index.html`, { redirect: "manual" });
+    expect(moved.status).toBe(307);
+    expect(new URL(moved.headers.get("location") ?? "", SITE).pathname).toBe("/");
+  });
+
   it.each([
-    ["/", "index.html"],
-    ["/feedback", "feedback.html"],
-  ])("serve %s from site/%s, with no code in its path", async (path, file) => {
+    ["/style.css", "text/css"],
+    ["/img/avatar.webp", "image/webp"],
+    ["/talk.js", "javascript"],
+    ["/robots.txt", "text/plain"],
+    ["/feedback", "text/html"],
+  ])("still serves %s as a file: \"/\" names the root alone, never everything under it", async (path, type) => {
+    const response = await harness.fetch(`${SITE}${path}`, { redirect: "manual" });
+    expect([path, response.status]).toEqual([path, 200]);
+    expect(response.headers.get("content-type")).toContain(type);
+    expect(response.headers.get("cache-control")).not.toBe("no-store");
+  });
+
+  it("answers a path no file has with the site's 404 page, not the code's JSON", async () => {
+    const response = await harness.fetch(`${SITE}/nothing-here`, { redirect: "manual" });
+    expect(response.status).toBe(404);
+    expect(response.headers.get("content-type")).toContain("text/html");
+  });
+});
+
+describe("the site's own files", () => {
+  it.each([["/feedback", "feedback.html"]])("serve %s from site/%s, with no code in its path", async (path, file) => {
     const response = await harness.fetch(`${SITE}${path}`, { redirect: "manual" });
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/html");

@@ -161,7 +161,7 @@ function migrations(): { number: string; statements: string[] }[] {
 }
 
 /** The tables `reset` empties, children before the tables they name, because D1 checks foreign keys. */
-const TABLES = ["events", "comments", "members", "attendees", "pages", "threads", "people", "talk_days", "talk_senders", "answer_senders", "ask_thread_senders", "ask_answer_senders", "journal_answers", "journal_storylines", "journal_entries", "journal_versions", "journal_photos"];
+const TABLES = ["events", "comments", "members", "attendees", "pages", "threads", "people", "talk_days", "talk_senders", "answer_senders", "ask_thread_senders", "ask_answer_senders", "journal_answers", "journal_storylines", "journal_entries", "journal_versions", "journal_photos", "now_lines"];
 
 /**
  * The Worker's evaluation key in the harness, as the deploy hands it over (an RSA private key as a JWK), and its

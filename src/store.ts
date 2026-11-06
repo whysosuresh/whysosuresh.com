@@ -37,6 +37,12 @@
 // that key's answer, never bringing back an older one). A stranger reads other people's answers to a question only
 // once their own key has answered it (`historyPublic`), so nobody's answer is shaped by the ones before it.
 //
+// A public thread may also be on his home page (`feed_at`, migrations/0018_feed.sql), a second act of his (`post`,
+// `unpost`), so making a thread readable by its link never lists it for everyone who opens the site. Taking a thread
+// back from public takes it off the home page in the same statement. The home page reads the newest posted threads
+// and the Now line, his one line under the greeting, in one batch (`homeFeed`); the Now line is a history of rows, the
+// newest of which is the line (`nowLine`, `setNowLine`).
+//
 // Everyone he deals with is a person (`people`, migrations/0012_people.sql), numbered as threads are: the people he
 // invites, a visitor who wrote from the site or on a public thread with an address, and someone who told him
 // something in person. Who a site note or a told thread is from is `threads.person_id`; who wrote an invited
@@ -108,7 +114,7 @@ export const isTab = isList;
 // order: SQLite doesn't order an aggregate, so the door sorts them, and it never emits an address; it reads one only
 // to tell an invited reader which attendee is them. A response thread reads its ask's number, slug and title the same way.
 export const COLUMNS =
-  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at, person_id, (SELECT people.number FROM people WHERE people.id = threads.person_id) AS sender_number, meeting_when, meeting_minutes, meeting_where, (SELECT json_group_array(json_object('number', people.number, 'name', people.name, 'email', people.email)) FROM attendees JOIN people ON people.id = attendees.person_id WHERE attendees.thread_id = threads.id) AS meeting_people, ask_slug, ask_state, ask_thread_id, (SELECT asked.number FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_number, (SELECT asked.ask_slug FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_slug, (SELECT asked.title FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_title";
+  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at, feed_at, person_id, (SELECT people.number FROM people WHERE people.id = threads.person_id) AS sender_number, meeting_when, meeting_minutes, meeting_where, (SELECT json_group_array(json_object('number', people.number, 'name', people.name, 'email', people.email)) FROM attendees JOIN people ON people.id = attendees.person_id WHERE attendees.thread_id = threads.id) AS meeting_people, ask_slug, ask_state, ask_thread_id, (SELECT asked.number FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_number, (SELECT asked.ask_slug FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_slug, (SELECT asked.title FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_title";
 
 export interface ThreadRow {
   id: string;
@@ -135,6 +141,8 @@ export interface ThreadRow {
   link_title: string | null;
   /** When he made it public; null while it isn't. */
   public_at: string | null;
+  /** When he put it on the home page, which only a public thread may be on; null while it isn't there. */
+  feed_at: string | null;
   /** The person a site note or told thread is from, and their number; null for his own and a note with no address. */
   person_id: string | null;
   sender_number: number | null;
@@ -547,7 +555,7 @@ export async function history(db: D1Database, threadId: string, limit: number, r
 
 /** A move a door asks for, as the store's own intent. */
 export type Move =
-  | { readonly action: "act" | "discuss" | "done" | "reopen" | "unsort" | "reply-opened" | "publish" | "unpublish" }
+  | { readonly action: "act" | "discuss" | "done" | "reopen" | "unsort" | "reply-opened" | "publish" | "unpublish" | "post" | "unpost" }
   | { readonly action: "drop"; readonly reason: string | null }
   | { readonly action: "space"; readonly space: string }
   | { readonly action: "file"; readonly link: string };
@@ -630,13 +638,34 @@ function ruleOf(move: Move, now: string): Rule {
         event: () => ({ type: "published", data: "json_object()" }),
       };
     case "unpublish":
-      // Taking a thread back is never refused while it is public, whatever its row says.
+      // Taking a thread back is never refused while it is public, whatever its row says. It leaves the home page in
+      // the same statement, so making it public again never lists it again unasked.
       return {
         from: [...OPEN, "done", "dropped", "filed"],
-        sets: () => ["public_at = NULL"],
+        sets: () => ["public_at = NULL", "feed_at = NULL"],
         where: "public_at IS NOT NULL",
         only: "owner",
         event: () => ({ type: "unpublished", data: "json_object()" }),
+      };
+    case "post":
+      // Listing a thread on the home page is a second act of his, after making it public: public alone is readable by
+      // anyone with the link, and posted is listed for everyone who opens the site. Posting again after taking it off
+      // gives it a new date, so it goes back to the top. Like `publish`, it leaves the status alone.
+      return {
+        from: [...OPEN, "done", "dropped", "filed"],
+        sets: (p) => [`feed_at = ${p.add(now)}`],
+        where: `${PUBLIC} AND feed_at IS NULL`,
+        only: "owner",
+        event: () => ({ type: "posted", data: "json_object()" }),
+      };
+    case "unpost":
+      // Taking it off the home page is never refused while it is there; it stays public.
+      return {
+        from: [...OPEN, "done", "dropped", "filed"],
+        sets: () => ["feed_at = NULL"],
+        where: "feed_at IS NOT NULL",
+        only: "owner",
+        event: () => ({ type: "unposted", data: "json_object()" }),
       };
     case "file":
       // Filing an issue needs GitHub, which only the sync holds. Filed is something to act on, so it carries
@@ -658,15 +687,16 @@ export function onlyFor(move: Move): Author | null {
 
 /**
  * Makes a move and writes its event, or neither: `no-thread` when there is no such thread, `not-his-words` when it
- * would publish a thread that isn't his own, `an-ask` when it would publish an ask's thread, `not-from-here` when the
- * thread isn't where the move starts. Every move stamps `moved_at`.
+ * would publish a thread that isn't his own, `an-ask` when it would publish an ask's thread, `not-public` when it would
+ * post a thread that isn't public, `not-from-here` when the thread isn't where the move starts. Every move stamps
+ * `moved_at`.
  */
 export async function makeMove(
   db: D1Database,
   locator: Locator,
   move: Move,
   actor: Author,
-): Promise<ThreadRow | "no-thread" | "not-from-here" | "not-his-words" | "an-ask"> {
+): Promise<ThreadRow | "no-thread" | "not-from-here" | "not-his-words" | "an-ask" | "not-public"> {
   const now = new Date().toISOString();
   const rule = ruleOf(move, now);
   const guard = (p: Params): string => `${locate(locator, p)} AND status IN (${p.list(rule.from)})${rule.where === undefined ? "" : ` AND ${rule.where}`}`;
@@ -685,6 +715,7 @@ export async function makeMove(
   const there = await find(db, locator, EVERY_THREAD);
   if (there === null) return "no-thread";
   if (move.action === "publish" && there.source !== "self") return "not-his-words";
+  if (move.action === "post" && (there.public_at === null || there.source !== "self")) return "not-public";
   return move.action === "publish" && there.ask_slug !== null ? "an-ask" : "not-from-here";
 }
 
@@ -1295,6 +1326,59 @@ export async function publicPreview(db: D1Database, number: number): Promise<Pre
     .prepare(`SELECT number, title, summary, body, main, (${PUBLIC}) AS public FROM threads WHERE number = ?1`)
     .bind(number)
     .first<PreviewRow>();
+}
+
+/** A thread on the home page, as the home page and its feed show it. */
+export interface FeedRow {
+  number: number;
+  title: string | null;
+  body: string;
+  feed_at: string;
+  /** The notes a stranger reads under it: shown, written as Public, neither a reply nor an answer to its page. */
+  notes: number;
+}
+
+/** The Now line under his greeting, and when he set it; an empty text is no line. */
+export interface NowRow {
+  text: string;
+  set_at: string;
+}
+
+/** The newest Now line's query: the newest row is the line, because no row is ever updated or deleted. */
+const NOW_LINE = "SELECT text, set_at FROM now_lines ORDER BY id DESC LIMIT 1";
+
+/**
+ * The home page's one read (src/home.ts), in one batch: the newest `limit` threads he posted, newest first, each
+ * holding the public condition in its own SQL beside being posted, so a row changed by hand never lists a private
+ * thread; and the Now line, null when he never set one. A note is what a stranger reads under the thread as a note: a
+ * comment written as Public and shown, neither a reply (`parent_id`) nor a visitor's answer to the page's questions
+ * (`question`), which the page shows under its questions rather than as notes.
+ */
+export async function homeFeed(db: D1Database, limit: number): Promise<{ items: FeedRow[]; now: NowRow | null }> {
+  const [items, now] = await db.batch([
+    db
+      .prepare(
+        `SELECT number, title, body, feed_at,
+           (SELECT COUNT(*) FROM comments WHERE comments.thread_id = threads.id AND comments.audience = 'public' AND comments.state = 'shown'
+             AND comments.question IS NULL AND comments.parent_id IS NULL) AS notes
+         FROM threads WHERE ${PUBLIC} AND threads.feed_at IS NOT NULL ORDER BY threads.feed_at DESC, threads.number DESC LIMIT ?1`,
+      )
+      .bind(limit),
+    db.prepare(NOW_LINE),
+  ]);
+  return { items: (items?.results ?? []) as FeedRow[], now: ((now?.results ?? [])[0] as NowRow | undefined) ?? null };
+}
+
+/** The Now line as it stands, null when he never set one. */
+export async function nowLine(db: D1Database): Promise<NowRow | null> {
+  return db.prepare(NOW_LINE).first<NowRow>();
+}
+
+/** Sets the Now line: a new row, so every earlier line is kept; an empty text takes the line off the home page. */
+export async function setNowLine(db: D1Database, text: string): Promise<NowRow> {
+  const row = await db.prepare("INSERT INTO now_lines (text, set_at) VALUES (?1, ?2) RETURNING text, set_at").bind(text, new Date().toISOString()).first<NowRow>();
+  if (row === null) throw new Error("the Now line was not kept");
+  return row;
 }
 
 /** A visitor's note on a public thread, as the door checked it. */

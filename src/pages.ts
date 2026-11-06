@@ -60,7 +60,7 @@ const SHELL = "/threads/";
 export const MAX_DESCRIPTION = 200;
 
 /** The headers a browser revalidates with, left off the request for a rewritten answer. */
-const CONDITIONAL = ["If-None-Match", "If-Modified-Since", "If-Match", "If-Unmodified-Since", "If-Range"];
+export const CONDITIONAL = ["If-None-Match", "If-Modified-Since", "If-Match", "If-Unmodified-Since", "If-Range"];
 
 export function isThreadsPage(pathname: string): boolean {
   return PAGE.test(pathname);
@@ -83,17 +83,25 @@ export function plainText(source: string, whole: boolean): string {
   return read.join(" ").replace(/\s+/g, " ").trim();
 }
 
+/**
+ * A text at most `max` code units long: as it is when it fits, else cut at the last space past half of it (anywhere,
+ * when there is none) with an ellipsis, the ellipsis counted.
+ */
+export function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
 /** A preview's description: at most `MAX_DESCRIPTION` code units, cut at a space with an ellipsis when longer. */
 export function description(row: Pick<PreviewRow, "summary" | "body" | "main">): string {
   const text = row.summary !== null && row.summary.trim() !== "" ? plainText(row.summary, true) : row.main === "text" ? plainText(row.body, false) : "";
-  if (text.length <= MAX_DESCRIPTION) return text;
-  const cut = text.slice(0, MAX_DESCRIPTION - 1);
-  const space = cut.lastIndexOf(" ");
-  return `${(space > MAX_DESCRIPTION / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+  return clip(text, MAX_DESCRIPTION);
 }
 
 /** A value inside a double-quoted attribute, escaped so it can't end the attribute or start markup. */
-function attribute(value: string): string {
+export function attribute(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/'/g, "&#39;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 

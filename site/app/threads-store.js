@@ -38,6 +38,10 @@
 // every storyline's trail. `saveJournal` saves his hand edit on the version it was opened at; a save the sync has
 // since overtaken is refused as Failed `stale`, whose `detail` names the newest version, and nothing is written.
 // `answerJournal` keeps a typed answer to a day's question. A photo loads from its own address (`journalPhoto`).
+//
+// His home page shows the threads he posts there (`feedAt` on every thread, set by the `post` move and cleared by
+// `unpost` or `unpublish`) under his Now line, one line he sets from Today: `readNow` and `saveNow` (/threads/api/now,
+// src/home.ts), his alone; an empty line takes it off the home page.
 
 /**
  * @typedef {import('./standing.js').List} List
@@ -48,7 +52,7 @@
  *   status: Status, kind: 'feedback' | 'idea' | null, dropReason: string | null, replyOpenedAt: string | null,
  *   ref: string | null, filedLink: string | null, movedAt: string | null, activityAt: string,
  *   main: 'text' | 'page' | 'link', link: { url: string, title: string | null } | null, publicAt: string | null,
- *   senderNumber?: number | null, shared?: number, waiting?: boolean,
+ *   feedAt?: string | null, senderNumber?: number | null, shared?: number, waiting?: boolean,
  *   meeting?: import('./meetings.js').Meeting | null, ask?: AskMark | null
  * }} Thread
  * @typedef {'draft' | 'open' | 'closed'} AskState
@@ -96,7 +100,7 @@
  * @typedef {{ id: number, at: string, actor: 'owner' | 'sync' | 'visitor' | 'import' | string, type: string, data: Record<string, unknown> }} Event
  * @typedef {{ thread: Thread, page: Page | null, people: Person[], comments: Comment[], events: Event[], truncated: boolean, answeredBy?: Answerer[] }} Shown
  * @typedef {{ threads: Thread[], counts: Record<List, number>, next: number | null }} Listing
- * @typedef {{ action: 'act' | 'discuss' | 'unsort' | 'done' | 'reopen' | 'reply-opened' | 'publish' | 'unpublish' }
+ * @typedef {{ action: 'act' | 'discuss' | 'unsort' | 'done' | 'reopen' | 'reply-opened' | 'publish' | 'unpublish' | 'post' | 'unpost' }
  *   | { action: 'drop', reason: string }
  *   | { action: 'space', space: string }} Action
  * @typedef {'title' | 'summary' | 'body'} Field
@@ -108,6 +112,7 @@
  *   versions: { version: number, savedAt: string, actor: string, bytes: number }[], answers: JournalAnswer[] }} JournalRead
  * @typedef {{ key: string, state: string, mark: 'new' | 'closed' | null }} JournalTouch
  * @typedef {{ name: string, first: string, last: string, state: string, mark: 'new' | 'closed' | null, days: JournalTouch[] }} JournalTrail
+ * @typedef {{ text: string, setAt: string }} NowLine the line under his greeting on the home page, and when he set it
  */
 
 /** The sign-in has run out, or this browser isn't signed in. */
@@ -510,4 +515,14 @@ export async function journalStorylines() {
 /** The address a journal photo loads from, behind the same sign-in as every call. @param {string} id */
 export function journalPhoto(id) {
   return `${API}/journal/photos/${id}`;
+}
+
+/** The Now line on his home page, or null when there is none. @returns {Promise<NowLine | null>} */
+export async function readNow() {
+  return /** @type {{ now: NowLine | null }} */ (await call('/now', { method: 'GET' })).now;
+}
+
+/** Sets the Now line; an empty one takes it off the home page. @param {string} text @returns {Promise<NowLine | null>} */
+export async function saveNow(text) {
+  return /** @type {{ now: NowLine | null }} */ (await post('/now', { text })).now;
 }

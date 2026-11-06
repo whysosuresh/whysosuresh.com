@@ -39,6 +39,8 @@ const MAX_NAME = 80;
 const MAX_LINK = 200;
 /** The longest drop reason, in UTF-16 code units of the trimmed text. */
 const MAX_REASON = 120;
+/** The longest Now line, in UTF-16 code units of the trimmed text: one line under his greeting. */
+export const MAX_NOW = 140;
 /** Where an item came from: a kind, a colon, and an id of printable ASCII. */
 const REF_SHAPE = /^[a-z]+:[\x21-\x7e]{1,190}$/;
 /** The only place a thread is filed: a GitHub issue's address. */
@@ -184,6 +186,8 @@ export function readMove(value: unknown): Move | null {
     case "reply-opened":
     case "publish":
     case "unpublish":
+    case "post":
+    case "unpost":
       return keys === "action" ? { action: value.action } : null;
     case "drop": {
       if (keys !== "action,reason" || typeof value.reason !== "string") return null;
@@ -203,6 +207,18 @@ export function readMove(value: unknown): Move | null {
     default:
       return null;
   }
+}
+
+/**
+ * The Now line he sets from Today, as `{"text"}`, trimmed: at most `MAX_NOW` code units, one line with no control
+ * character, well formed; an empty text takes the line off. Null for anything else.
+ */
+export function readNowLine(value: unknown): string | null {
+  const given = exactly(value, ["text"]);
+  if (given === null || typeof given.text !== "string") return null;
+  const text = given.text.trim();
+  if (text.length > MAX_NOW || CONTROL.test(text) || !text.isWellFormed()) return null;
+  return text;
 }
 
 /**
