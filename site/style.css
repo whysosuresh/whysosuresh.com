@@ -734,8 +734,20 @@ textarea.t-field { resize: vertical; line-height: 1.5; }
 .threads .t-pub-bar .t-pub-sign-in { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 600; }
 .t-pub-doc { max-width: 760px; margin: 0 auto; padding: 8px 24px 56px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-content: start; }
 .t-pub-doc .t-feed { padding-top: 10px; }
-.t-cm-pending .t-cm-box { border: 1.5px solid var(--ink); }
-.t-cm-pending .t-cm-head { background: var(--accent-soft); border-top-left-radius: 9px; border-top-right-radius: 9px; }
+.t-answering { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 13px; }
+.t-answering[data-full="true"] { padding: 0; border: 0; background: transparent; font-size: 12.5px; color: var(--ink); }
+.t-answering b { font-weight: 700; }
+.t-answering-label { font-weight: 600; }
+.t-answering .t-answering-field { width: 180px; max-width: 100%; padding: 4px 9px; }
+.t-answering[data-full="true"] .t-answering-field { width: 160px; padding: 3px 9px; }
+.t-answering-field[aria-invalid="true"] { border-color: var(--ink); box-shadow: 0 0 0 2px var(--ink); }
+.t-answering .t-btn { padding: 3px 10px; font-size: 12.5px; }
+.t-answering-hint { flex-basis: 100%; color: var(--muted); font-size: 12px; }
+.t-page-bar[data-answering] { gap: 8px 12px; padding: 8px 14px; }
+.t-page-site { min-width: 0; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t-full-link { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; padding-top: 8px; margin-top: 4px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.t-full-link b { color: var(--ink); font-size: 12px; }
+.t-full-link .t-btn { margin-left: auto; padding: 3px 10px; font-size: 12px; }
 .t-cm-from { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .t-cm-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 0 12px 10px; }
 .t-cm-actions .t-note { margin-left: auto; }

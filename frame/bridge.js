@@ -3,11 +3,15 @@
 // tools/frame.ts writes into src/frame-bridge.ts), run inside the page's sealed frame. It is the page's only way to
 // speak to the thread around it, by `postMessage` to the threads page, because the frame has an opaque origin and no
 // network (`connect-src 'none'`). Nothing here saves anything or knows who is reading: the thread saves every answer
-// and comment through its own calls, as whoever is signed in.
+// and comment through its own calls, as whoever is signed in, or, on a public thread, as the visitor who named
+// themselves there.
 //
-// On its own (a public thread, or the page opened at its address) it only says how tall the page is, as the frame's
-// first script always did, and hides the page's own "answer on the thread" lines (`data-outside-thread`), which are
-// for the page as claude.ai shows it. The signed-in thread answers its `ready` with `hello`, and then it also:
+// On its own (the page opened at its address) it only says how tall the page is, as the frame's first script always
+// did, and hides the page's own "answer on the thread" lines (`data-outside-thread`), which are for the page as
+// claude.ai shows it. A public thread's view answers its `ready` with `hello` and `visitor: true`, and then it draws the
+// answer boxes alone, for answers of at most 4,000 characters, public with the name the visitor gave, and never the
+// Comment pill or underlines, which strangers don't get. The signed-in thread answers its `ready` with `hello`, and
+// then it also:
 //
 // - draws an answer box under each of the page's questions (`data-thread-question="<id>"`), with everyone's answers
 //   under it, in a closed shadow root and the threads' own look, so the page's CSS and the box can't touch each other;
@@ -17,6 +21,9 @@
 //   own markup, finds them again in a later version by the text either side, and says where each sits (`anchors`);
 // - says when underlined words are clicked (`open`), and on a page that moves on a click (a deck), swallows the one
 //   click that ends a selection, so selecting words doesn't move it.
+//
+// The thread says whether an answer was kept (`saved`), and when it wasn't, may say why in a short line (`problem`),
+// drawn as text under the box.
 //
 // Every message is one object whose `whysosuresh` names its kind, checked field by field on arrival (`readFromThread`
 // here, site/app/page-talk.js on the thread's side); every text is drawn as text. The page posts to the site's own
@@ -29,8 +36,11 @@ export const QUESTION_SHAPE = /^[a-z0-9-]{1,40}$/;
 /** The most words one comment may quote, in UTF-16 code units, and the most text kept either side of them. */
 export const MAX_QUOTE = 500;
 export const MAX_CONTEXT = 64;
-/** The longest answer, as the threads' calls keep it. */
+/** The longest answer, as the threads' calls keep it, and the longest a visitor's may be (src/note.ts). */
 export const MAX_ANSWER = 32_000;
+export const MAX_VISITOR_ANSWER = 4000;
+/** The longest reason the thread may give for an answer it didn't keep. */
+export const MAX_PROBLEM = 200;
 /** The most questions, answers and discussions one page's messages carry. */
 export const MAX_ITEMS = 500;
 /** What every message carries under this key: its kind. */
@@ -40,8 +50,8 @@ export const KEY = 'whysosuresh';
  * @typedef {{ quote: string, prefix: string, suffix: string }} Quote
  * @typedef {{ question: string, name: string, body: string, at: string, mine: boolean }} Answer
  * @typedef {{ id: string, quote: string, prefix: string, suffix: string }} Anchor
- * @typedef {{ kind: 'hello' } | { kind: 'discussion', answers: Answer[], anchors: Anchor[], active: string | null }
- *   | { kind: 'focus', id: string, scroll: boolean } | { kind: 'saved', question: string, ok: boolean }} FromThread
+ * @typedef {{ kind: 'hello', visitor: boolean } | { kind: 'discussion', answers: Answer[], anchors: Anchor[], active: string | null }
+ *   | { kind: 'focus', id: string, scroll: boolean } | { kind: 'saved', question: string, ok: boolean, problem: string | null }} FromThread
  */
 
 /** @param {unknown} value @returns {value is Record<string, unknown>} */
@@ -89,7 +99,8 @@ export function readFromThread(data) {
   if (!isRecord(data)) return null;
   switch (data[KEY]) {
     case 'hello':
-      return hasExactly(data, [KEY]) ? { kind: 'hello' } : null;
+      if (hasExactly(data, [KEY])) return { kind: 'hello', visitor: false };
+      return hasExactly(data, [KEY, 'visitor']) && data.visitor === true ? { kind: 'hello', visitor: true } : null;
     case 'discussion': {
       if (!hasExactly(data, [KEY, 'answers', 'anchors', 'active'])) return null;
       const { answers, anchors, active } = data;
@@ -109,10 +120,13 @@ export function readFromThread(data) {
       return hasExactly(data, [KEY, 'id', 'scroll']) && isId(data.id) && typeof data.id === 'string' && typeof data.scroll === 'boolean'
         ? { kind: 'focus', id: data.id, scroll: data.scroll }
         : null;
-    case 'saved':
-      return hasExactly(data, [KEY, 'question', 'ok']) && typeof data.question === 'string' && QUESTION_SHAPE.test(data.question) && typeof data.ok === 'boolean'
-        ? { kind: 'saved', question: data.question, ok: data.ok }
-        : null;
+    case 'saved': {
+      const given = hasExactly(data, [KEY, 'question', 'ok']) || hasExactly(data, [KEY, 'question', 'ok', 'problem']);
+      const { question, ok, problem } = data;
+      if (!given || typeof question !== 'string' || !QUESTION_SHAPE.test(question) || typeof ok !== 'boolean') return null;
+      if (problem !== undefined && (!isText(problem, MAX_PROBLEM) || problem.trim() === '')) return null;
+      return { kind: 'saved', question, ok, problem: typeof problem === 'string' ? problem : null };
+    }
     default:
       return null;
   }
@@ -196,7 +210,10 @@ b{margin-right:6px}
 time{color:var(--faint);font-size:11.5px;white-space:nowrap}
 .list{border-top:1px solid var(--line)}
 .head{padding:6px 12px 0;color:var(--faint);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
-.problem{padding:0 12px 6px;color:var(--ink);font-size:12px;font-weight:600}`;
+.problem{padding:0 12px 6px;color:var(--ink);font-size:12px;font-weight:600}
+.problem:empty{display:none}
+.count{color:var(--faint);font-size:11.5px;font-variant-numeric:tabular-nums}
+.count.over{color:var(--ink);font-weight:700}`;
 /**
  * The Comment pill sits on the page's own ground, which may be light or dark whatever the device says, so it is one
  * look on every page: black, with a pale ring that keeps it apart from a dark page.
@@ -273,7 +290,12 @@ function start() {
 
   /** Everything the bridge drew into the page, which is never the page's words. @type {Set<Element>} */
   const hosts = new Set();
+  /** Whether the thread said hello: answer boxes for everyone; Comment and underlines only for the signed-in thread. */
+  let answering = false;
   let discussing = false;
+  /** The longest answer a box takes, and what its bar says: the signed-in thread's, until a visitor's hello. */
+  let maxAnswer = MAX_ANSWER;
+  let boxNote = 'Saved on the thread, under your sign-in';
   /** @type {Extract<FromThread, { kind: 'discussion' }> | null} */
   let discussion = null;
   /** @type {Map<string, Range>} */
@@ -360,7 +382,7 @@ function start() {
   };
 
   /* An answer box under each question: the reader's own answer (or a box for it), then everyone else's. */
-  /** @type {Map<string, { box: HTMLElement, mine: HTMLElement, form: HTMLElement, area: HTMLTextAreaElement, save: HTMLButtonElement, cancel: HTMLButtonElement, problem: HTMLElement, list: HTMLElement, editing: boolean }>} */
+  /** @type {Map<string, { box: HTMLElement, mine: HTMLElement, form: HTMLElement, area: HTMLTextAreaElement, save: HTMLButtonElement, cancel: HTMLButtonElement, problem: HTMLElement, count: HTMLElement, list: HTMLElement, editing: boolean }>} */
   const boxes = new Map();
   const drawBoxes = () => {
     for (const [id, node] of questions) {
@@ -373,16 +395,30 @@ function start() {
         const save = /** @type {HTMLButtonElement} */ (make('button', { type: 'button', class: 'go' }, ['Save answer']));
         const cancel = /** @type {HTMLButtonElement} */ (make('button', { type: 'button', class: 'link' }, ['Cancel']));
         const problem = make('div', { class: 'problem', role: 'status' });
-        const form = make('div', {}, [area, problem, make('div', { class: 'bar' }, [make('span', { class: 'note' }, ['Saved on the thread, under your sign-in']), cancel, save])]);
+        const count = make('span', { class: 'count' });
+        count.hidden = true;
+        const form = make('div', {}, [area, problem, make('div', { class: 'bar' }, [make('span', { class: 'note' }, [boxNote]), count, cancel, save])]);
         const mine = make('div', { class: 'row' });
         const list = make('div', { class: 'list' });
         const box = make('div', { class: 'b' }, [mine, form, list]);
         root.append(make('style', {}, [LOOK]), box);
-        const made = { box, mine, form, area, save, cancel, problem, list, editing: false };
+        const made = { box, mine, form, area, save, cancel, problem, count, list, editing: false };
         parts = made;
+        // Near the limit, the box counts; past it, it says so, and Save keeps the words.
+        const counted = () => {
+          const length = area.value.trim().length;
+          count.hidden = length <= maxAnswer - 500;
+          count.textContent = `${length.toLocaleString('en-GB')} / ${maxAnswer.toLocaleString('en-GB')}`;
+          count.classList.toggle('over', length > maxAnswer);
+        };
+        area.addEventListener('input', counted);
         const send = () => {
           const body = area.value.trim();
-          if (body === '' || body.length > MAX_ANSWER) return area.focus();
+          if (body.length > maxAnswer) {
+            problem.textContent = `Keep it to ${maxAnswer.toLocaleString('en-GB')} characters.`;
+            return area.focus();
+          }
+          if (body === '') return area.focus();
           save.disabled = true;
           save.textContent = 'Saving…';
           problem.textContent = '';
@@ -506,9 +542,14 @@ function start() {
     const said = readFromThread(event.data);
     if (said === null) return;
     if (said.kind === 'hello') {
-      discussing = true;
+      if (boxes.size === 0 && said.visitor) {
+        maxAnswer = MAX_VISITOR_ANSWER;
+        boxNote = 'Public, with the name you gave';
+      }
+      answering = true;
+      discussing = !said.visitor && maxAnswer === MAX_ANSWER;
       drawBoxes();
-    } else if (said.kind === 'discussion' && discussing) {
+    } else if (said.kind === 'discussion' && answering) {
       discussion = said;
       drawBoxes();
       mark();
@@ -525,8 +566,10 @@ function start() {
       if (said.ok) {
         parts.editing = false;
         parts.area.value = '';
+        parts.problem.textContent = '';
+        parts.count.hidden = true;
         drawBoxes();
-      } else parts.problem.textContent = 'That answer didn’t save. It is still in the box.';
+      } else parts.problem.textContent = said.problem ?? 'That answer didn’t save. It is still in the box.';
     }
   });
 

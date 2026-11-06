@@ -136,10 +136,8 @@ export interface ThreadRow {
   meeting_people: string;
   /** On a list's rows only (`LIST_EXTRAS`): how many people the thread is shared with now. */
   shared?: number;
-  /** On a list's rows only: 1 when the last word on it is an invited person's, else 0. */
+  /** On a list's rows only: 1 when the last word on it is an invited person's or a visitor's, else 0. */
   waiting?: number;
-  /** On a list's rows only: how many visitors' notes on it wait for his OK. */
-  pending?: number;
 }
 
 /** A thread's main section: its text, a page saved into it, or a link to an artifact on claude.ai. */
@@ -163,7 +161,7 @@ export interface CommentRow {
   body: string;
   created_at: string;
   audience: string;
-  /** `shown` or `dropped`, or `pending` while he has sent a visitor's words back to waiting (`hold`). */
+  /** `shown` or `dropped` (`pending`, a visitor's note waiting for his OK, ended with migrations/0015). */
   state: string;
   /**
    * The person who wrote it (an invited person, or a visitor who typed an address) and their number; null for the
@@ -201,11 +199,8 @@ export type Anchor =
   | { readonly question: string }
   | { readonly quote: string; readonly prefix: string; readonly suffix: string; readonly version: number };
 
-/**
- * A visitor's note or answer as he rules on it: dropped, or shown again (how the page undoes a drop); `hold` sends one
- * back to waiting, which the page that showed waiting notes still asks for.
- */
-export type Judgement = "show" | "drop" | "hold";
+/** A visitor's note or answer as he rules on it: dropped, or shown again (how the page undoes a drop). */
+export type Judgement = "show" | "drop";
 
 /** A person a thread is shared with, as the owner sees them. */
 export interface PersonRow {
@@ -426,15 +421,14 @@ async function listed(db: D1Database, page: D1PreparedStatement): Promise<Listed
 /**
  * What the owner's list says of each row beside the thread: how many people it is shared with now (`shared`),
  * whether the last word on it is someone else's (`waiting`): an invited person's or a visitor's newest comment is later
- * than the owner's newest comment or change, so it waits on him until he comments, moves it or edits it; and how many visitors'
- * notes on it wait for his OK (`pending`). Derived from the rows already kept, with nothing stored for it; times
+ * than the owner's newest comment or change, so it waits on him until he comments, moves it or edits it. Derived from
+ * the rows already kept, with nothing stored for it; times
  * compare as the ISO strings every writer stamps.
  */
 const LIST_EXTRAS = `(SELECT COUNT(*) FROM members WHERE members.thread_id = threads.id AND members.removed_at IS NULL) AS shared,
   (COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.thread_id = threads.id AND comments.author IN ('member', 'visitor')), '')
     > MAX(COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.thread_id = threads.id AND comments.author = 'owner'), ''),
-          COALESCE((SELECT MAX(at) FROM events WHERE events.thread_id = threads.id AND events.actor = 'owner'), ''))) AS waiting,
-  (SELECT COUNT(*) FROM comments WHERE comments.thread_id = threads.id AND comments.state = 'pending') AS pending`;
+          COALESCE((SELECT MAX(at) FROM events WHERE events.thread_id = threads.id AND events.actor = 'owner'), ''))) AS waiting`;
 
 /** Up to `limit` threads of a tab, newest number first, below `before` when given, each with `LIST_EXTRAS`. */
 export async function listByNumber(db: D1Database, tab: Tab, before: number | null, limit: number): Promise<Listed> {
@@ -1291,13 +1285,12 @@ export async function addAnswer(db: D1Database, number: number, answer: VisitorA
 
 /** What each ruling on a visitor's words starts from, goes to, and the event it writes. */
 const JUDGEMENTS = {
-  show: { from: ["pending", "dropped"], to: "shown", event: "note-shown" },
-  drop: { from: ["pending", "shown"], to: "dropped", event: "note-dropped" },
-  hold: { from: ["shown", "dropped"], to: "pending", event: "note-held" },
+  show: { from: ["dropped"], to: "shown", event: "note-shown" },
+  drop: { from: ["shown"], to: "dropped", event: "note-dropped" },
 } as const satisfies Record<Judgement, { from: readonly string[]; to: string; event: string }>;
 
 /**
- * His ruling on a visitor's note or answer, the owner's alone: dropped, shown again, or back to waiting. One batch
+ * His ruling on a visitor's note or answer, the owner's alone: dropped, or shown again. One batch
  * with its event, which names the note and the visitor's typed name (never their email), and the thread's last
  * activity. `no-thread` when there is no such thread, `no-note` when it holds no such visitor's note,
  * `not-from-here` when the note isn't where the ruling starts; either way nothing is written.

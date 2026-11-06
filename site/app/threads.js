@@ -4,7 +4,7 @@
 // the side rail is drawn for rooms, side by side at the top level: its head is the site, then Today (/me), Threads
 // (/threads/) with the five spaces under it, People (/people) and Meetings (/meetings). On a phone the bar holds
 // Today, Threads, Find, New and More, with People and Meetings under More. The views, each at its own address: Today
-// (/me: the next meeting as a card, then notes waiting for his OK, threads waiting on him, new ones, and open threads
+// (/me: the next meeting as a card, then threads waiting on him, new ones, and open threads
 // that sat a week untouched), the Threads room (/threads/, or
 // /threads/?tab=act&space=company: four tabs by where a thread stands, and the five spaces), and a thread
 // (/threads/42-who-owns-what): its living
@@ -33,18 +33,24 @@
 //
 // One of his own threads can be public (Share's switch). Anyone who isn't in it (signed out, signed in to other
 // threads, or removed from every one) then reads it at its address in the public view: the thread as the public call
-// answers it (`showPublic`, outside Access), the comments written as Public that he OK'd or wrote, and "Send Suresh a
-// note on this", a form with the site's bot check (../talk-send.js) whose note waits for his OK. On his side such a
-// note is a solid-bordered card, "Waits for your OK", with Show it, Drop it and Reply by email; Today lists the
-// threads with notes waiting, and a globe marks a public thread in every list. A comment on a public thread is
-// written for anyone by default (Public), or for the people here, or for him alone. A visitor's words are drawn as
-// typed, never as Markdown, wherever they show.
+// answers it (`showPublic`, outside Access), the comments written as Public, and "Send Suresh a note on this", a form
+// with the site's bot check (../talk-send.js) whose note shows at once. When its page asks questions, a visitor
+// answers them too, with no sign-in: they type their name once (in a line above the page, or in the page's bar in full
+// screen), and their browser keeps a random key with it (`localStorage`, or for the visit when storage is off), which
+// the public call reads to say which answers are theirs; under each question the page shows their answer, and other
+// people's once they gave their own. A thread's address with `?full` opens its page in full screen at once, which is
+// the link Share offers for answering. On his side a visitor's note is a comment with Drop and Reply by email, a
+// visitor's answer sits under its question and has a line in the history with Drop, and Drop's Undo shows it again;
+// a visitor's word makes the thread wait on him, and a globe marks a public thread in every list. A comment on a
+// public thread is written for anyone by default (Public), or for the people here, or for him alone. A visitor's words
+// are drawn as typed, never as Markdown, wherever they show.
 //
 // A page that asks questions takes their answers in place, and any page takes comments on its words. The page's frame
 // carries the bridge (frame/bridge.js), which speaks to this page by message alone (page-talk.js holds this side's
 // checks): it draws an answer box under each of the page's questions, offers Comment beside selected words, and
-// underlines the words each discussion is on. Every write is this page's, as whoever is signed in: an answer the page
-// asks for is taken only while the frame holds the focus (the reader clicked or typed in it), at most ten a minute,
+// underlines the words each discussion is on (on a public thread, the answer boxes alone). Every write is this page's,
+// as whoever is signed in or the visitor who named themselves: an answer the page asks for is taken only while the
+// frame holds the focus (the reader clicked or typed in it), at most ten a minute,
 // for a question the page named; words and replies are typed here, never in the frame. A discussion on the page's
 // words sits beside them on a wide screen, in a column under the details; below 1000 px and in full screen its words
 // open it in a sheet, and the page's discussions are listed under it. Every comment can have replies, except a
@@ -151,6 +157,9 @@ import {
  * @typedef {{ label: string, sub: string, side: string, number: number | null, person: number | null, run: () => void }} FindItem
  * @typedef {{ text: string } | { email: string, holder: { number: number, name: string | null, email: string | null } }} AddressProblem
  * @typedef {{ name: string, email: string, body: string, sent: boolean, busy: boolean, problem: string }} NoteForm
+ * @typedef {{ name: string, key: string, kept: boolean, naming: boolean, missing: boolean }} Visitor
+ *   Who answers a public page from this browser: the name they gave, their key, whether the browser keeps both,
+ *   whether the name is being typed, and whether a save just asked for it.
  */
 
 /** @type {readonly Tab[]} */
@@ -198,6 +207,12 @@ const SEARCH_WAIT_MS = 150;
 const TELUGU = /[ఀ-౿]/;
 /** Marks this device as one that has signed in before, so a signed-out visit shows a small "Sign in". */
 const SIGNED_IN_KEY = 'threads:signed-in';
+/** Where this browser keeps a visitor's name and key, as JSON. */
+const VISITOR_KEY = 'threads:visitor';
+/** A visitor's key: 32 random bytes as hex, the Worker's own shape (src/note.ts). */
+const VISITOR_KEY_SHAPE = /^[0-9a-f]{64}$/;
+/** The longest name a visitor may give, as the Worker takes it. */
+const MAX_VISITOR_NAME = 80;
 /** The sandbox a page's frame runs in, the same tokens its answer's CSP names (src/page.ts). */
 const PAGE_SANDBOX = 'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox';
 /** The heights a page may ask its frame for; anything else is ignored. */
@@ -807,6 +822,8 @@ class Threads {
     this.publicShown = null;
     /** The public view's note, as it is being written. @type {NoteForm} */
     this.note = { name: '', email: '', body: '', sent: false, busy: false, problem: '' };
+    /** Who answers a public page from this browser. @type {Visitor} */
+    this.visitor = readVisitor();
     /** Dropped notes whose words are shown under their line. @type {Set<string>} */
     this.notesOpened = new Set();
     /** The Share sheet's state while it is open. @type {Sharing | null} */
@@ -829,8 +846,8 @@ class Threads {
     this.opened = new Set();
     /** The page version shown, by thread; the newest when a thread has none here. @type {Map<number, number>} */
     this.pageVersions = new Map();
-    /** Whether the page fills the window. */
-    this.pageFull = false;
+    /** Whether the page fills the window: at first, when the address asks for it (`?full`, Share's link for answering). */
+    this.pageFull = new URLSearchParams(location.search).has('full');
     /** What the open page's frame has said. @type {Talk} */
     this.talk = freshTalk();
     /** The comment being written on words selected in the page, and its text. @type {WordsDraft | null} */
@@ -953,7 +970,7 @@ class Threads {
   async tryPublic(route) {
     if (route.view !== 'thread') return false;
     try {
-      this.publicShown = await showPublic(route.number);
+      this.publicShown = await showPublic(route.number, this.visitor.key);
     } catch {
       return false;
     }
@@ -1031,7 +1048,6 @@ class Threads {
       ...thread,
       shared: given.shared ?? thread.shared ?? known?.shared ?? 0,
       waiting: given.acted ? false : (thread.waiting ?? known?.waiting ?? false),
-      pending: thread.pending ?? known?.pending ?? 0,
     });
   }
 
@@ -1233,14 +1249,9 @@ class Threads {
       .sort((a, b) => b.number - a.number);
   }
 
-  /** Shared threads where an invited person had the last word, the most recent first. */
+  /** Threads where someone else had the last word (a person he invited, or a visitor), the most recent first. */
   waiting() {
     return [...this.threads.values()].filter((thread) => thread.waiting === true).sort((a, b) => b.activityAt.localeCompare(a.activityAt));
-  }
-
-  /** Public threads with visitors' notes waiting for his OK, the most recent first. */
-  noting() {
-    return [...this.threads.values()].filter((thread) => (thread.pending ?? 0) > 0).sort((a, b) => b.activityAt.localeCompare(a.activityAt));
   }
 
   /** New notes, newest first, but for one already waiting on him. */
@@ -1283,7 +1294,7 @@ class Threads {
     if (this.from === 'person' && this.person) return this.person.threads.map((thread) => thread.number);
     if (this.from !== 'today') return this.inTab(this.tab).map((thread) => thread.number);
     const seen = new Set();
-    return [...this.noting(), ...this.waiting(), ...this.fresh(), ...this.sat()]
+    return [...this.waiting(), ...this.fresh(), ...this.sat()]
       .map((thread) => thread.number)
       .filter((number) => (seen.has(number) ? false : (seen.add(number), true)));
   }
@@ -1395,7 +1406,7 @@ class Threads {
     const counts = new Map();
     for (const thread of this.threads.values()) if (isOpen(thread) && thread.space !== null) counts.set(thread.space, (counts.get(thread.space) ?? 0) + 1);
     const view = this.route.view;
-    const today = this.noting().length + this.waiting().length + this.fresh().length + this.sat().length;
+    const today = this.waiting().length + this.fresh().length + this.sat().length;
     const todayItem = el('a', { class: 't-nav-item', href: ME, 'data-go': 'today' }, [icon('sun'), 'Today', el('span', { class: 't-nav-count' }, [String(today)])]);
     const allItem = el('a', { class: 't-nav-item', href: THREADS, 'data-go': 'list' }, [icon('list'), 'Threads']);
     const peopleItem = el('a', { class: 't-nav-item', href: PEOPLE, 'data-go': 'people' }, [
@@ -1533,11 +1544,10 @@ class Threads {
   }
 
   todayView() {
-    const noting = this.noting();
     const waiting = this.waiting();
     const fresh = this.fresh();
     const sat = this.sat();
-    const total = noting.length + waiting.length + fresh.length + sat.length;
+    const total = waiting.length + fresh.length + sat.length;
     const date = new Date().toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
     /**
      * @param {string} title
@@ -1560,15 +1570,7 @@ class Threads {
         el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'new' }, [icon('plus'), 'New thread ', kbd('N')]),
       ]),
       ...this.nextMeetingCard('Next meeting'),
-      ...(noting.length > 0
-        ? [
-            section('Notes waiting for your OK', noting, ["a visitor's note shows only once you OK it"], (thread) => {
-              const n = thread.pending ?? 0;
-              return `${n} note${n === 1 ? '' : 's'} waiting · ${firstLine(thread)}`;
-            }, ''),
-          ]
-        : []),
-      ...(waiting.length > 0 ? [section('Waiting on you', waiting, ['the last word on a shared thread is theirs'], (thread) => firstLine(thread), '')] : []),
+      ...(waiting.length > 0 ? [section('Waiting on you', waiting, ["the last word is someone else's: a person you invited, or a visitor"], (thread) => firstLine(thread), '')] : []),
       section('New', fresh, [el('span', { class: 't-keys-hint' }, [kbd('A'), ' act · ', kbd('T'), ' talk · ', kbd('D'), ' drop'])], (thread) => this.rowLine(thread), 'All sorted.'),
       section('Sat a week', sat, ['still open, untouched for 7 days'], (thread) => `${ago(thread.activityAt)} in ${STATUS_NAMES[thread.status]}. Move it, or drop it.`, 'Nothing has sat a week.'),
     ]);
@@ -1758,7 +1760,8 @@ class Threads {
    * where each discussion's words sit; and the three that ask for something (`selected`, `answer`, `open`) are taken
    * only while the frame holds the focus, which it does when the reader clicked or typed in it, so a page script
    * acting on its own at load is refused. An answer also has to name a question the page named in `ready`, at most
-   * ten a minute from one frame, and is saved here as whoever is signed in.
+   * ten a minute from one frame, and is saved here as whoever is signed in. The public view answers its own frame
+   * (`onPublicPageMessage`).
    * @param {MessageEvent} event
    */
   onPageMessage(event) {
@@ -1771,8 +1774,12 @@ class Threads {
       if (said.height >= PAGE_HEIGHT.min && said.height <= PAGE_HEIGHT.max) frame.style.height = `${Math.round(said.height)}px`;
       return;
     }
+    if (!signedIn) {
+      this.onPublicPageMessage(said, frame);
+      return;
+    }
     const thread = this.shown?.thread;
-    if (!signedIn || this.route.view !== 'thread' || !thread || thread.main !== 'page') return;
+    if (this.route.view !== 'thread' || !thread || thread.main !== 'page') return;
     if (said.kind === 'ready') {
       this.talk = { ...freshTalk(), ready: true, questions: new Set(said.questions) };
       this.wordsDraft = null;
@@ -1814,6 +1821,120 @@ class Threads {
       this.talk.answered.push(now);
       void this.saveAnswer(thread, said.question, said.body);
     }
+  }
+
+  /**
+   * What a public thread's page says, for a visitor: a page that asks questions is answered `hello` as a visitor's, so
+   * it draws its answer boxes alone, and is told the answers the public call gave; an answer is taken under the same
+   * gates as a signed-in one (the frame's focus, ten a minute, a question the page named), needs the visitor's name
+   * first, and is sent with the site's bot check as this browser's.
+   * @param {import('./page-talk.js').FromPage} said
+   * @param {HTMLIFrameElement} frame
+   */
+  onPublicPageMessage(said, frame) {
+    const shown = this.publicShown;
+    if (!shown || shown.thread.main !== 'page' || !shown.page) return;
+    if (said.kind === 'ready') {
+      this.talk = { ...freshTalk(), ready: true, questions: new Set(said.questions) };
+      // A page that asks nothing is read as it is, as every public page was.
+      if (said.questions.length === 0) return;
+      frame.contentWindow?.postMessage({ [KEY]: 'hello', visitor: true }, '*');
+      prepareBotCheck();
+      this.renderPublic();
+      this.tellPublicPage();
+      return;
+    }
+    if (said.kind !== 'answer' || document.activeElement !== frame) return;
+    const tell = (/** @type {string} */ problem) => frame.contentWindow?.postMessage({ [KEY]: 'saved', question: said.question, ok: false, problem }, '*');
+    const now = Date.now();
+    this.talk.answered = this.talk.answered.filter((at) => now - at < 60_000);
+    if (!this.talk.questions.has(said.question) || this.talk.answered.length >= ANSWERS_A_MINUTE) {
+      tell('That answer didn’t save. It is still in the box.');
+      return;
+    }
+    if (this.visitor.naming) this.takeVisitorName();
+    if (this.visitor.name === '') {
+      tell(this.pageFull ? 'Add your name in the bar at the top first.' : 'Add your name above the page first.');
+      this.visitor = { ...this.visitor, naming: true, missing: true };
+      this.renderPublic();
+      focusIn(this.pubDoc, '#visitor-name');
+      return;
+    }
+    this.talk.answered.push(now);
+    void this.saveVisitorAnswer(shown.thread.number, said.question, said.body);
+  }
+
+  /**
+   * Tells a public page the answers the public call gave, as given: the visitor's own, and other people's under the
+   * questions they answered. Only when that changed.
+   */
+  tellPublicPage() {
+    const shown = this.publicShown;
+    const frame = this.pubDoc.querySelector('.t-page-frame');
+    if (!this.talk.ready || shown === null || !(frame instanceof HTMLIFrameElement)) return;
+    const comments = shown.comments.map((said) => ({
+      id: '',
+      author: said.author,
+      name: said.name,
+      state: 'shown',
+      body: said.body,
+      createdAt: said.createdAt,
+      question: said.question ?? null,
+      mine: said.mine === true,
+    }));
+    const message = discussionFor(placesOf(comments), { ownerName: 'Suresh', draft: null, active: null, asGiven: true });
+    const text = JSON.stringify(message);
+    if (text === this.talk.sent) return;
+    this.talk.sent = text;
+    frame.contentWindow?.postMessage(message, '*');
+  }
+
+  /**
+   * Sends a visitor's answer as this browser's, with the name they gave, tells the page whether it was kept (and why
+   * not), and reads the thread again, so their answer and the ones it opens show.
+   * @param {number} number
+   * @param {string} question
+   * @param {string} body
+   */
+  async saveVisitorAnswer(number, question, body) {
+    const frame = this.pubDoc.querySelector('.t-page-frame');
+    const tell = (/** @type {boolean} */ ok, /** @type {string | null} */ problem) =>
+      frame instanceof HTMLIFrameElement ? frame.contentWindow?.postMessage({ [KEY]: 'saved', question, ok, ...(problem === null ? {} : { problem }) }, '*') : undefined;
+    try {
+      await sendTo(`/api/threads/${number}/answers`, { question, body, name: this.visitor.name, key: this.visitor.key });
+    } catch (error) {
+      const reason = error instanceof Error && 'reason' in error ? error.reason : 'failed';
+      tell(
+        false,
+        reason === 'limit'
+          ? 'Today’s limit for answers is reached. Your answer is still in the box; try again tomorrow.'
+          : reason === 'gone'
+            ? 'This page doesn’t take answers any more.'
+            : 'That answer didn’t save. It is still in the box.',
+      );
+      return;
+    }
+    tell(true, null);
+    await this.refreshPublic(number);
+  }
+
+  /** Reads a public thread again, as this visitor, and draws it, its page and what the page is told. @param {number} number */
+  async refreshPublic(number) {
+    try {
+      this.publicShown = await showPublic(number, this.visitor.key);
+    } catch {
+      return;
+    }
+    this.renderPublic();
+    this.tellPublicPage();
+  }
+
+  /** Takes the name typed in the public view's name box, when there is one, and keeps it with the key. */
+  takeVisitorName() {
+    const field = this.pubDoc.querySelector('#visitor-name');
+    const name = field instanceof HTMLInputElement ? field.value.trim().slice(0, MAX_VISITOR_NAME) : this.visitor.name;
+    if (name === '') return;
+    this.visitor = { ...this.visitor, name, naming: false, missing: false, kept: keepVisitor(name, this.visitor.key) };
   }
 
   /** Forgets what the open page's frame said and what was being written on it, as another thread opens. */
@@ -2309,7 +2430,10 @@ class Threads {
     shown.comments.forEach((said, i) => {
       const order = shown.events.length + i;
       if (said.parent) return;
-      if (said.question) entries.push({ at: said.createdAt, order, node: this.answerLine(said, thread) });
+      // A dropped answer, like a dropped note, is drawn only on its drop's line, which can show it again.
+      if (said.question) {
+        if (said.state !== 'dropped') entries.push({ at: said.createdAt, order, node: this.answerLine(said, thread) });
+      }
       else if (said.quote) {
         // Words this version no longer has keep their whole discussion here, marked with the version they were on.
         if (this.talk.anchors.get(said.id) === null || thread.main !== 'page') entries.push({ at: said.createdAt, order, node: this.goneDisc(said, places, thread) });
@@ -2395,10 +2519,10 @@ class Threads {
         [name, words] = ['globe', ['made this no longer public']];
         break;
       case 'note-shown':
-        [name, words] = ['check', ['showed a note from ', word(data.name ?? 'someone')]];
+        [name, words] = ['check', ['showed ', this.visitorWordsOf(data.note), ' from ', word(data.name ?? 'someone')]];
         break;
       case 'note-dropped':
-        [name, words] = ['x', ['dropped a note from ', word(data.name ?? 'someone')]];
+        [name, words] = ['x', ['dropped ', this.visitorWordsOf(data.note), ' from ', word(data.name ?? 'someone')]];
         break;
       case 'note-held':
         [name, words] = ['reopen', ['put a note from ', word(data.name ?? 'someone'), ' back to wait']];
@@ -2445,20 +2569,20 @@ class Threads {
       );
       if (shownBefore) line.append(el('div', { class: 't-ev-before' }, [before ?? '(none)']));
     }
-    // A dropped note is drawn nowhere else; the line of its latest drop can show its words and put it back to wait.
+    // A dropped note or answer is drawn nowhere else; the line of its latest drop can show its words and show it again.
     const latest = event.type === 'note-dropped' && this.shown?.events.findLast((one) => one.type === 'note-dropped' && one.data.note === data.note)?.id === event.id;
     const dropped = latest && !this.member ? this.shown?.comments.find((said) => said.id === data.note && said.state === 'dropped') : undefined;
     if (dropped) {
       const open = this.notesOpened.has(dropped.id);
       line.querySelector('.t-ev-text')?.append(
         ' · ',
-        el('button', { type: 'button', class: 't-text-btn', 'data-act': 'note-peek', 'data-note': dropped.id, 'aria-expanded': String(open) }, [open ? 'Hide the note' : 'Show the note']),
+        el('button', { type: 'button', class: 't-text-btn', 'data-act': 'note-peek', 'data-note': dropped.id, 'aria-expanded': String(open) }, [open ? 'Hide the words' : 'Show the words']),
       );
       if (open) {
         line.append(
           el('div', { class: 't-ev-before' }, [
             plain(dropped.body),
-            el('button', { type: 'button', class: 't-text-btn', 'data-act': 'note-hold', 'data-note': dropped.id }, ['Back to waiting for your OK']),
+            el('button', { type: 'button', class: 't-text-btn', 'data-act': 'note-show', 'data-note': dropped.id }, ['Show it again']),
           ]),
         );
       }
@@ -2468,8 +2592,9 @@ class Threads {
 
   /**
    * A comment: the owner's, the sync's, an invited person's, or a visitor's note on a public thread, whose words are
-   * drawn as typed. A note waiting for his OK is a card of its own; a dropped one is drawn only on its event's line.
-   * Given the thread's places, a comment that can have replies is followed by them, and by Reply or its box.
+   * drawn as typed and which he may drop (Undo shows it again) or answer from his Gmail; a dropped one is drawn only on
+   * its event's line. Given the thread's places, a comment that can have replies is followed by them, and by Reply or
+   * its box.
    * @param {ThreadComment} said
    * @param {Thread} thread
    * @param {Places | null} [places]
@@ -2477,7 +2602,6 @@ class Threads {
    */
   commentNode(said, thread, places = null) {
     if (said.state === 'dropped') return [];
-    if (said.author === 'visitor' && said.state === 'pending') return this.member ? [] : [this.pendingNode(said, thread)];
     const who = said.author === 'owner' ? 'owner' : said.author === 'member' ? 'member' : said.author === 'visitor' ? 'visitor' : 'sync';
     const name = who === 'member' || who === 'visitor' ? (said.name?.trim() || 'Someone') : this.actorName(said.author, thread);
     const onlyMe = said.audience === 'owner';
@@ -2495,10 +2619,34 @@ class Threads {
             el('time', { datetime: said.createdAt }, [when(said.createdAt)]),
           ]),
           el('div', { class: 't-cm-body' }, [who === 'visitor' ? plain(said.body) : prose(said.body)]),
+          ...(who === 'visitor' && !this.member ? [this.visitorActions(said, thread)] : []),
         ]),
       ]),
       ...(places && repliable(said) ? this.repliesOf(said, places, thread) : []),
     ];
+  }
+
+  /**
+   * What he can do with a visitor's note: drop it (Undo shows it again), and reply from his own Gmail when they gave an
+   * address.
+   * @param {ThreadComment} said
+   * @param {Thread} thread
+   */
+  visitorActions(said, thread) {
+    const reply = said.senderEmail
+      ? [
+          el('a', { class: 't-btn t-btn-quiet', target: '_blank', rel: 'noopener', href: gmailLink(noteReply({ number: thread.number, title: titleOf(thread) }, { name: said.name, email: said.senderEmail, body: said.body }), this.me) }, [
+            icon('mail'),
+            'Reply by email',
+          ]),
+        ]
+      : [];
+    return el('div', { class: 't-cm-actions' }, [el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'note-drop', 'data-note': said.id }, ['Drop']), ...reply]);
+  }
+
+  /** "a note" or "an answer", as the history names a visitor's words by their id. @param {unknown} id */
+  visitorWordsOf(id) {
+    return this.shown?.comments.find((said) => said.id === id)?.question ? 'an answer' : 'a note';
   }
 
   /**
@@ -2541,7 +2689,7 @@ class Threads {
   /** Who wrote a comment, as a discussion card names them. @param {ThreadComment} said @param {Thread} thread */
   writerOf(said, thread) {
     if (said.mine) return 'You';
-    if (said.author === 'member') return said.name?.trim() || 'Someone';
+    if (said.author === 'member' || said.author === 'visitor') return said.name?.trim() || 'Someone';
     return this.actorName(said.author, thread);
   }
 
@@ -2651,7 +2799,7 @@ class Threads {
   }
 
   /**
-   * One line in the history for an answer to the page's question: who, its words, and Show.
+   * One line in the history for an answer to the page's question: who, its words, Show, and for a visitor's, Drop.
    * @param {ThreadComment} said
    * @param {Thread} thread
    */
@@ -2664,45 +2812,9 @@ class Threads {
         ' answered on the page ',
         el('span', { class: 't-ev-on' }, [`“${words}”`]),
         ...(thread.main === 'page' ? [' ', el('button', { type: 'button', class: 't-text-btn', 'data-act': 'answer-show', 'data-q': said.question ?? '' }, ['Show'])] : []),
+        ...(said.author === 'visitor' && !this.member ? [' · ', el('button', { type: 'button', class: 't-text-btn', 'data-act': 'note-drop', 'data-note': said.id }, ['Drop'])] : []),
       ]),
       el('time', { datetime: said.createdAt }, [when(said.createdAt)]),
-    ]);
-  }
-
-  /**
-   * A visitor's note waiting for his OK: who sent it and their email (his alone), their words as typed, and Show it,
-   * Drop it and Reply by email, which his Gmail opens as a draft.
-   * @param {ThreadComment} said
-   * @param {Thread} thread
-   */
-  pendingNode(said, thread) {
-    const name = said.name?.trim() || 'Someone';
-    const reply = said.senderEmail
-      ? [
-          el('a', { class: 't-btn t-btn-quiet', target: '_blank', rel: 'noopener', href: gmailLink(noteReply({ number: thread.number, title: titleOf(thread) }, { name: said.name, email: said.senderEmail, body: said.body }), this.me) }, [
-            icon('mail'),
-            'Reply by email',
-          ]),
-        ]
-      : [];
-    return el('div', { class: 't-cm t-cm-pending', 'data-audience': 'public' }, [
-      avatar('visitor', name),
-      el('div', { class: 't-cm-box' }, [
-        el('div', { class: 't-cm-head' }, [
-          el('b', {}, ['Waits for your OK']),
-          el('span', {}, ['·']),
-          el('b', {}, [this.nameNode(said.personNumber, name)]),
-          ...(said.senderEmail ? [el('span', { class: 't-cm-from' }, [`${said.senderEmail} · only you see this`])] : []),
-          el('time', { datetime: said.createdAt }, [when(said.createdAt)]),
-        ]),
-        el('div', { class: 't-cm-body' }, [plain(said.body)]),
-        el('div', { class: 't-cm-actions' }, [
-          el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'note-show', 'data-note': said.id }, [icon('check'), 'Show it on the thread']),
-          el('button', { type: 'button', class: 't-btn', 'data-act': 'note-drop', 'data-note': said.id }, ['Drop it']),
-          ...reply,
-          el('span', { class: 't-note' }, ['Sent from the site, on this thread']),
-        ]),
-      ]),
     ]);
   }
 
@@ -2888,7 +3000,6 @@ class Threads {
     const said = words.map((word) => {
       const number = word.thread.number;
       const known = this.threads.get(number);
-      const pending = word.state === 'pending';
       const chip =
         word.kind === 'note'
           ? el('span', { class: 't-chip' }, ['From the site'])
@@ -2902,11 +3013,10 @@ class Threads {
         el('b', {}, [`#${number}`]),
         el('span', {}, [known ? titleOf(known) : (word.thread.title ?? '')]),
       ]);
-      return el('div', pending ? { class: 't-cm t-cm-pending' } : { class: 't-cm' }, [
+      return el('div', { class: 't-cm' }, [
         el('div', { class: 't-cm-box' }, [
-          el('div', { class: 't-cm-head' }, [...(pending ? [el('b', {}, ['Waits for your OK']), el('span', {}, ['·'])] : []), on, chip, el('time', { datetime: word.at }, [when(word.at)])]),
+          el('div', { class: 't-cm-head' }, [on, chip, el('time', { datetime: word.at }, [when(word.at)])]),
           el('div', { class: 't-cm-body' }, [word.kind === 'comment' ? prose(word.body) : plain(word.body)]),
-          ...(pending ? [el('div', { class: 't-cm-actions' }, [el('a', { class: 't-btn', href: `/threads/${number}`, 'data-thread': String(number) }, [`Open #${number} to OK it`])])] : []),
         ]),
       ]);
     });
@@ -3714,6 +3824,14 @@ class Threads {
         ...(said.allowed ? {} : { disabled: '' }),
       }),
       el('small', { id: 'public-note' }, [said.note]),
+      ...(on && thread.main === 'page'
+        ? [
+            el('div', { class: 't-full-link' }, [
+              el('span', {}, [el('b', {}, ['Full-screen link, for answering']), ' · the page alone, with their name on top']),
+              el('button', { type: 'button', class: 't-btn', 'data-act': 'copy-full-link' }, ['Copy full-screen link']),
+            ]),
+          ]
+        : []),
     ]);
   }
 
@@ -3726,7 +3844,7 @@ class Threads {
     /** @type {Action} */
     const action = { action: thread.publicAt === null ? 'publish' : 'unpublish' };
     const predicted = predict(thread, action);
-    this.threads.set(thread.number, { ...predicted, shared: thread.shared ?? 0, pending: thread.pending ?? 0 });
+    this.threads.set(thread.number, { ...predicted, shared: thread.shared ?? 0 });
     if (this.shown?.thread.number === thread.number) this.shown = { ...this.shown, thread: predicted };
     this.keepScroll = true;
     this.render();
@@ -3756,28 +3874,26 @@ class Threads {
   }
 
   /**
-   * His ruling on a visitor's note: shown on the thread, dropped, or back to waiting; Show and Drop can be undone.
+   * His ruling on a visitor's note or answer: dropped, or shown again, each undone by the other from the toast.
    * @param {Thread} thread
    * @param {string} note
    * @param {Judgement} action
    */
   async judgeNote(thread, note, action) {
+    const what = this.visitorWordsOf(note) === 'an answer' ? 'answer' : 'note';
     try {
       await judge(thread.number, note, action);
     } catch (error) {
-      this.fail(error, "That didn't save, so the note is as it was.");
+      this.fail(error, `That didn't save, so the ${what} is as it was.`);
       return;
     }
     this.clearProblem();
     this.notesOpened.delete(note);
     await this.refreshShown(thread.number);
-    const pending = (this.shown?.comments ?? []).filter((said) => said.state === 'pending').length;
-    const known = this.threads.get(thread.number);
-    if (known) this.threads.set(thread.number, { ...known, pending });
     this.keepScroll = true;
     this.render();
-    const said = action === 'show' ? 'The note is on the thread, for anyone.' : action === 'drop' ? 'Note dropped. Nobody sees it.' : 'The note waits for your OK again.';
-    this.say(said, action === 'hold' ? null : () => this.judgeNote(thread, note, 'hold'));
+    const said = action === 'show' ? `The ${what} is on the thread again, for anyone.` : `${what === 'answer' ? 'Answer' : 'Note'} dropped. Nobody else sees it.`;
+    this.say(said, () => this.judgeNote(thread, note, action === 'show' ? 'drop' : 'show'));
   }
 
   /* ---------- The public view: a public thread, for anyone who isn't in it ---------- */
@@ -3799,7 +3915,8 @@ class Threads {
     if (thread.main === 'page' && shown.page) main = [this.publicPage(thread.number, shown.page)];
     else if (thread.main === 'link' && thread.link) main = [linkCard(thread.link)];
     else if (thread.body !== null) main = [prose(thread.body)];
-    const comments = shown.comments.map((said) => {
+    // Answers sit under their questions in the page; the feed is the notes and the comments written for anyone.
+    const comments = shown.comments.filter((said) => !said.question).map((said) => {
       const who = said.author === 'owner' ? 'owner' : said.author === 'member' ? 'member' : 'visitor';
       const name = who === 'owner' ? 'Suresh' : said.name?.trim() || 'Someone';
       return el('div', { class: 't-cm' }, [
@@ -3815,6 +3932,7 @@ class Threads {
       el('h1', { class: 't-title' }, [el('span', { class: 't-tn' }, [`#${thread.number}`]), ' ', title]),
       el('div', { class: 't-byline' }, [el('span', {}, [el('b', {}, ['Suresh']), `, ${day(thread.createdAt)}`])]),
       ...(thread.summary ? [el('section', { class: 't-summary', 'aria-label': 'Summary' }, [el('div', { class: 't-summary-head' }, [el('span', {}, ['Summary'])]), summaryBody(thread.summary)])] : []),
+      ...(this.answering() && !this.pageFull ? [this.answeringNode(false)] : []),
       ...main,
       ...(comments.length > 0 ? [el('div', { class: 't-feed' }, comments)] : []),
       ...(shown.truncated ? [el('p', { class: 't-note' }, ['Only the first 500 comments are shown.'])] : []),
@@ -3822,12 +3940,17 @@ class Threads {
     ];
     const frame = this.pubDoc.querySelector('.t-page');
     const fresh = view.find((node) => node.classList.contains('t-page'));
-    if (frame instanceof HTMLElement && fresh && frame.dataset.pageKey === fresh.dataset.pageKey) {
-      // The frame already loaded stays; only its bar is redrawn, so a toggle never reloads the page.
+    if (frame instanceof HTMLElement && frame.parentElement === this.pubDoc && fresh && frame.dataset.pageKey === fresh.dataset.pageKey) {
+      // The frame already loaded stays where it is, and only its bar and what is around it are redrawn: moving a frame
+      // in the document reloads its page, which would lose what the visitor typed and say `ready` again.
       const bar = fresh.querySelector('.t-page-bar');
       if (bar) frame.querySelector('.t-page-bar')?.replaceWith(bar);
       frame.dataset.full = fresh.dataset.full ?? 'false';
-      view[view.indexOf(fresh)] = frame;
+      const at = view.indexOf(fresh);
+      for (const child of [...this.pubDoc.children]) if (child !== frame) child.remove();
+      frame.before(...view.slice(0, at));
+      frame.after(...view.slice(at + 1));
+      return;
     }
     this.pubDoc.replaceChildren(...view);
   }
@@ -3842,16 +3965,60 @@ class Threads {
     const version = this.pageVersions.get(number) ?? page.version;
     const shown = page.versions.find((one) => one.version === version) ?? page.versions[page.versions.length - 1];
     const at = shown?.version ?? page.version;
-    const bar = el('div', { class: 't-page-bar' }, [
-      icon('doc'),
-      el('b', {}, ['Page']),
-      el('span', {}, [`version ${at} of ${page.version} · saved ${shown ? day(shown.savedAt) : ''}`]),
+    // In full screen a page that asks questions puts the visitor's name in its bar, where they can see it.
+    const naming = this.pageFull && this.answering();
+    const bar = el('div', { class: 't-page-bar', ...(naming ? { 'data-answering': '' } : {}) }, [
+      ...(naming
+        ? [el('span', { class: 't-page-site' }, [el('b', {}, ['whysosuresh.com']), ` · #${number} ${this.publicShown?.thread.title ?? ''}`]), this.answeringNode(true)]
+        : [icon('doc'), el('b', {}, ['Page']), el('span', {}, [`version ${at} of ${page.version} · saved ${shown ? day(shown.savedAt) : ''}`])]),
       el('span', { class: 't-grow' }),
-      ...(page.versions.length > 1 ? [el('button', { type: 'button', class: 't-btn', 'data-act': 'public-versions' }, ['Versions'])] : []),
-      el('button', { type: 'button', class: 't-btn', 'data-act': 'page-full' }, [this.pageFull ? 'Back to thread' : 'Full screen']),
+      ...(page.versions.length > 1 && !naming ? [el('button', { type: 'button', class: 't-btn', 'data-act': 'public-versions' }, ['Versions'])] : []),
+      el('button', { type: 'button', class: naming ? 't-text-btn' : 't-btn', 'data-act': 'page-full' }, [this.pageFull ? (naming ? 'Thread' : 'Back to thread') : 'Full screen']),
     ]);
     const frame = el('iframe', { class: 't-page-frame', sandbox: PAGE_SANDBOX, src: publicPageAddress(number, at), title: `Page, version ${at}`, loading: 'lazy' });
     return el('section', { class: 't-page', 'aria-label': 'Page', 'data-page-key': `${number}-${at}`, 'data-full': String(this.pageFull) }, [bar, frame]);
+  }
+
+  /** Whether the public page asks questions, so the visitor answers it: its frame said so. */
+  answering() {
+    return this.talk.ready && this.talk.questions.size > 0 && this.publicShown?.thread.main === 'page';
+  }
+
+  /**
+   * Who answers the public page: the name box until they give a name, then "Answering as" with Change; above the page,
+   * with what their answers do, or in full screen in the page's bar.
+   * @param {boolean} full
+   */
+  answeringNode(full) {
+    const visitor = this.visitor;
+    const lines = [
+      full
+        ? "Type your name once, then answer in the box under each question. Your answers show on this page with your name, and other people's open under a question once you've given yours."
+        : "Your answers show on this page with your name. Under each question, other people's answers open once you've given yours.",
+      ...(visitor.kept ? [] : ["This browser won't keep your answers, so you can't change them after you leave."]),
+    ];
+    const hint = lines.length > 0 && (!full || visitor.naming || visitor.name === '') ? [el('span', { class: 't-answering-hint' }, [lines.join(' ')])] : [];
+    if (!visitor.naming && visitor.name !== '') {
+      return el('div', { class: 't-answering', 'data-full': String(full) }, [
+        el('span', {}, ['Answering as ', el('b', {}, [visitor.name])]),
+        el('button', { type: 'button', class: 't-text-btn', 'data-act': 'visitor-rename' }, ['Change']),
+        ...hint,
+      ]);
+    }
+    return el('div', { class: 't-answering', 'data-full': String(full) }, [
+      el('label', { class: 't-answering-label', for: 'visitor-name' }, [full ? 'Answering as' : 'Your name']),
+      el('input', {
+        class: 't-field t-answering-field',
+        id: 'visitor-name',
+        autocomplete: 'name',
+        maxlength: String(MAX_VISITOR_NAME),
+        value: visitor.name,
+        placeholder: full ? 'Your name' : 'Shown with your answers',
+        ...(visitor.missing ? { 'aria-invalid': 'true' } : {}),
+      }),
+      el('button', { type: 'button', class: 't-btn', 'data-act': 'visitor-name' }, ['Done']),
+      ...hint,
+    ]);
   }
 
   /** "Send Suresh a note on this", or its Sent state. */
@@ -3861,7 +4028,7 @@ class Threads {
       return el('section', { class: 't-noteform', 'aria-label': 'Send Suresh a note' }, [
         el('div', { class: 't-noteform-sent', role: 'status' }, [
           el('b', {}, [icon('check'), ' Sent']),
-          el('p', {}, ['Suresh reads every note. If he OKs it, it shows here with your name; your email stays with him.']),
+          el('p', {}, ["It's on the thread now, with your name. Your email stays with Suresh."]),
           el('button', { type: 'button', class: 't-text-btn', 'data-act': 'note-again' }, ['Send another']),
         ]),
       ]);
@@ -3870,7 +4037,7 @@ class Threads {
     return el('form', { class: 't-noteform', 'data-submit': 'note', novalidate: '', 'aria-label': 'Send Suresh a note' }, [
       el('h2', {}, ['Send Suresh a note on this']),
       el('div', { class: 't-two' }, [
-        el('label', { class: 't-fld' }, [el('span', { class: 't-lbl' }, ['Your name']), el('input', { class: 't-field', id: 'note-name', autocomplete: 'name', maxlength: '80', value: note.name })]),
+        el('label', { class: 't-fld' }, [el('span', { class: 't-lbl' }, ['Your name']), el('input', { class: 't-field', id: 'note-name', autocomplete: 'name', maxlength: '80', value: note.name || this.visitor.name })]),
         el('label', { class: 't-fld' }, [
           el('span', { class: 't-lbl' }, ['Email, if you want an answer']),
           el('input', { class: 't-field', id: 'note-email', type: 'email', autocomplete: 'email', maxlength: '200', value: note.email }),
@@ -3882,7 +4049,7 @@ class Threads {
       ]),
       ...(note.problem !== '' && note.problem !== 'empty' ? [el('p', { class: 't-err', role: 'alert' }, [note.problem])] : []),
       el('div', { class: 't-noteform-bar' }, [
-        el('span', { class: 't-note' }, ['He reads every note. It shows here only after he OKs it, with your name; your email is never shown.']),
+        el('span', { class: 't-note' }, ['It shows here at once, with your name. Your email is never shown.']),
         el('button', { type: 'submit', class: 't-btn t-btn-primary', ...(note.busy ? { disabled: '' } : {}) }, [note.busy ? 'Sending…' : 'Send']),
       ]),
     ]);
@@ -3901,7 +4068,7 @@ class Threads {
     }
   }
 
-  /** Sends the note on the public thread through the site's bot check; it waits for his OK. */
+  /** Sends the note on the public thread through the site's bot check; it shows at once. */
   async sendNote() {
     this.readNote();
     const shown = this.publicShown;
@@ -3936,7 +4103,7 @@ class Threads {
       return;
     }
     this.note = { name: note.name, email: note.email, body: '', sent: true, busy: false, problem: '' };
-    this.renderNote();
+    await this.refreshPublic(shown.thread.number);
   }
 
   /** Reads the sheet's two fields into its state. */
@@ -4202,8 +4369,7 @@ class Threads {
         break;
       case 'note-show':
       case 'note-drop':
-      case 'note-hold':
-        if (thread && !this.member && button.dataset.note) void this.judgeNote(thread, button.dataset.note, button.dataset.act === 'note-show' ? 'show' : button.dataset.act === 'note-drop' ? 'drop' : 'hold');
+        if (thread && !this.member && button.dataset.note) void this.judgeNote(thread, button.dataset.note, button.dataset.act === 'note-show' ? 'show' : 'drop');
         break;
       case 'people-fold':
         this.peopleFold = !this.peopleFold;
@@ -4293,6 +4459,14 @@ class Threads {
         // The link opens Gmail itself; the move only marks that he opened it.
         if (thread) void this.makeMove(thread, { action: 'reply-opened' });
         break;
+      case 'copy-full-link':
+        if (thread) {
+          navigator.clipboard.writeText(`${location.origin}${fullLinkOf(thread)}`).then(
+            () => this.say(`Copied whysosuresh.com${fullLinkOf(thread)}`, null),
+            () => this.say("Couldn't copy the link.", null),
+          );
+        }
+        break;
       case 'copy-link':
         if (thread) {
           navigator.clipboard.writeText(`${location.origin}/threads/${thread.number}`).then(
@@ -4324,6 +4498,7 @@ class Threads {
         break;
       case 'page-full':
         this.pageFull = !this.pageFull;
+        if (!this.pageFull) dropFullFromAddress();
         this.keepScroll = true;
         this.render();
         break;
@@ -4381,7 +4556,21 @@ class Threads {
     switch (button.dataset.act) {
       case 'page-full':
         this.pageFull = !this.pageFull;
+        if (!this.pageFull) dropFullFromAddress();
         this.renderPublic();
+        break;
+      case 'visitor-name':
+        this.takeVisitorName();
+        if (this.visitor.name === '') {
+          this.visitor = { ...this.visitor, missing: true };
+          this.renderPublic();
+          focusIn(this.pubDoc, '#visitor-name');
+        } else this.renderPublic();
+        break;
+      case 'visitor-rename':
+        this.visitor = { ...this.visitor, naming: true };
+        this.renderPublic();
+        focusIn(this.pubDoc, '#visitor-name');
         break;
       case 'public-versions':
         if (shown.page) {
@@ -4480,6 +4669,12 @@ class Threads {
   /** @param {KeyboardEvent} event */
   onKey(event) {
     if (!this.pub.hidden) {
+      if (event.key === 'Enter' && event.target instanceof HTMLInputElement && event.target.id === 'visitor-name') {
+        event.preventDefault();
+        this.takeVisitorName();
+        this.renderPublic();
+        return;
+      }
       const form = event.target instanceof Element ? event.target.closest('form[data-submit="note"]') : null;
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && form) {
         event.preventDefault();
@@ -4531,6 +4726,7 @@ class Threads {
       } else if (this.pageFull) {
         event.preventDefault();
         this.pageFull = false;
+        dropFullFromAddress();
         this.keepScroll = true;
         this.render();
       } else if (this.editing) {
@@ -4694,6 +4890,52 @@ function rememberSignedIn() {
     localStorage.setItem(SIGNED_IN_KEY, '1');
   } catch {
     // Storage may be off; the page then shows no "Sign in" when signed out, as for a stranger.
+  }
+}
+
+/** A thread's address that opens its page in full screen, for answering: its number, its title's words, `?full`. @param {Thread} thread */
+function fullLinkOf(thread) {
+  return `${threadPath(thread)}?full`;
+}
+
+/** Takes `?full` off the address once the page leaves full screen, so a reload or a copied address is the plain one. */
+function dropFullFromAddress() {
+  const url = new URL(location.href);
+  if (!url.searchParams.has('full')) return;
+  url.searchParams.delete('full');
+  history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+}
+
+/**
+ * Who answers a public page from this browser, as it kept them: their name and key, or a fresh key when it kept none
+ * (or keeps nothing at all, when the key lasts this visit only, which `kept` says).
+ * @returns {Visitor}
+ */
+function readVisitor() {
+  /** @type {unknown} */
+  let kept = null;
+  let works = true;
+  try {
+    kept = JSON.parse(localStorage.getItem(VISITOR_KEY) ?? 'null');
+  } catch {
+    works = false;
+  }
+  if (typeof kept === 'object' && kept !== null && 'key' in kept && 'name' in kept && typeof kept.key === 'string' && VISITOR_KEY_SHAPE.test(kept.key) && typeof kept.name === 'string') {
+    const name = kept.name.trim().slice(0, MAX_VISITOR_NAME);
+    return { name, key: kept.key, kept: true, naming: name === '', missing: false };
+  }
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const key = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return { name: '', key, kept: works && keepVisitor('', key), naming: true, missing: false };
+}
+
+/** Keeps a visitor's name and key in this browser, and says whether it could. @param {string} name @param {string} key */
+function keepVisitor(name, key) {
+  try {
+    localStorage.setItem(VISITOR_KEY, JSON.stringify({ name, key }));
+    return true;
+  } catch {
+    return false;
   }
 }
 

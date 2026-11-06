@@ -211,12 +211,13 @@ describe("making a thread public", () => {
     await answer(await move(n, "unpublish"));
   });
 
-  it("puts the public time on the owner's list, with nothing waiting for his OK", async () => {
+  it("puts the public time on the owner's list, and no count of notes waiting, since none wait", async () => {
     const n = await published();
     await noteOn(n);
-    await noteOn(n);
-    const list = await answer<{ threads: { number: number; publicAt: string | null; pending: number }[] }>(await call("/threads?tab=act"));
-    expect(list.threads.find((row) => row.number === n)).toMatchObject({ publicAt: expect.any(String), pending: 0 });
+    const list = await answer<{ threads: { number: number; publicAt: string | null }[] }>(await call("/threads?tab=act"));
+    const row = list.threads.find((one) => one.number === n);
+    expect(row).toMatchObject({ publicAt: expect.any(String) });
+    expect(row).not.toHaveProperty("pending");
   });
 
   it("waits on him once a visitor's note or answer is the last word, until he writes", async () => {
@@ -422,19 +423,18 @@ describe("a note on a public thread", () => {
 });
 
 describe("his ruling on a visitor's words", () => {
-  it("drops a note, shows it again (the page's Undo), and holds it, each with its event and never the email", async () => {
+  it("drops a note and shows it again (the page's Undo), each with its event and never the email, and holds nothing", async () => {
     const n = await published();
     const id = await noteOn(n);
     expect((await answer<{ comment: Record<string, unknown> }>(await judge(n, id, "drop"))).comment).toMatchObject({ state: "dropped", senderEmail: "tomas@example.com" });
     expect(await readAs(n, null)).toEqual([]);
     expect((await answer<{ comment: Record<string, unknown> }>(await judge(n, id, "show"))).comment).toMatchObject({ state: "shown" });
     expect((await readAs(n, null)).map((comment) => comment.body)).toEqual(["Loved this. **not bold**"]);
-    expect((await answer<{ comment: Record<string, unknown> }>(await judge(n, id, "hold"))).comment).toMatchObject({ state: "pending" });
+    expect(await reasonOf(await judge(n, id, "hold"))).toEqual([400, "change"]);
     const events = (await shown(n)).events.filter((event) => event.type.startsWith("note-"));
     expect(events.map((event) => [event.type, event.actor, event.data])).toEqual([
       ["note-dropped", "owner", { note: id, name: "Tomás" }],
       ["note-shown", "owner", { note: id, name: "Tomás" }],
-      ["note-held", "owner", { note: id, name: "Tomás" }],
     ]);
   });
 
@@ -476,24 +476,26 @@ describe("his ruling on a visitor's words", () => {
 });
 
 describe("what invited people see on a public thread", () => {
-  it("is the shown notes by name, never a waiting or dropped one, an email, or the events that would tell of one", async () => {
+  it("is the shown notes by name, never a dropped one, an email, or the events that would tell of one", async () => {
     const n = await published();
     await answer(await call(`/threads/${n}/people`, { body: { add: { email: MEERA, name: "Meera" } } }));
     await noteOn(n);
     const dropped = await noteOn(n);
     await answer(await judge(n, dropped, "drop"));
-    const held = await noteOn(n);
-    await answer(await judge(n, held, "hold"));
+    const back = await noteOn(n, { body: "Dropped, then shown again." });
+    await answer(await judge(n, back, "drop"));
+    await answer(await judge(n, back, "show"));
     await answer(await call(`/threads/${n}/comments`, { body: { body: "Mine, for anyone.", audience: "public" } }), 201);
 
     const view = await shown(n, { email: MEERA });
     expect(view.thread.publicAt).toEqual(expect.any(String));
-    expect(view.comments.map((comment) => [comment.author, comment.name, comment.state, comment.audience])).toEqual([
-      ["visitor", "Tomás", "shown", "public"],
-      ["owner", null, "shown", "public"],
+    expect(view.comments.map((comment) => [comment.author, comment.name, comment.state, comment.audience, comment.body])).toEqual([
+      ["visitor", "Tomás", "shown", "public", "Loved this. **not bold**"],
+      ["visitor", "Tomás", "shown", "public", "Dropped, then shown again."],
+      ["owner", null, "shown", "public", "Mine, for anyone."],
     ]);
     expect(JSON.stringify(view)).not.toContain("tomas@example.com");
-    expect(view.events.map((event) => event.type)).toEqual(["created", "published", "invited"]);
+    expect(view.events.map((event) => event.type)).toEqual(["created", "published", "invited", "note-shown"]);
   });
 
   it("is every visitor's answers by name and key, each of them, never an email", async () => {

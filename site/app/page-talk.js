@@ -5,7 +5,9 @@
 //
 // A comment sits in one of four places (the Worker's migrations/0013_anchors.sql): on the thread, as an answer to a
 // page's question (`question`), on words of the page (`quote`), or under another comment (`parent`). `placesOf` sorts
-// a thread's comments into those places once, for the history, the page and the column beside it.
+// a thread's comments into those places once, for the history, the page and the column beside it. A public thread's
+// visitors answer too: each visitor's answers carry their key's short hash (`visitor`), so two who typed the same name
+// stay two people, and the public call answers each visitor's newest already, so its answers are told as given.
 
 /** The id a page marks a question with, as the Worker checks it. */
 export const QUESTION_SHAPE = /^[a-z0-9-]{1,40}$/;
@@ -27,7 +29,7 @@ const ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
 /**
  * @typedef {{ id: string, author: string, name: string | null, state: string, body: string, createdAt: string,
  *   personNumber?: number, parent?: string | null, question?: string | null,
- *   quote?: { text: string, prefix: string, suffix: string, version: number } | null, mine?: boolean }} Comment
+ *   quote?: { text: string, prefix: string, suffix: string, version: number } | null, mine?: boolean, visitor?: string }} Comment
  *   What these functions read of a comment, as the thread's call answers it (threads-store.js's Comment has every
  *   field); written out here so the tests' type check, which has no browser, never reads the store's fetches.
  * @typedef {{ quote: string, prefix: string, suffix: string }} Words
@@ -145,8 +147,8 @@ export function placesOf(comments) {
 
 /**
  * Each person's newest answer to each question, in the order they answered: changing an answer is a new answer, and
- * the page shows the newest. A person is their own answers (`mine`), or the writer by number for the owner, else by
- * kind and name.
+ * the page shows the newest. A person is their own answers (`mine`), a visitor by their key (`visitor`), or the writer
+ * by number for the owner, else by kind and name.
  * @template {Comment} C
  * @param {readonly C[]} answers
  * @returns {C[]}
@@ -155,7 +157,7 @@ export function newestAnswers(answers) {
   /** @type {Map<string, C>} */
   const by = new Map();
   for (const said of answers) {
-    const who = said.mine ? 'me' : said.personNumber !== undefined ? `#${said.personNumber}` : `${said.author}:${said.name ?? ''}`;
+    const who = said.mine ? 'me' : said.visitor !== undefined ? `visitor:${said.visitor}` : said.personNumber !== undefined ? `#${said.personNumber}` : `${said.author}:${said.name ?? ''}`;
     const key = `${said.question}\u0000${who}`;
     by.delete(key);
     by.set(key, said);
@@ -166,13 +168,14 @@ export function newestAnswers(answers) {
 /**
  * What the page is told: each person's newest answer by name (`ownerName` for the owner's), the words of every
  * discussion and of the comment being written, and the one shown as chosen. Never an address or a person's number.
+ * `asGiven` tells the answers as they are, for a list that holds each writer's newest already (the public call's).
  * @param {Places} places
- * @param {{ ownerName: string, draft: Words | null, active: string | null }} options
+ * @param {{ ownerName: string, draft: Words | null, active: string | null, asGiven?: boolean }} options
  */
 export function discussionFor(places, options) {
   return {
     [KEY]: 'discussion',
-    answers: newestAnswers(places.answers).map((said) => ({
+    answers: (options.asGiven ? places.answers : newestAnswers(places.answers)).map((said) => ({
       question: said.question ?? '',
       name: said.author === 'owner' ? options.ownerName : (said.name?.trim() || 'Someone'),
       body: said.body,

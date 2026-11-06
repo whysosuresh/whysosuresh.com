@@ -89,8 +89,8 @@ describe("list", () => {
     expect(out.map((line) => JSON.parse(line))).toEqual([THREAD, { number: 41 }, { number: 3 }]);
   });
 
-  it("passes each row's public time and waiting notes through whole", async () => {
-    const row = { ...THREAD, publicAt: "2026-11-05T09:00:00.000Z", shared: 0, waiting: false, pending: 2 };
+  it("passes each row's public time and whether it waits on him through whole", async () => {
+    const row = { ...THREAD, publicAt: "2026-11-05T09:00:00.000Z", shared: 0, waiting: true };
     const { io, out } = client([{ status: 200, body: { threads: [row], counts: {}, next: null } }]);
     expect(await run(["list", "act"], io)).toBe(0);
     expect(out.map((line) => JSON.parse(line))).toEqual([row]);
@@ -261,9 +261,10 @@ describe("show", () => {
     expect(out.map((line) => JSON.parse(line))).toEqual([answer]);
   });
 
-  it("passes a public thread's fields through whole: its public time, and each note's state, name and email", async () => {
-    const note = { id: "c9", author: "visitor", name: "Tomás", audience: "public", state: "pending", body: "Hi.", createdAt: "2026-11-05T10:00:00.000Z", senderEmail: "tomas@example.com" };
-    const answer = { thread: { ...THREAD, publicAt: "2026-11-05T09:00:00.000Z" }, comments: [note], events: [], truncated: false };
+  it("passes a public thread's fields through whole: its public time, and each visitor's state, name, email, question and key", async () => {
+    const note = { id: "c9", author: "visitor", name: "Tomás", audience: "public", state: "dropped", body: "Hi.", createdAt: "2026-11-05T10:00:00.000Z", senderEmail: "tomas@example.com" };
+    const visitorAnswer = { id: "c10", author: "visitor", name: "Sam", audience: "public", state: "shown", body: "Yes.", createdAt: "2026-11-05T10:01:00.000Z", question: "would-you", visitor: "aaaa1111aaaa1111", senderEmail: null };
+    const answer = { thread: { ...THREAD, publicAt: "2026-11-05T09:00:00.000Z" }, comments: [note, visitorAnswer], events: [], truncated: false };
     const { io, out } = client([{ status: 200, body: answer }]);
     expect(await run(["show", "42"], io)).toBe(0);
     expect(out.map((line) => JSON.parse(line))).toEqual([answer]);

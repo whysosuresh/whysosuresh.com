@@ -22,6 +22,7 @@ interface Comment {
   question?: string | null;
   quote?: { text: string; prefix: string; suffix: string; version: number } | null;
   mine?: boolean;
+  visitor?: string;
 }
 
 const ID = "6f1c1d6e-3a1b-4a8e-9b1d-0c2f4e5a6b7c";
@@ -110,6 +111,13 @@ describe("where a thread's comments sit", () => {
     const other = said({ question: "missing" });
     expect(newestAnswers([first, asha, mine, changed, other])).toEqual([asha, mine, changed, other]);
   });
+
+  it("keeps two visitors who typed the same name apart, by their key, and a visitor's change in place of the last", () => {
+    const sam = said({ question: "order", author: "visitor", name: "Sam", visitor: "aaaa1111aaaa1111", body: "One." });
+    const otherSam = said({ question: "order", author: "visitor", name: "Sam", visitor: "bbbb2222bbbb2222", body: "Two." });
+    const samAgain = said({ question: "order", author: "visitor", name: "Sam", visitor: "aaaa1111aaaa1111", body: "One, changed." });
+    expect(newestAnswers([sam, otherSam, samAgain])).toEqual([otherSam, samAgain]);
+  });
 });
 
 describe("what the page is told", () => {
@@ -131,6 +139,17 @@ describe("what the page is told", () => {
       active: null,
     });
     expect(JSON.stringify(told)).not.toMatch(/personNumber|@|"4"/);
+  });
+
+  it("tells a public thread's answers as given, so two visitors named alike are both told", () => {
+    const one = said({ question: "order", author: "visitor", name: "Sam", body: "One." });
+    const two = said({ question: "order", author: "visitor", name: "Sam", body: "Two.", mine: true });
+    const told = discussionFor(placesOf([one, two]), { ownerName: "Suresh", draft: null, active: null, asGiven: true });
+    expect(told.answers.map((answer) => [answer.name, answer.body, answer.mine])).toEqual([
+      ["Sam", "One.", false],
+      ["Sam", "Two.", true],
+    ]);
+    expect(JSON.stringify(told)).not.toContain("visitor");
   });
 });
 
