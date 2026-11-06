@@ -2029,7 +2029,10 @@ class Threads {
     shown.comments.forEach((said, i) => {
       const order = shown.events.length + i;
       if (said.parent) return;
-      if (said.question) entries.push({ at: said.createdAt, order, node: this.answerLine(said, thread) });
+      // A dropped answer, like a dropped note, is drawn only on its drop's line, which can show it again.
+      if (said.question) {
+        if (said.state !== 'dropped') entries.push({ at: said.createdAt, order, node: this.answerLine(said, thread) });
+      }
       else if (said.quote) {
         // Words this version no longer has keep their whole discussion here, marked with the version they were on.
         if (this.talk.anchors.get(said.id) === null || thread.main !== 'page') entries.push({ at: said.createdAt, order, node: this.goneDisc(said, places, thread) });
@@ -3493,12 +3496,17 @@ class Threads {
     ];
     const frame = this.pubDoc.querySelector('.t-page');
     const fresh = view.find((node) => node.classList.contains('t-page'));
-    if (frame instanceof HTMLElement && fresh && frame.dataset.pageKey === fresh.dataset.pageKey) {
-      // The frame already loaded stays; only its bar is redrawn, so a toggle never reloads the page.
+    if (frame instanceof HTMLElement && frame.parentElement === this.pubDoc && fresh && frame.dataset.pageKey === fresh.dataset.pageKey) {
+      // The frame already loaded stays where it is, and only its bar and what is around it are redrawn: moving a frame
+      // in the document reloads its page, which would lose what the visitor typed and say `ready` again.
       const bar = fresh.querySelector('.t-page-bar');
       if (bar) frame.querySelector('.t-page-bar')?.replaceWith(bar);
       frame.dataset.full = fresh.dataset.full ?? 'false';
-      view[view.indexOf(fresh)] = frame;
+      const at = view.indexOf(fresh);
+      for (const child of [...this.pubDoc.children]) if (child !== frame) child.remove();
+      frame.before(...view.slice(0, at));
+      frame.after(...view.slice(at + 1));
+      return;
     }
     this.pubDoc.replaceChildren(...view);
   }
@@ -3540,7 +3548,9 @@ class Threads {
   answeringNode(full) {
     const visitor = this.visitor;
     const lines = [
-      ...(full ? [] : ["Your answers show on this page with your name. Under each question, other people's answers open once you've given yours."]),
+      full
+        ? "Type your name once, then answer in the box under each question. Your answers show on this page with your name, and other people's open under a question once you've given yours."
+        : "Your answers show on this page with your name. Under each question, other people's answers open once you've given yours.",
       ...(visitor.kept ? [] : ["This browser won't keep your answers, so you can't change them after you leave."]),
     ];
     const hint = lines.length > 0 && (!full || visitor.naming || visitor.name === '') ? [el('span', { class: 't-answering-hint' }, [lines.join(' ')])] : [];
