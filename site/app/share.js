@@ -5,8 +5,10 @@
 // it is the thread's own address with `?invite`, which takes a signed-out reader straight to Cloudflare's code page
 // and back. Below the people, one switch makes the thread public: anyone reads it at its address with no sign-in,
 // and only his own threads may be (`publicLines` says what the switch says, and why it is off for someone else's
-// words). A visitor's note on a public thread is answered from his own Gmail too (`noteReply`). Plain data and pure
-// functions, so a test can read them without a page.
+// words). Under it, a second switch lists a public thread on his home page, under What's happening and in its feed
+// (`feedLines`): public alone is readable by its link, never listed, so listing is its own act, and only a public thread
+// can be listed. A visitor's note on a public thread is answered from his own Gmail too (`noteReply`). Plain data and
+// pure functions, so a test can read them without a page.
 
 /** How many people Cloudflare's free plan signs in. */
 export const SEATS = 50;
@@ -142,6 +144,25 @@ export function publicLines(number, source, on) {
     note: on
       ? "Anyone who opens the link or tries the number reads the title, the summary, the text and the comments you write as Public, and with no sign-in can send you a note and answer its page's questions. What they write shows at once; you can drop it. Earlier comments, Only me notes, the people and the history stay yours. Search engines are told not to list it."
       : 'Off: only you and the people above read it.',
+  };
+}
+
+/**
+ * What the home page switch says: its label, the line under it for where it stands, and whether it can be turned on.
+ * Only a public thread can be on the home page; taking it back from public takes it off too.
+ * @param {boolean} isPublic
+ * @param {boolean} on
+ * @returns {{ label: string, note: string, allowed: boolean }}
+ */
+export function feedLines(isPublic, on) {
+  const label = "On the home page: listed under What's happening at whysosuresh.com";
+  if (!isPublic) return { label, allowed: false, note: 'Make it public first: only a public thread can be on the home page.' };
+  return {
+    label,
+    allowed: true,
+    note: on
+      ? 'Everyone who opens whysosuresh.com sees its title, its first lines, the day and how many notes it has, newest first, and so does anyone who subscribes to its feed. Turning Public off takes it off the home page too.'
+      : 'Off: anyone with the link reads it, and it is listed nowhere.',
   };
 }
 

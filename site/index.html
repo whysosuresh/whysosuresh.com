@@ -1,7 +1,10 @@
 <!DOCTYPE html>
-<!-- whysosuresh.com's home page: his photo large beside a short greeting and the ways to reach him,
-     then his latest videos, the things he makes and where else to find him. System type and
-     black-and-white greys, so it matches capsjump.com and loads no web font. Its one script is the
+<!-- whysosuresh.com's home page: his photo large beside a short greeting and the ways to reach him, with
+     his Now line under them; then his latest videos and what's happening, the threads he posted, newest
+     first, beside a light column of the things he makes and where else to find him (one column on a
+     phone). The Worker writes the Now line and the posts in (src/home.ts), and shows each of their
+     sections only when it has something; with nothing posted the page is this file as it is. System type
+     and black-and-white greys, so it matches capsjump.com and loads no web font. Its one script is the
      note flow, opened by "Send a note" and at /#talk or /#talk/<topic>. -->
 <html lang="en">
 <head>
@@ -14,6 +17,7 @@
   <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
   <link rel="canonical" href="https://whysosuresh.com/">
+  <link rel="alternate" type="application/atom+xml" title="What's happening" href="/feed.xml">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://whysosuresh.com/">
   <meta property="og:title" content="Suresh Attaluri">
@@ -26,7 +30,7 @@
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/talk.js"></script>
 </head>
-<body>
+<body class="home">
   <header class="bar">
     <a class="brand" href="/">whysosuresh.com</a>
     <a class="bar-link" href="/feedback">Talk to me</a>
@@ -48,56 +52,71 @@
             <p class="fine">30 minutes, live. Best for talking something through.</p>
           </li>
         </ul>
+        <p class="now" data-now hidden><b>Now</b> <span data-now-text></span></p>
       </div>
     </section>
 
-    <section aria-labelledby="videos">
-      <div class="videos-head">
-        <h2 id="videos">Latest videos</h2>
-        <a class="fine" href="https://www.youtube.com/@whysosuresh">All on YouTube</a>
-      </div>
-      <div class="player">
-        <iframe src="https://www.youtube-nocookie.com/embed/videoseries?list=UUkdfCh9gN60s_h_nfTYEwyg" title="Latest videos" loading="lazy" allow="encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin"></iframe>
-      </div>
-    </section>
+    <div class="home-grid">
+      <div class="home-main">
+        <section aria-labelledby="videos">
+          <div class="section-head">
+            <h2 id="videos">Latest videos</h2>
+            <a class="fine" href="https://www.youtube.com/@whysosuresh">All on YouTube</a>
+          </div>
+          <div class="player">
+            <iframe src="https://www.youtube-nocookie.com/embed/videoseries?list=UUkdfCh9gN60s_h_nfTYEwyg" title="Latest videos" loading="lazy" allow="encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+          </div>
+        </section>
 
-    <section aria-labelledby="makes">
-      <h2 id="makes">Things I make</h2>
-      <ul class="makes">
-        <li>
-          <a href="https://capsjump.com">
-            <h3>CapsJump</h3>
-            <span class="where">capsjump.com</span>
-            <p>Caps Lock finally has a job: one key to the right app, window or tab, in the Chrome profile you choose.</p>
-          </a>
-        </li>
-        <li>
-          <a href="https://stigmer.ai">
-            <h3>Stigmer</h3>
-            <span class="where">stigmer.ai</span>
-            <p>The open-source backend for the agents in your product.</p>
-          </a>
-        </li>
-        <li>
-          <a href="https://www.youtube.com/@whysosuresh">
-            <h3>The Feed Said So</h3>
-            <span class="where">on YouTube</span>
-            <p>A short weekday show: the three biggest things from my feed, and what I make of them.</p>
-          </a>
-        </li>
-      </ul>
-    </section>
+        <section aria-labelledby="happening" data-feed hidden>
+          <div class="section-head">
+            <h2 id="happening">What's happening</h2>
+            <a class="fine" href="/feed.xml">Subscribe</a>
+          </div>
+          <ol class="feed" data-feed-list></ol>
+        </section>
+      </div>
 
-    <section aria-labelledby="elsewhere">
-      <h2 id="elsewhere">Elsewhere</h2>
-      <ul class="links">
-        <li><a href="https://github.com/whysosuresh">GitHub</a></li>
-        <li><a href="https://bsky.app/profile/whysosuresh.com">Bluesky</a></li>
-        <li><a href="https://x.com/whysosuresh">X</a></li>
-        <li><a href="https://www.linkedin.com/in/whysosuresh">LinkedIn</a></li>
-        <li><a href="https://www.youtube.com/@whysosuresh">YouTube</a></li>
-      </ul>
-    </section>
+      <aside class="home-side" aria-label="More from Suresh">
+        <section aria-labelledby="makes">
+          <h2 id="makes">Things I make</h2>
+          <ul class="makes">
+            <li>
+              <a href="https://capsjump.com">
+                <h3>CapsJump</h3>
+                <span class="where">capsjump.com</span>
+                <p>Caps Lock finally has a job: one key to the right app, window or tab, in the Chrome profile you choose.</p>
+              </a>
+            </li>
+            <li>
+              <a href="https://stigmer.ai">
+                <h3>Stigmer</h3>
+                <span class="where">stigmer.ai</span>
+                <p>The open-source backend for the agents in your product.</p>
+              </a>
+            </li>
+            <li>
+              <a href="https://www.youtube.com/@whysosuresh">
+                <h3>The Feed Said So</h3>
+                <span class="where">on YouTube</span>
+                <p>A short weekday show: the three biggest things from my feed, and what I make of them.</p>
+              </a>
+            </li>
+          </ul>
+        </section>
+
+        <section aria-labelledby="elsewhere">
+          <h2 id="elsewhere">Elsewhere</h2>
+          <ul class="links">
+            <li><a href="https://github.com/whysosuresh">GitHub</a></li>
+            <li><a href="https://bsky.app/profile/whysosuresh.com">Bluesky</a></li>
+            <li><a href="https://x.com/whysosuresh">X</a></li>
+            <li><a href="https://www.linkedin.com/in/whysosuresh">LinkedIn</a></li>
+            <li><a href="https://www.youtube.com/@whysosuresh">YouTube</a></li>
+          </ul>
+        </section>
+      </aside>
+    </div>
   </main>
 
   <footer class="foot">

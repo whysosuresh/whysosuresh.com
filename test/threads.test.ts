@@ -169,6 +169,7 @@ describe("an add", () => {
       main: "text",
       link: null,
       publicAt: null,
+      feedAt: null,
       meeting: null,
       ask: null,
     });

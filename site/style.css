@@ -1,7 +1,7 @@
 /* whysosuresh.com: the one stylesheet for every page, the note sheet and the private threads. Black and
    white in light and dark (following the device's setting), on CapsJump's tokens and system type, so his
-   two sites read as one person's; one 920px column that narrows to a phone and keeps clear of the notch
-   and the home bar. No web font: every script, Telugu included, falls through to the device's own face.
+   two sites read as one person's; one 920px column (the home page's 1040px, for its side column) that
+   narrows to a phone and keeps clear of the notch and the home bar. No web font: every script, Telugu included, falls through to the device's own face.
    Every class selector here is used by a served page or script (test/site.test.ts). */
 
 :root {
@@ -193,8 +193,9 @@ p { margin: 0; }
 }
 .ghost-button:hover { border-color: var(--ink); }
 
+/* A section's head: its title, with a quiet link to the rest on the right. */
+.section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
 /* The videos: the channel's own player, sized to the column. */
-.videos-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
 .player {
   width: 100%;
   aspect-ratio: 16 / 9;
@@ -233,6 +234,77 @@ p { margin: 0; }
 
 .links { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0; padding: 0; list-style: none; }
 .links a { color: var(--ink); font-weight: 500; }
+
+/* The home page: wider than the other pages, so what's happening has the main column beside a light side column of
+   what he makes and where to find him; one column on a phone. The bar, the column and the foot widen together, so
+   their edges stay in line. */
+.home .bar, .home main, .home .foot { max-width: 1040px; }
+.home-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: 0 48px;
+  align-items: start;
+}
+.home-main { min-width: 0; }
+.home-side { position: sticky; top: 0; }
+.home-side h2 { font-size: 17px; }
+.home-side .makes { grid-template-columns: 1fr; gap: 10px; }
+.home-side .makes a { padding: 14px 16px; }
+.home-side .makes p { display: none; }
+@media (max-width: 820px) {
+  .home-grid { grid-template-columns: 1fr; }
+  .home-side { position: static; }
+  .home-side h2 { font-size: 24px; }
+  .home-side .makes { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .home-side .makes p { display: block; }
+}
+
+/* The Now line under the greeting: what he is doing now, in one line he changes from Today. */
+.now {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 12px 16px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  font-size: 17px;
+  line-height: 1.5;
+}
+.now b {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* What's happening: the threads he posted, newest first, each with its day, its first lines and its notes. */
+.feed { margin: 0; padding: 0; list-style: none; }
+.item {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 16px;
+  padding: 20px 0;
+  border-top: 1px solid var(--line);
+}
+.item:first-child { border-top: 0; padding-top: 4px; }
+.when {
+  padding-top: 3px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.what { display: grid; gap: 8px; min-width: 0; }
+.what h3 { margin: 0; font-size: 19px; line-height: 1.35; }
+.what h3 a { color: var(--ink); text-decoration: none; }
+.what h3 a:hover { text-decoration: underline; }
+.what p { color: var(--muted); font-size: 16px; line-height: 1.55; overflow-wrap: anywhere; }
+.meta { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 15px; }
+.what .meta a { color: var(--ink); font-weight: 500; }
+@media (max-width: 560px) {
+  .item { grid-template-columns: 1fr; gap: 4px; }
+}
 
 .foot {
   display: flex;
@@ -1056,6 +1128,14 @@ a.t-pick { color: var(--ink); text-decoration: none; }
 a.j-pill:hover { border-color: var(--ink); color: var(--ink); }
 
 .j-card { border: 1px solid var(--ink); border-radius: 12px; padding: 16px 18px; display: grid; gap: 8px; background: var(--surface); }
+/* Today's top row: the Now line his home page shows under the greeting, with Edit, or one box to write it in. */
+.t-now { border: 1px dashed var(--line); border-radius: 12px; padding: 12px 16px; display: grid; gap: 6px; }
+.t-now-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.t-now-row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.t-now-line { margin: 0; font-size: 15px; min-width: 0; overflow-wrap: anywhere; }
+.t-now-line b { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; margin-right: 4px; }
+.t-now-form { display: grid; gap: 8px; }
+.t-now-input { font-size: 15px; }
 .j-card-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .j-more { font-size: 12px; color: var(--muted); }
 .j-card-title { font-family: var(--serif); font-size: 24px; line-height: 1.2; text-decoration: none; text-wrap: balance; }

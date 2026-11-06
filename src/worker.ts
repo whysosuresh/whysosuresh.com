@@ -1,5 +1,5 @@
-// The Worker's code, which runs only for /api/*, /threads/*, /me, /meetings, /people, /people/*, /asks, /ask/*, /journal and /journal/*
-// (`run_worker_first` in wrangler.jsonc); every other
+// The Worker's code, which runs only for /api/*, /threads/*, /me, /meetings, /people, /people/*, /asks, /ask/*, /journal and /journal/*,
+// the home page, /, and its feed, /feed.xml (`run_worker_first` in wrangler.jsonc); every other
 // path is a file from site/, /inbox's redirect to /threads/ among them (site/_redirects). Four doors: POST /api/talk,
 // the note flow's public send (src/talk.ts); the threads' private calls under /threads/api/ (src/threads.ts),
 // behind their Cloudflare Access application and the Worker's own check of the caller against its tag; and, under
@@ -9,12 +9,14 @@
 // sign-in. An ask, a questions page anyone answers by its link, is read and answered under /api/asks/ (src/asks.ts),
 // outside Access too. The rooms (/me, the door everyone signed in enters by; /meetings; /asks; /people and a person
 // under it), an ask's own address (/ask/<slug>) and every other path under /threads/ are the threads page
-// (src/pages.ts), handed over from site/ with no sign-in, because Access guards the calls, never a thread's page. The calls are matched first, so no call ever
-// reaches the pages.
+// (src/pages.ts), handed over from site/ with no sign-in, because Access guards the calls, never a thread's page. The home
+// page is site/index.html with what Suresh posted written in, and /feed.xml the same as an Atom feed (src/home.ts). The
+// calls are matched first, so no call ever reaches the pages.
 
 import { handleAsks } from "./asks.ts";
 import type { Bindings } from "./bindings.ts";
 import { handleEvaluate, handleKeys } from "./evaluate.ts";
+import { FEED_PATH, handleFeed, handleHome } from "./home.ts";
 import { json } from "./json.ts";
 import { handlePage } from "./pages.ts";
 import { handlePublic } from "./public.ts";
@@ -24,6 +26,8 @@ import { handleThreads } from "./threads.ts";
 export default {
   async fetch(request, env): Promise<Response> {
     const { pathname } = new URL(request.url);
+    if (pathname === "/") return handleHome(request, env);
+    if (pathname === FEED_PATH) return handleFeed(request, env);
     if (pathname === "/api/talk") {
       if (request.method !== "POST") return json(405, { reason: "method" }, { Allow: "POST" });
       return handleTalk(request, env);

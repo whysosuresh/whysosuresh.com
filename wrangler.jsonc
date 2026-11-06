@@ -1,8 +1,9 @@
 // whysosuresh.com: one Cloudflare Worker that serves the folder ./site, and runs code only for /api/* (the
 // note flow's one public write, src/talk.ts), /threads/* (the threads' private calls under /threads/api/,
 // src/threads.ts, and the threads page at every other path, src/pages.ts, which hands over
-// site/threads/index.html through the assets binding) and /me (the same page, everyone's door after sign-in),
-// all on the database bound below. Every other page comes
+// site/threads/index.html through the assets binding), /me (the same page, everyone's door after sign-in), and the
+// home page, /, with what Suresh posted written in, and its Atom feed, /feed.xml (src/home.ts), all on the database
+// bound below. Every other page comes
 // straight from ./site, with no code in its path, and /inbox, the threads' old address, redirects to /threads/
 // (site/_redirects); Cloudflare Access guards /threads/api and everything under it (infrastructure/), never a
 // thread's page. This
@@ -34,7 +35,9 @@
     // /me, the door everyone signed in enters by, /meetings, /people with a person under it, and /asks; so is an
     // ask's own address, /ask/<slug>, and his journal,
     // /journal with its days, weeks and storylines under it. The threads page's scripts live under /app/, so they stay files.
-    "run_worker_first": ["/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"],
+    // The home page, "/" (the root alone: a pattern without a star names one path), gets what he posted written in, and
+    // its feed is /feed.xml (src/home.ts).
+    "run_worker_first": ["/", "/feed.xml", "/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"],
     // How the code hands over a file from ./site: the threads page, with site/_headers on it.
     "binding": "ASSETS"
   },

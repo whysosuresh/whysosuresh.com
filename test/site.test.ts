@@ -1,12 +1,13 @@
 // The site's checks: what is served, that every page is valid HTML with the head a shared link needs, that
-// every internal link reaches a file without a redirect, that nothing loads from elsewhere but the allowed
+// every internal link reaches a file without a redirect (or an address the code answers), that nothing loads from elsewhere but the allowed
 // player and the scripts' allowed resources, that the headers match the pages and the scripts, that the
 // stylesheet carries no dead rules, that the "Send a note" doors open the note flow, that the topic list
 // the Worker shares is plain data and reads page addresses right, that the spaces the Worker shares are plain
 // data and hold every topic, that the journal's reader the Worker shares is plain data that reads no clock, that the threads page is never indexed or shared and reaches only its own calls,
+// that the home page holds its Now line and its feed hidden for the Worker to fill and offers the feed to subscribers,
 // that /inbox, the threads' old address, redirects to /threads/ and nothing else is redirected, that no file names
-// the owner's email address, and that the Worker's config routes the one domain to the code only under /api/ and
-// /threads/ (test/routing.test.ts sends the requests). `wrangler deploy --dry-run` does not read
+// the owner's email address, and that the Worker's config routes the one domain to the code only at the home page and
+// its feed, under /api/ and /threads/ and at the rooms (test/routing.test.ts sends the requests). `wrangler deploy --dry-run` does not read
 // site/_headers or site/_redirects, so this file parses them. The Worker itself is the Worker tests'.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -125,12 +126,21 @@ function attr(element: HtmlElement, name: string): string {
   return value;
 }
 
+const wrangler = readFileSync(join(root, "wrangler.jsonc"), "utf8");
+
+/**
+ * The addresses `run_worker_first` in wrangler.jsonc names exactly, with no star, read as test/harness.ts reads the
+ * list: the code answers each, so a link to one reaches the Worker, not a file (/feed.xml, which no file could be).
+ */
+const WORKER_PATHS = (JSON.parse(/"run_worker_first": (\[[^\]]*\])/.exec(wrangler)?.[1] ?? "[]") as string[]).filter((path) => !path.includes("*"));
+
 /**
  * Where an internal path lands under assets' `auto-trailing-slash` handling, or why it would cost a
  * redirect or miss. `/` serves index.html, `/name` serves name.html, a file with another extension
- * serves itself; `/name.html`, `/index.html` and a trailing slash on a file all answer a 307.
+ * serves itself; `/name.html`, `/index.html` and a trailing slash on a file all answer a 307. An address
+ * `run_worker_first` names exactly with no file under it is the code's.
  */
-function resolveInternal(path: string): { file: string } | { error: string } {
+function resolveInternal(path: string): { file: string } | { code: string } | { error: string } {
   if (!path.startsWith("/")) return { error: "is not root-absolute" };
   if (path.endsWith(".html")) return { error: "names an .html file, which redirects to its clean address" };
   if (path.endsWith("/")) {
@@ -140,6 +150,7 @@ function resolveInternal(path: string): { file: string } | { error: string } {
   const exact = path.slice(1);
   if (served.includes(exact)) return { file: exact };
   if (served.includes(`${exact}.html`)) return { file: `${exact}.html` };
+  if (WORKER_PATHS.includes(path)) return { code: path };
   return { error: "reaches no file" };
 }
 
@@ -271,6 +282,36 @@ describe("the note flow", () => {
 
   it("carries the production widget's site key", () => {
     expect(read("talk-send.js")).toMatch(/^const SITE_KEY = '0x[0-9A-Za-z_-]{20,}';$/m);
+  });
+});
+
+describe("index.html, the home page the Worker writes the feed into", () => {
+  it("holds the Now line and what's happening hidden, each with the hook src/home.ts fills, so the file alone shows neither", async () => {
+    const doc = await parse("index.html");
+    const now = doc.querySelectorAll("[data-now]");
+    expect(now).toHaveLength(1);
+    expect(now[0]?.hasAttribute("hidden")).toBe(true);
+    expect(now[0]?.querySelectorAll("[data-now-text]").map((el) => el.textContent)).toEqual([""]);
+    const feed = doc.querySelectorAll("[data-feed]");
+    expect(feed).toHaveLength(1);
+    expect(feed[0]?.hasAttribute("hidden")).toBe(true);
+    const list = feed[0]?.querySelectorAll("[data-feed-list]") ?? [];
+    expect(list.map((el) => [el.tagName.toLowerCase(), el.textContent.trim()])).toEqual([["ol", ""]]);
+  });
+
+  it("offers the feed to readers that subscribe, from the head and beside the list", async () => {
+    const doc = await parse("index.html");
+    const alternate = doc.querySelectorAll('link[rel="alternate"]');
+    expect(alternate.map((el) => [attr(el, "type"), attr(el, "href")])).toEqual([["application/atom+xml", "/feed.xml"]]);
+    expect(doc.querySelectorAll("[data-feed] a").map((el) => attr(el, "href"))).toEqual(["/feed.xml"]);
+  });
+
+  it("puts the videos and the feed in the main column, and what he makes and where else to find him in the side column", async () => {
+    const doc = await parse("index.html");
+    const headings = (selector: string): string[] => doc.querySelectorAll(`${selector} h2`).map((el) => attr(el, "id"));
+    expect(headings(".home-main")).toEqual(["videos", "happening"]);
+    expect(headings(".home-side")).toEqual(["makes", "elsewhere"]);
+    expect(doc.querySelectorAll("body")[0]?.getAttributeValue("class")).toBe("home");
   });
 });
 
@@ -450,9 +491,10 @@ describe("style.css", () => {
       }
     }
     // The note flow draws its sheet from a template in its script, and names the dialog's class there; the
-    // threads build their elements with a helper that takes the class as an object key (`class: 't-row'`).
-    for (const script of scripts) {
-      for (const match of read(script).matchAll(/class(?:Name)?\s*[=:]\s*["']([^"'$]+)["']/g)) {
+    // threads build their elements with a helper that takes the class as an object key (`class: 't-row'`). The
+    // home page's feed items are written into it by the Worker (src/home.ts), in markup that names its classes.
+    for (const text of [...scripts.map(read), readFileSync(join(root, "src/home.ts"), "utf8")]) {
+      for (const match of text.matchAll(/class(?:Name)?\s*[=:]\s*["']([^"'$]+)["']/g)) {
         for (const name of (match[1] ?? "").split(/\s+/)) used.add(name);
       }
     }
@@ -535,7 +577,7 @@ describe("the owner's email address", () => {
 });
 
 describe("wrangler.jsonc", () => {
-  const text = readFileSync(join(root, "wrangler.jsonc"), "utf8");
+  const text = wrangler;
 
   it("names the account by its 32-character id", () => {
     expect(text).toMatch(/"account_id": "[0-9a-f]{32}"/);
@@ -547,8 +589,8 @@ describe("wrangler.jsonc", () => {
     expect(text).not.toContain("custom_domain");
   });
 
-  it("runs the code only under /api/ and /threads/ and at the rooms (/me, /meetings, /people, /asks, /journal) and an ask's address, and every other page comes straight from site/", () => {
-    expect(text).toContain('"run_worker_first": ["/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"]');
+  it("runs the code only at the home page and its feed, under /api/ and /threads/ and at the rooms (/me, /meetings, /people, /asks, /journal) and an ask's address, and every other page comes straight from site/", () => {
+    expect(text).toContain('"run_worker_first": ["/", "/feed.xml", "/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"]');
     expect(text.match(/"run_worker_first"/g)).toHaveLength(1);
   });
 

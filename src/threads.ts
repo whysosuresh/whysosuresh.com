@@ -33,6 +33,7 @@
 //   GET  /threads/api/sign-in?next=<a threads page>                           everyone
 //   GET  /threads/api/people[/<n>], POST /threads/api/people/<n>               owner and sync read; owner writes (src/people.ts)
 //   GET  /threads/api/journal[/...], POST /threads/api/journal/...             owner and sync; never invited people (src/journal.ts)
+//   GET  /threads/api/now, POST /threads/api/now  {"text"}                    owner: the home page's Now line (src/home.ts)
 //
 // An invited person reads only the threads they are in: every read takes the caller as its reader, and the
 // store's queries see no other thread, so one they aren't in answers 404 `no-thread`, exactly as a number never
@@ -65,7 +66,9 @@
 //
 // One of his own threads may be public: `publish` and `unpublish` are moves, his alone, and a thread that isn't his
 // own (a site note, a told thread) is never published (409 `not-his-words`). Every reader's thread says when it was
-// made public (`publicAt`). A comment's audience is the writer's own choice: `public` (anyone, on a public thread
+// made public (`publicAt`). A public thread may also be on his home page: `post` and `unpost` are moves, his alone
+// too, a thread that isn't public is never posted (409 `not-public`), and unpublishing takes it off; every reader's
+// thread says when it was posted (`feedAt`). A comment's audience is the writer's own choice: `public` (anyone, on a public thread
 // only, 409 `not-public` elsewhere) from the owner or an invited person, never from the sync, so nothing it
 // transcribes is published without him. A visitor's note on a public thread, and a visitor's answer to its page's
 // questions (src/public.ts), are shown at once: he drops either at its own address, or shows it again (the page's
@@ -113,6 +116,7 @@ import { identify, type Caller, type Refusal } from "./access.ts";
 import type { Bindings } from "./bindings.ts";
 import { json, type JsonValue } from "./json.ts";
 import { servePage, withSkeleton } from "./page.ts";
+import { handleNow } from "./home.ts";
 import { handleJournal } from "./journal.ts";
 import { handlePeople, personView } from "./people.ts";
 import { SLUG_SHAPE } from "./asks.ts";
@@ -242,6 +246,7 @@ function thread(row: ThreadRow, reader: Reader): { readonly [key: string]: JsonV
     main: row.main,
     link: row.link_url === null ? null : { url: row.link_url, title: row.link_title },
     publicAt: row.public_at,
+    feedAt: row.feed_at,
     meeting: meetingView(row, reader),
     ask: askView(row, reader),
   };
@@ -470,7 +475,7 @@ async function move(request: Request, number: number, env: Bindings, caller: Wri
   const moved = await makeMove(env.DB, { number }, change, caller.caller);
   if (moved === "no-thread") return refuse(404, "no-thread");
   if (moved === "not-from-here") return refuse(409, "not-from-here");
-  if (moved === "not-his-words" || moved === "an-ask") return refuse(409, moved);
+  if (moved === "not-his-words" || moved === "an-ask" || moved === "not-public") return refuse(409, moved);
   return json(200, { thread: thread(moved, caller) });
 }
 
@@ -793,6 +798,7 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
   if (url.pathname === "/threads/api/journal" || url.pathname.startsWith("/threads/api/journal/")) {
     return handleJournal(request, url, env, who);
   }
+  if (url.pathname === "/threads/api/now") return handleNow(request, env, who);
   if (url.pathname === "/threads/api/search" || url.pathname === "/threads/api/sign-in" || url.pathname === "/threads/api/me") {
     if (request.method !== "GET") return json(405, { reason: "method" }, { Allow: "GET" });
     if (url.pathname === "/threads/api/me") return me(who);

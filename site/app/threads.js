@@ -126,7 +126,7 @@ import {
 import { ASKS_PATH, ASK_PATH, CLOSED_LINE, DRAFTS_HINT, agoWords, FIRST_ANSWERERS, answeredHead, answererName, answerersShown, askEventWords, askLink, askShown, countLine, foldWaiting, foldedTitle, foldedWho, markReadLabel, markedWords, nobodyLine, savedLine, stateWords, summaryNoteFor, talkLinkFor, topicLine, visitorHint } from './asks.js';
 import { DRAFT, KEY, discussionFor, helloFor, placesOf, readPageMessage, stack, takesAnswers } from './page-talk.js';
 import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, saidOn, takenLine } from './people.js';
-import { addressOf, invitation, invitationProblem, isAddress, levelOf, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
+import { addressOf, feedLines, invitation, invitationProblem, isAddress, levelOf, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
 import { prepare as prepareBotCheck, sendTo } from '../talk-send.js';
 import {
   Failed,
@@ -166,6 +166,8 @@ import {
   signInAddress,
   start,
   uninvite,
+  readNow,
+  saveNow,
 } from './threads-store.js';
 
 /**
@@ -192,6 +194,7 @@ import {
  * @typedef {import('./threads-store.js').JournalEntry} JournalEntry
  * @typedef {import('./threads-store.js').JournalRead} JournalRead
  * @typedef {import('./threads-store.js').JournalTrail} JournalTrail
+ * @typedef {import('./threads-store.js').NowLine} NowLine
  * @typedef {import('./journal.js').Entry} JournalPage
  * @typedef {import('./journal.js').Inline} JournalInline
  * @typedef {import('./journal.js').Block} JournalBlock
@@ -271,6 +274,8 @@ const VISITOR_KEY = 'threads:visitor';
 const VISITOR_KEY_SHAPE = /^[0-9a-f]{64}$/;
 /** The longest name a visitor may give, as the Worker takes it. */
 const MAX_VISITOR_NAME = 80;
+/** The longest Now line, as the Worker takes it (src/wire.ts). */
+const MAX_NOW = 140;
 /** The sandbox a page's frame runs in, the same tokens its answer's CSP names (src/page.ts). */
 const PAGE_SANDBOX = 'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox';
 /** The heights a page may ask its frame for; anything else is ignored. */
@@ -568,7 +573,11 @@ function predict(thread, action) {
     case 'publish':
       return { ...touched, publicAt: now, movedAt: now };
     case 'unpublish':
-      return { ...touched, publicAt: null, movedAt: now };
+      return { ...touched, publicAt: null, feedAt: null, movedAt: now };
+    case 'post':
+      return { ...touched, feedAt: now, movedAt: now };
+    case 'unpost':
+      return { ...touched, feedAt: null, movedAt: now };
   }
 }
 
@@ -597,7 +606,12 @@ function inverse(before, action) {
     case 'publish':
       return { action: 'unpublish' };
     case 'unpublish':
+      // Undo makes it public again and nothing more: back on the home page is his own second act.
       return { action: 'publish' };
+    case 'post':
+      return { action: 'unpost' };
+    case 'unpost':
+      return { action: 'post' };
   }
 }
 
@@ -613,7 +627,11 @@ function saidOf(thread, action) {
     case 'publish':
       return `#${thread.number} is public. Anyone can read it.`;
     case 'unpublish':
-      return `#${thread.number} is no longer public.`;
+      return thread.feedAt ? `#${thread.number} is no longer public, and off your home page.` : `#${thread.number} is no longer public.`;
+    case 'post':
+      return `#${thread.number} is on your home page.`;
+    case 'unpost':
+      return `#${thread.number} is off your home page. It's still public.`;
     default:
       return `Moved #${thread.number} to ${STATUS_NAMES[predict(thread, action).status]}`;
   }
@@ -991,6 +1009,11 @@ class Threads {
     this.trails = [];
     this.journalLoaded = false;
     this.journalFailed = false;
+    /** The Now line on his home page, null when there is none; whether it loaded; and his edit of it, null while closed. @type {NowLine | null} */
+    this.now = null;
+    this.nowLoaded = false;
+    /** @type {string | null} */
+    this.nowDraft = null;
     /** Entries read whole (their text, versions and answers), by key. @type {Map<string, JournalRead>} */
     this.entries = new Map();
     /** The keys no entry has, as the page last found. @type {Set<string>} */
@@ -1181,6 +1204,7 @@ class Threads {
       // The asks and the journal load on their own, so a failed call leaves everything else working; each room says it failed.
       void this.loadAsks();
       void this.loadJournal();
+      void this.loadNow();
     }
     this.loaded = true;
   }
@@ -2033,6 +2057,7 @@ class Threads {
         ]),
         el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'new' }, [icon('plus'), 'New thread ', kbd('N')]),
       ]),
+      ...this.nowCard(),
       ...this.nextMeetingCard('Next meeting'),
       ...this.journalCard(),
       ...(waitingRows.length > 0
@@ -2050,6 +2075,94 @@ class Threads {
       section('New', fresh, [el('span', { class: 't-keys-hint' }, [kbd('A'), ' act · ', kbd('T'), ' talk · ', kbd('D'), ' drop'])], (thread) => this.rowLine(thread), 'All sorted.'),
       section('Sat a week', sat, ['still open, untouched for 7 days'], (thread) => `${ago(thread.activityAt)} in ${STATUS_NAMES[thread.status]}. Move it, or drop it.`, 'Nothing has sat a week.'),
     ]);
+  }
+
+  /**
+   * The Now line on his home page, which Today's top row shows; a failure leaves the row out, since the home page is
+   * unchanged by it. An ended sign-in says so as everywhere.
+   */
+  async loadNow() {
+    try {
+      this.now = await readNow();
+      this.nowLoaded = true;
+    } catch (error) {
+      if (error instanceof SignedOut || error instanceof NotShared) this.fail(error, '');
+      return;
+    }
+    if (this.route.view === 'today') {
+      this.keepScroll = true;
+      this.render();
+    }
+  }
+
+  /** Today's top row: the line his home page shows under the greeting, with Edit, or a box to write it in. */
+  nowCard() {
+    if (!this.nowLoaded) return [];
+    const head = el('div', { class: 't-now-head' }, [
+      el('span', { class: 'j-label' }, ['On your home page']),
+      el('a', { class: 'j-more', href: '/', target: '_blank', rel: 'noopener' }, ['Open whysosuresh.com']),
+    ]);
+    if (this.nowDraft === null) {
+      return [
+        el('div', { class: 't-now', role: 'region', 'aria-label': 'Your home page' }, [
+          head,
+          el('div', { class: 't-now-row' }, [
+            el('p', { class: 't-now-line' }, this.now === null ? ['No Now line. Say what you are doing now, in one line.'] : [el('b', {}, ['Now']), ' ', this.now.text]),
+            el('button', { type: 'button', class: 't-text-btn', 'data-act': 'now-edit' }, [this.now === null ? 'Write one' : 'Edit']),
+          ]),
+        ]),
+      ];
+    }
+    const box = el('input', { id: 'now-text', class: 't-field t-now-input', type: 'text', maxlength: String(MAX_NOW), 'aria-label': 'Now', placeholder: 'Getting Stigmer 0.1 into the hands of its first teams' });
+    if (box instanceof HTMLInputElement) box.value = this.nowDraft;
+    return [
+      el('div', { class: 't-now', role: 'region', 'aria-label': 'Your home page' }, [
+        head,
+        el('form', { class: 't-now-form', 'data-submit': 'now' }, [
+          box,
+          el('div', { class: 'j-answer-bar' }, [
+            el('span', { class: 't-hint' }, ['One line, under your greeting. Empty takes it off.']),
+            el('span', { class: 'j-acts' }, [
+              el('button', { type: 'button', class: 't-btn', 'data-act': 'now-cancel' }, ['Cancel']),
+              el('button', { type: 'submit', class: 't-btn t-btn-primary' }, ['Save']),
+            ]),
+          ]),
+        ]),
+      ]),
+    ];
+  }
+
+  /** Saves the Now line: shown at once, put back if refused, with Undo to the line before it (or none). */
+  async saveNowLine() {
+    const text = (this.nowDraft ?? '').trim();
+    const before = this.now;
+    this.now = text === '' ? null : { text, setAt: new Date().toISOString() };
+    this.nowDraft = null;
+    this.keepScroll = true;
+    this.render();
+    try {
+      this.now = await saveNow(text);
+    } catch (error) {
+      this.now = before;
+      this.nowDraft = text;
+      this.keepScroll = true;
+      this.render();
+      this.fail(error, 'The Now line was not saved.');
+      return;
+    }
+    this.keepScroll = true;
+    this.render();
+    this.say(text === '' ? 'The Now line is off your home page' : 'The Now line is on your home page', async () => {
+      try {
+        this.now = await saveNow(before?.text ?? '');
+      } catch (error) {
+        this.fail(error, 'The Now line was not put back.');
+        return;
+      }
+      this.keepScroll = true;
+      this.render();
+      this.say('Undone', null);
+    });
   }
 
   /** Whether the view is one of the journal's: the list, a day or a week, the storylines, or one storyline. */
@@ -3598,6 +3711,12 @@ class Threads {
       case 'unpublished':
         [name, words] = ['globe', ['made this no longer public']];
         break;
+      case 'posted':
+        [name, words] = ['globe', ['put this on the home page']];
+        break;
+      case 'unposted':
+        [name, words] = ['globe', ['took this off the home page']];
+        break;
       case 'note-shown':
         [name, words] = ['check', ['showed ', this.visitorWordsOf(data.note), ' from ', word(data.name ?? 'someone')]];
         break;
@@ -4339,7 +4458,8 @@ class Threads {
   /** Who can see a thread: Public, Invited or Private, with its mark. @param {Thread} thread */
   level(thread) {
     const level = levelOf(thread.publicAt, this.member ? 1 : (this.shown?.people ?? []).length);
-    return el('span', { class: 't-dval' }, [el('span', { class: 't-level' }, [icon(level === 'Public' ? 'globe' : level === 'Invited' ? 'people' : 'lock'), level])]);
+    const listed = level === 'Public' && thread.feedAt ? ' · on the home page' : '';
+    return el('span', { class: 't-dval' }, [el('span', { class: 't-level' }, [icon(level === 'Public' ? 'globe' : level === 'Invited' ? 'people' : 'lock'), `${level}${listed}`])]);
   }
 
   /** The details beside a thread, as an invited person sees them: where it stands, its people by name, its link. @param {Thread} thread */
@@ -4881,6 +5001,7 @@ class Threads {
         ...(sharing.problem ? [el('p', { class: 't-err', role: 'alert' }, [sharing.problem])] : []),
         el('div', { class: 't-plist' }, rows),
         this.publicSwitch(thread),
+        this.feedSwitch(thread),
         el('div', { class: 't-sees' }, [el('span', {}, [el('b', {}, ['They see']), ' ', lines.sees]), el('span', {}, [el('b', {}, ['Never']), ' ', lines.never])]),
         el('div', { class: 't-seats' }, [el('meter', { class: 't-seat-bar', min: '0', max: '50', value: String(sharing.count), 'aria-label': 'People with access' }), el('span', {}, [seatsLine(sharing.count)])]),
         ...(draft === null || invited === null
@@ -4928,13 +5049,37 @@ class Threads {
   }
 
   /**
-   * Makes a thread public or not, from Share: shown at once and saved behind it, put back if refused, with Undo. The
-   * sheet stays open.
+   * Share's second switch, under Public: the thread is on his home page, or not. Off and disabled until it is public.
    * @param {Thread} thread
    */
-  async togglePublic(thread) {
+  feedSwitch(thread) {
+    const on = Boolean(thread.feedAt);
+    const said = feedLines(thread.publicAt !== null, on);
+    return el('div', { class: 't-switch-row', ...(said.allowed ? {} : { 'aria-disabled': 'true' }) }, [
+      el('b', { id: 'feed-label' }, [icon('globe'), ' ', said.label]),
+      el('button', {
+        type: 'button',
+        class: 't-switch',
+        role: 'switch',
+        'aria-checked': String(on),
+        'aria-labelledby': 'feed-label',
+        'aria-describedby': 'feed-note',
+        'data-act': 'feed',
+        ...(said.allowed ? {} : { disabled: '' }),
+      }),
+      el('small', { id: 'feed-note' }, [said.note]),
+    ]);
+  }
+
+  /**
+   * Makes a thread public or not, from Share's first switch, or puts it on his home page or takes it off, from the
+   * second: shown at once and saved behind it, put back if refused, with Undo. The sheet stays open.
+   * @param {Thread} thread
+   * @param {'public' | 'feed'} which
+   */
+  async toggleLevel(thread, which) {
     /** @type {Action} */
-    const action = { action: thread.publicAt === null ? 'publish' : 'unpublish' };
+    const action = which === 'public' ? { action: thread.publicAt === null ? 'publish' : 'unpublish' } : { action: thread.feedAt ? 'unpost' : 'post' };
     const predicted = predict(thread, action);
     this.threads.set(thread.number, { ...predicted, shared: thread.shared ?? 0 });
     if (this.shown?.thread.number === thread.number) this.shown = { ...this.shown, thread: predicted };
@@ -5691,6 +5836,19 @@ class Threads {
         if (box instanceof HTMLTextAreaElement) box.focus();
         break;
       }
+      case 'now-edit': {
+        this.nowDraft = this.now?.text ?? '';
+        this.keepScroll = true;
+        this.render();
+        const box = this.main.querySelector('#now-text');
+        if (box instanceof HTMLInputElement) box.focus();
+        break;
+      }
+      case 'now-cancel':
+        this.nowDraft = null;
+        this.keepScroll = true;
+        this.render();
+        break;
       case 'journal-keep': {
         const key = button.dataset.key ?? '';
         this.answerOpen.delete(key);
@@ -5740,7 +5898,10 @@ class Threads {
         void this.removePerson(button.dataset.person ?? '');
         break;
       case 'public':
-        if (thread && thread.source === 'self' && !this.member) void this.togglePublic(thread);
+        if (thread && thread.source === 'self' && !this.member) void this.toggleLevel(thread, 'public');
+        break;
+      case 'feed':
+        if (thread && thread.publicAt !== null && !this.member) void this.toggleLevel(thread, 'feed');
         break;
       case 'note-show':
       case 'note-drop':
@@ -6030,6 +6191,7 @@ class Threads {
       if (editing !== undefined) editing.text = target.value;
     }
     else if (target.id === 'journal-answer' && target instanceof HTMLTextAreaElement) this.answerDrafts.set(target.dataset.key ?? '', target.value);
+    else if (target.id === 'now-text' && target instanceof HTMLInputElement) this.nowDraft = target.value;
     else if (target.id === 'person-email' && target instanceof HTMLInputElement) {
       this.personAddress = target.value;
       this.personProblem = null;
@@ -6074,6 +6236,7 @@ class Threads {
     if (kind === 'person-name') void this.savePersonName();
     if (kind === 'person-email') void this.savePersonEmail();
     if (kind === 'journal-edit') void this.saveJournalEdit();
+    if (kind === 'now') void this.saveNowLine();
     if (kind === 'journal-answer') {
       const box = this.main.querySelector('#journal-answer');
       if (box instanceof HTMLTextAreaElement) void this.saveJournalAnswer(box.dataset.key ?? '');

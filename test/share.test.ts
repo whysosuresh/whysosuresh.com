@@ -3,10 +3,11 @@
 // comments and seats in plain words; and the invitation he sends from his own Gmail names the thread and carries its
 // `?invite` link, with no one else's address in it. The Public switch: a thread is Public, Invited or Private; only his
 // own threads may be public, and the switch says why not for a site note or a told thread; and a reply to a
-// visitor's note on a public thread is a draft to them alone, about that thread, quoting their words.
+// visitor's note on a public thread is a draft to them alone, about that thread, quoting their words. The home page
+// switch: only a public thread can be listed, and it says what everyone sees once it is.
 
 import { describe, expect, it } from "vitest";
-import { SEATS, addressOf, invitation, invitationProblem, isAddress, levelOf, listed, noteReply, publicLines, seatsLine, seesLines } from "../site/app/share.js";
+import { SEATS, addressOf, feedLines, invitation, invitationProblem, isAddress, levelOf, listed, noteReply, publicLines, seatsLine, seesLines } from "../site/app/share.js";
 
 describe("an invitation's check", () => {
   it("takes an address the Worker takes, for an invitation and a person's page alike", () => {
@@ -90,6 +91,22 @@ describe("the Public switch", () => {
     expect(said.allowed).toBe(false);
     expect(said.note.startsWith(start)).toBe(true);
     expect(said.note).toContain("the words are theirs");
+  });
+});
+
+describe("the home page switch", () => {
+  it("is off until the thread is public, and says so", () => {
+    const said = feedLines(false, false);
+    expect(said).toMatchObject({ label: "On the home page: listed under What's happening at whysosuresh.com", allowed: false });
+    expect(said.note).toBe("Make it public first: only a public thread can be on the home page.");
+  });
+
+  it("says what everyone sees once it is on, and that a public thread off it is listed nowhere", () => {
+    const on = feedLines(true, true);
+    expect(on.allowed).toBe(true);
+    expect(on.note).toContain("Everyone who opens whysosuresh.com sees its title");
+    expect(on.note).toContain("Turning Public off takes it off the home page too.");
+    expect(feedLines(true, false).note).toBe("Off: anyone with the link reads it, and it is listed nowhere.");
   });
 });
 
