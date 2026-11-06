@@ -3,7 +3,8 @@
 // in a later version too, and are missing once a version cuts them; a selection's words keep their spaces and line
 // breaks, with up to 64 characters either side, and a blank one or one over 500 is no quote; and a message from the
 // thread is taken only as exactly one of its four kinds, in range, so nothing else the parent posts reaches the page:
-// a hello is the signed-in thread's or a visitor's, and a save that failed may say why in one short line.
+// a hello is the signed-in thread's, a public visitor's, an ask's visitor's (whose boxes only Suresh reads) or the
+// owner's reading an ask (no boxes to type in), and a save that failed may say why in one short line.
 
 import { describe, expect, it } from "vitest";
 
@@ -74,8 +75,10 @@ describe("a message from the thread", () => {
   const anchor = { id: ID, quote: "The live app", prefix: "", suffix: " is shown" };
 
   it("is taken as exactly one of hello, discussion, focus and saved", () => {
-    expect(readFromThread({ [KEY]: "hello" })).toEqual({ kind: "hello", visitor: false });
-    expect(readFromThread({ [KEY]: "hello", visitor: true })).toEqual({ kind: "hello", visitor: true });
+    expect(readFromThread({ [KEY]: "hello" })).toEqual({ kind: "hello", visitor: false, mode: "answer" });
+    expect(readFromThread({ [KEY]: "hello", visitor: true })).toEqual({ kind: "hello", visitor: true, mode: "answer" });
+    expect(readFromThread({ [KEY]: "hello", mode: "private" })).toEqual({ kind: "hello", visitor: true, mode: "private" });
+    expect(readFromThread({ [KEY]: "hello", mode: "read" })).toEqual({ kind: "hello", visitor: false, mode: "read" });
     expect(readFromThread({ [KEY]: "discussion", answers: [answer], anchors: [anchor, { ...anchor, id: "draft" }], active: ID })).toEqual({
       kind: "discussion",
       answers: [answer],
@@ -98,6 +101,9 @@ describe("a message from the thread", () => {
     ["hello with more", { [KEY]: "hello", name: "Meera" }],
     ["a visitor's hello that says no", { [KEY]: "hello", visitor: false }],
     ["a visitor's hello that isn't a yes", { [KEY]: "hello", visitor: "yes" }],
+    ["a hello in a mode the page doesn't know", { [KEY]: "hello", mode: "answer" }],
+    ["a hello that is both a visitor's and a mode", { [KEY]: "hello", visitor: true, mode: "private" }],
+    ["a hello whose mode isn't text", { [KEY]: "hello", mode: 1 }],
     ["a save's blank problem", { [KEY]: "saved", question: "order", ok: false, problem: "  " }],
     ["a save's problem too long to be a line", { [KEY]: "saved", question: "order", ok: false, problem: "x".repeat(201) }],
     ["a save's problem that isn't text", { [KEY]: "saved", question: "order", ok: false, problem: 7 }],

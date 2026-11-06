@@ -3,10 +3,10 @@
 // lower case, as a thread's is, and the page's patterns read it back; the line under a name says how he knows them in
 // plain counts (the meetings they are in among them), and a thread's line how they are in it (in its meeting too); an address they typed with no invitation behind it says so;
 // Everyone keeps its order and folds away those only in dropped threads; and an address another person holds says
-// whose it is.
+// whose it is; and their answers to one of his asks say they answered it.
 
 import { describe, expect, it } from "vitest";
-import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, takenLine } from "../site/app/people.js";
+import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, saidOn, takenLine } from "../site/app/people.js";
 
 const NONE = { sent: 0, told: 0, invited: 0, removed: 0, commented: 0, noted: 0 };
 
@@ -83,5 +83,11 @@ describe("Everyone", () => {
   it("says whose an address is when another person holds it", () => {
     expect(takenLine("asha@example.com", { number: 3, name: "Asha", email: "asha@example.com" })).toBe("asha@example.com is Asha's (#3). One address belongs to one person.");
     expect(takenLine("x@example.com", null)).toBe("x@example.com already belongs to someone. One address belongs to one person.");
+  });
+});
+
+describe("what a person said, by the thread it is on", () => {
+  it("is an answer to one of his asks, or words on a thread", () => {
+    expect([saidOn("answer"), saidOn("note"), saidOn("comment"), saidOn("public-note")]).toEqual(["answered ", "on ", "on ", "on "]);
   });
 });

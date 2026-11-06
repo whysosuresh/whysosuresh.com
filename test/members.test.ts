@@ -12,7 +12,9 @@
 // a namesake's by their address, which is never shown. They read a meeting of a thread they are in, its people by name only and its
 // history with where it moved from, their own place marked as theirs by their address; being in a meeting grants
 // nothing, at the door or at sign-in. The owner's list says how many people each thread is shared with, and which wait on him: an invited person had
-// the last word, until he comments, moves or edits.
+// the last word, until he comments, moves or edits. Someone who answered one of his asks and whom he invited back to
+// their own thread reads it with the ask's page and their answers, answers again there as themselves, never sees who
+// else answered or the ask's own thread, and is refused every ask call.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { OWNER, SITE, startHarness, type Harness } from "./harness.ts";
@@ -527,5 +529,60 @@ describe("a meeting, as an invited person sees it", () => {
     expect(JSON.parse(Buffer.from(verdict, "base64url").toString("utf8"))).toMatchObject({ success: false });
     // The invited person signs in as before.
     expect((await call("/me", { as: { email: MEERA } })).status).toBe(200);
+  });
+});
+
+describe("a respondent he invites back to their thread", () => {
+  const QUESTIONS = '<!doctype html><p data-thread-question="stood-out">What stood out?</p><p data-thread-question="fit">Where would it fit?</p>';
+
+  /** An open ask answered once by Meera from her browser, and her thread, which he invited her back to. */
+  async function invitedBack(): Promise<{ ask: number; theirs: number }> {
+    const ask = await thread({ title: "Tuesday demo" });
+    const saved = await harness.fetch(`${THREADS}/${ask}/pages`, {
+      method: "POST",
+      headers: { "Content-Type": "text/html; charset=utf-8", "Cf-Access-Jwt-Assertion": token("sync") },
+      body: new TextEncoder().encode(QUESTIONS),
+    });
+    expect(saved.status).toBe(201);
+    await answer(await call(`/threads/${ask}/ask`, { as: "sync", body: { slug: "tuesday-demo" } }));
+    await answer(await call(`/threads/${ask}/ask`, { body: { action: "open" } }));
+    const sent = await harness.fetch(`${SITE}/api/asks/tuesday-demo/answers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: SITE, "CF-Connecting-IP": "203.0.113.9" },
+      body: new TextEncoder().encode(JSON.stringify({ question: "stood-out", body: "The resume after the crash.", name: "Meera", email: MEERA, token: "pass", key: "c3".repeat(32) })),
+    });
+    expect(sent.status).toBe(201);
+    const theirs = await count("SELECT number AS n FROM threads WHERE ask_thread_id IS NOT NULL");
+    await invite(theirs, MEERA);
+    return { ask, theirs };
+  }
+
+  it("reads their thread as an answer to the ask, by its slug and title, with the ask's page and their answer", async () => {
+    const { theirs } = await invitedBack();
+    const shown = await answer<Shown & { page: { version: number } | null; answeredBy?: unknown }>(await call(`/threads/${theirs}`, { as: { email: MEERA } }));
+    expect(shown.thread.ask).toEqual({ slug: "tuesday-demo", title: "Tuesday demo" });
+    expect(shown.page?.version).toBe(1);
+    expect(shown.comments.map((one) => one.body)).toEqual(["The resume after the crash."]);
+    expect(shown.answeredBy).toBeUndefined();
+    const frame = await call(`/threads/${theirs}/pages/1`, { as: { email: MEERA } });
+    expect(frame.status).toBe(200);
+    expect(await frame.text()).toContain("What stood out?");
+  });
+
+  it("answers again there as themselves, on a question the page asks", async () => {
+    const { theirs } = await invitedBack();
+    const again = await answer<{ comment: Record<string, unknown> }>(await call(`/threads/${theirs}/comments`, { as: { email: MEERA }, body: { body: "Our support triage.", question: "fit" } }), 201);
+    expect(again.comment).toMatchObject({ author: "member", name: "Meera", question: "fit", mine: true });
+  });
+
+  it("never reads the ask's own thread or its page, and is refused every ask call", async () => {
+    const { ask, theirs } = await invitedBack();
+    const meera = { as: { email: MEERA } } as const;
+    expect(await reasonOf(await call(`/threads/${ask}`, meera))).toEqual([404, "no-thread"]);
+    expect((await call(`/threads/${ask}/pages/1`, meera)).status).toBe(404);
+    expect(await reasonOf(await call("/asks", meera))).toEqual([403, "owner-only"]);
+    for (const body of [{ action: "read" }, { action: "close" }, { action: "open" }, { slug: "mine" }]) {
+      expect([body, await reasonOf(await call(`/threads/${theirs}/ask`, { ...meera, body }))]).toEqual([body, [403, "owner-only"]]);
+    }
   });
 });

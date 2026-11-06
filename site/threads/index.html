@@ -1,9 +1,11 @@
 <!DOCTYPE html>
 <!-- whysosuresh.com/me and /threads: Suresh's threads, the page the Worker hands over at each room (/me, the door
-     everyone signed in enters by; /threads/; /people; /meetings) and at every thread's own address, /threads/42
-     (src/pages.ts). Today at /me (the next meeting, notes waiting, threads waiting on him, new ones, and what sat a
-     week), the Threads room at /threads/ (four tabs and the spaces), the Meetings room, and a thread: its meeting, its
-     living summary on top, its main text, then comments and history in order.
+     everyone signed in enters by; /threads/; /people; /meetings; /asks) at every thread's own address, /threads/42,
+     and at an ask's, /ask/<slug> (src/pages.ts). Today at /me (the next meeting, notes waiting, threads waiting on him,
+     new ones, and what sat a week), the Threads room at /threads/ (four tabs and the spaces), the Meetings room, the
+     Asks room (his links that ask a few questions), and a thread: its meeting, its living summary on top, its main
+     text, then comments and history in order. An ask's address draws its page for anyone, signed in or not, in the
+     public view below, full screen, with an optional name and email above it.
      /app/threads.js draws all of it from the threads' private calls under /threads/api/, behind Cloudflare Access;
      the page itself holds no data. Until a call answers, nothing shows: a visitor who isn't signed in sees the
      same "Nothing here" a missing thread shows at a thread's address, and a small "Sign in" there only on a device that
@@ -12,7 +14,7 @@
      Suresh made public is drawn for anyone who isn't in it in the public view below: the thread, the comments he
      made public, and a note form whose note waits for his OK. People (/people, and a person's page at
      /people/7-meera) are his alone: everyone he deals with, and a page for each. On a phone the bar holds Today,
-     Threads, Find, New and More (People, Meetings); an invited person's holds their threads, their meetings and Find.
+     Threads, Find, New and More (People, Meetings, Asks); an invited person's holds their threads, their meetings and Find.
      Every link and file is root-absolute; the icons are a template the script copies. -->
 <html lang="en">
 <head>
@@ -85,6 +87,7 @@
     <svg class="t-i" data-name="doc" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.5h5.5L12.5 4.5V14a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2a.5.5 0 0 1 .5-.5Z"/><path d="M9.5 1.5v3h3M5.5 8h5M5.5 10.5h5"/></svg>
     <svg class="t-i" data-name="x" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
     <svg class="t-i" data-name="cal" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg>
+    <svg class="t-i" data-name="ask" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3h11v7.5H8L4.5 13v-2.5h-2Z"/><path d="M6.6 5.6a1.5 1.5 0 1 1 2 1.4c-.4.2-.6.5-.6.9M8 9.2h.01"/></svg>
     <svg class="t-i" data-name="more" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg>
     <svg class="t-i" data-name="pen" viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 2.5 13.5 5.5 6 13H3v-3Z"/></svg>
     <svg class="t-i" data-name="reply" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4 2.5 7.5 6 11M2.5 7.5H10a3.5 3.5 0 0 1 3.5 3.5v1"/></svg>

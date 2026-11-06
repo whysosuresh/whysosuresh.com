@@ -23,6 +23,7 @@ const SERVED = [
   "404.html",
   "_headers",
   "_redirects",
+  "app/asks.js",
   "app/keys.js",
   "app/markdown.js",
   "app/page-talk.js",
@@ -482,10 +483,12 @@ describe("the threads page", () => {
     expect(store).toContain("const API = '/threads/api';");
     const paths = [...store.matchAll(/`\$\{API\}(\/[^`?$]*)/g)].map((m) => m[1]);
     expect(paths.length).toBeGreaterThan(0);
-    // One fetch for the private calls, one for a public thread's own call (src/public.ts); a note is sent by the site's
-    // one note sender (talk-send.js).
+    // One fetch for the private calls, one for the public calls outside Access, which read a public thread
+    // (src/public.ts) and an ask (src/asks.ts) and nothing else; a note or an answer is sent by the site's one note
+    // sender (talk-send.js).
     expect(store.match(/fetch\(/g)).toHaveLength(2);
-    expect(store).toContain("fetch(`/api/threads/${number}`");
+    expect(store).toContain("response = await fetch(path, { redirect: 'manual', credentials: 'omit'");
+    expect([...store.matchAll(/readPublic\(`([^`]*)`/g)].map((m) => m[1])).toEqual(["/api/threads/${number}", "/api/asks/${encodeURIComponent(slug)}"]);
     for (const script of ["app/threads.js", "app/keys.js", "app/markdown.js"]) expect([script, read(script).includes("fetch(")]).toEqual([script, false]);
   });
 

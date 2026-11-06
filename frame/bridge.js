@@ -10,8 +10,11 @@
 // did, and hides the page's own "answer on the thread" lines (`data-outside-thread`), which are for the page as
 // claude.ai shows it. A public thread's view answers its `ready` with `hello` and `visitor: true`, and then it draws the
 // answer boxes alone, for answers of at most 4,000 characters, public with the name the visitor gave, and never the
-// Comment pill or underlines, which strangers don't get. The signed-in thread answers its `ready` with `hello`, and
-// then it also:
+// Comment pill or underlines, which strangers don't get. An ask's visitor gets `hello` with `mode: "private"`: the same
+// boxes, which say only Suresh reads them, because nobody else ever does. The owner reading an ask, or one person's
+// answers to it, gets `hello` with `mode: "read"`: each question shows the answers the thread gives under it, with no
+// box to type in (the answers are someone else's), and Comment and underlines as usual. The signed-in thread answers
+// its `ready` with `hello`, and then it also:
 //
 // - draws an answer box under each of the page's questions (`data-thread-question="<id>"`), with everyone's answers
 //   under it, in a closed shadow root and the threads' own look, so the page's CSS and the box can't touch each other;
@@ -50,7 +53,9 @@ export const KEY = 'whysosuresh';
  * @typedef {{ quote: string, prefix: string, suffix: string }} Quote
  * @typedef {{ question: string, name: string, body: string, at: string, mine: boolean }} Answer
  * @typedef {{ id: string, quote: string, prefix: string, suffix: string }} Anchor
- * @typedef {{ kind: 'hello', visitor: boolean } | { kind: 'discussion', answers: Answer[], anchors: Anchor[], active: string | null }
+ * @typedef {'answer' | 'private' | 'read'} Mode How the page is answered: in boxes as the reader, in boxes only Suresh
+ *   reads (an ask's visitor), or not at all, its answers read under the questions (the owner on an ask).
+ * @typedef {{ kind: 'hello', visitor: boolean, mode: Mode } | { kind: 'discussion', answers: Answer[], anchors: Anchor[], active: string | null }
  *   | { kind: 'focus', id: string, scroll: boolean } | { kind: 'saved', question: string, ok: boolean, problem: string | null }} FromThread
  */
 
@@ -99,8 +104,11 @@ export function readFromThread(data) {
   if (!isRecord(data)) return null;
   switch (data[KEY]) {
     case 'hello':
-      if (hasExactly(data, [KEY])) return { kind: 'hello', visitor: false };
-      return hasExactly(data, [KEY, 'visitor']) && data.visitor === true ? { kind: 'hello', visitor: true } : null;
+      if (hasExactly(data, [KEY])) return { kind: 'hello', visitor: false, mode: 'answer' };
+      if (hasExactly(data, [KEY, 'visitor'])) return data.visitor === true ? { kind: 'hello', visitor: true, mode: 'answer' } : null;
+      if (!hasExactly(data, [KEY, 'mode'])) return null;
+      if (data.mode === 'private') return { kind: 'hello', visitor: true, mode: 'private' };
+      return data.mode === 'read' ? { kind: 'hello', visitor: false, mode: 'read' } : null;
     case 'discussion': {
       if (!hasExactly(data, [KEY, 'answers', 'anchors', 'active'])) return null;
       const { answers, anchors, active } = data;
@@ -213,7 +221,10 @@ time{color:var(--faint);font-size:11.5px;white-space:nowrap}
 .problem{padding:0 12px 6px;color:var(--ink);font-size:12px;font-weight:600}
 .problem:empty{display:none}
 .count{color:var(--faint);font-size:11.5px;font-variant-numeric:tabular-nums}
-.count.over{color:var(--ink);font-weight:700}`;
+.count.over{color:var(--ink);font-weight:700}
+.note svg{width:11px;height:11px;margin-right:4px;vertical-align:-1px;fill:none;stroke:currentColor;stroke-width:1.8}
+.list.read{border-top:0}
+.none{padding:7px 12px;color:var(--faint);font-style:italic}`;
 /**
  * The Comment pill sits on the page's own ground, which may be light or dark whatever the device says, so it is one
  * look on every page: black, with a pale ring that keeps it apart from a dark page.
@@ -251,6 +262,22 @@ function initialsOf(name) {
 function shortTime(iso) {
   const at = new Date(iso);
   return Number.isNaN(at.getTime()) ? '' : at.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+/** A small padlock, for a box whose answer only Suresh reads. */
+function lockIcon() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('aria-hidden', 'true');
+  for (const [tag, attrs] of /** @type {[string, Record<string, string>][]} */ ([
+    ['rect', { x: '3.5', y: '7', width: '9', height: '6.5', rx: '1.2' }],
+    ['path', { d: 'M5.5 7V5a2.5 2.5 0 0 1 5 0v2' }],
+  ])) {
+    const part = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [name, value] of Object.entries(attrs)) part.setAttribute(name, value);
+    svg.append(part);
+  }
+  return svg;
 }
 
 function start() {
@@ -296,6 +323,10 @@ function start() {
   /** The longest answer a box takes, and what its bar says: the signed-in thread's, until a visitor's hello. */
   let maxAnswer = MAX_ANSWER;
   let boxNote = 'Saved on the thread, under your sign-in';
+  /** Whether the bar's note carries a lock: an ask's visitor, whose answers only Suresh reads. */
+  let locked = false;
+  /** Whether the answers are only read here: the owner on an ask, with no box to type in. */
+  let reading = false;
   /** @type {Extract<FromThread, { kind: 'discussion' }> | null} */
   let discussion = null;
   /** @type {Map<string, Range>} */
@@ -382,7 +413,7 @@ function start() {
   };
 
   /* An answer box under each question: the reader's own answer (or a box for it), then everyone else's. */
-  /** @type {Map<string, { box: HTMLElement, mine: HTMLElement, form: HTMLElement, area: HTMLTextAreaElement, save: HTMLButtonElement, cancel: HTMLButtonElement, problem: HTMLElement, count: HTMLElement, list: HTMLElement, editing: boolean }>} */
+  /** @type {Map<string, { host: HTMLElement, box: HTMLElement, mine: HTMLElement, form: HTMLElement, area: HTMLTextAreaElement, save: HTMLButtonElement, cancel: HTMLButtonElement, problem: HTMLElement, count: HTMLElement, list: HTMLElement, editing: boolean }>} */
   const boxes = new Map();
   const drawBoxes = () => {
     for (const [id, node] of questions) {
@@ -397,12 +428,14 @@ function start() {
         const problem = make('div', { class: 'problem', role: 'status' });
         const count = make('span', { class: 'count' });
         count.hidden = true;
-        const form = make('div', {}, [area, problem, make('div', { class: 'bar' }, [make('span', { class: 'note' }, [boxNote]), count, cancel, save])]);
+        const note = make('span', { class: 'note' }, [boxNote]);
+        if (locked) note.prepend(lockIcon());
+        const form = make('div', {}, [area, problem, make('div', { class: 'bar' }, [note, count, cancel, save])]);
         const mine = make('div', { class: 'row' });
         const list = make('div', { class: 'list' });
         const box = make('div', { class: 'b' }, [mine, form, list]);
         root.append(make('style', {}, [LOOK]), box);
-        const made = { box, mine, form, area, save, cancel, problem, count, list, editing: false };
+        const made = { host, box, mine, form, area, save, cancel, problem, count, list, editing: false };
         parts = made;
         // Near the limit, the box counts; past it, it says so, and Save keeps the words.
         const counted = () => {
@@ -441,6 +474,21 @@ function start() {
         else node.append(host);
       }
       const answers = discussion?.answers.filter((one) => one.question === id) ?? [];
+      if (reading) {
+        // Someone else's answers, read: every one the thread gives, and "No answer" where the page has answers
+        // elsewhere but none here; a page with no answers at all keeps its questions plain.
+        const any = (discussion?.answers.length ?? 0) > 0;
+        parts.mine.hidden = true;
+        parts.form.hidden = true;
+        parts.list.hidden = !any;
+        parts.host.hidden = !any;
+        parts.list.replaceChildren(
+          ...(answers.length === 0 ? [make('div', { class: 'none' }, ['No answer'])] : []),
+          ...answers.map((one) => make('div', { class: 'row' }, [make('span', { class: 'av', 'aria-hidden': 'true' }, [initialsOf(one.name)]), make('p', {}, [make('b', {}, [one.name]), one.body]), make('time', { datetime: one.at }, [shortTime(one.at)])])),
+        );
+        parts.list.classList.add('read');
+        continue;
+      }
       const own = answers.findLast((one) => one.mine);
       const others = answers.filter((one) => !one.mine);
       const editing = parts.editing || own === undefined;
@@ -544,8 +592,10 @@ function start() {
     if (said.kind === 'hello') {
       if (boxes.size === 0 && said.visitor) {
         maxAnswer = MAX_VISITOR_ANSWER;
-        boxNote = 'Public, with the name you gave';
+        boxNote = said.mode === 'private' ? 'Only Suresh reads this' : 'Public, with the name you gave';
+        locked = said.mode === 'private';
       }
+      if (boxes.size === 0 && said.mode === 'read') reading = true;
       answering = true;
       discussing = !said.visitor && maxAnswer === MAX_ANSWER;
       drawBoxes();

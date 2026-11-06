@@ -2,8 +2,8 @@
 // whysosuresh.com/me and /threads: Suresh's threads, one page for all of them (site/threads/index.html, which the
 // Worker hands over at every room's address and every thread's). /me is the door everyone signed in enters by, and
 // the side rail is drawn for rooms, side by side at the top level: its head is the site, then Today (/me), Threads
-// (/threads/) with the five spaces under it, People (/people) and Meetings (/meetings). On a phone the bar holds
-// Today, Threads, Find, New and More, with People and Meetings under More. The views, each at its own address: Today
+// (/threads/) with the five spaces under it, People (/people), Meetings (/meetings) and Asks (/asks). On a phone the
+// bar holds Today, Threads, Find, New and More, with People, Meetings and Asks under More. The views, each at its own address: Today
 // (/me: the next meeting as a card, then threads waiting on him, new ones, and open threads
 // that sat a week untouched), the Threads room (/threads/, or
 // /threads/?tab=act&space=company: four tabs by where a thread stands, and the five spaces), and a thread
@@ -74,6 +74,19 @@
 // person reads the meeting of a thread they are in, read only, with their own place marked, and gets Your meetings,
 // the ones they are in, and their next one as a card at /me.
 //
+// An ask is one of his own threads whose page asks a few questions, handed to many people by one link, /ask/<slug>
+// (asks.js holds their words). Asks lists them for him: drafts first, which only he opens, then every link with Copy
+// link and Close (Open again once closed), how many answered and when. An ask's own thread carries a strip with its
+// state and link, and Answered by above its page: each person a link to their own thread, new answers first, eight
+// until Show all, which lists everyone in a box of its own with a filter by name, and Mark read for the new ones. Each
+// person who answers is a thread of their own, a note from the site whose byline says they answered the ask, showing the
+// ask's page with their answers under its questions and no box for him to type in (the bridge's `read` hello); new
+// answers wait on him, and Today folds several new answers to one ask into one row that opens the ask. The ask's
+// address draws its page for anyone, signed in or not, with no call to who is calling: full screen, under a bar with
+// a name and an email, both optional, until the first answer, its boxes saying only Suresh reads them (the bridge's
+// `private` hello); a closed ask shows its questions with no boxes and a way to send a note instead, and a draft or an
+// address no ask has shows "Nothing here".
+//
 // Signed out at a thread's address, the page shows what a missing address shows ("Nothing here"), so the address
 // alone never says a thread exists; a device that has signed in before also gets a small "Sign in". The link in an
 // invitation carries `?invite`: signed out, it goes straight to the sign-in and back; signed in, the page drops it
@@ -89,8 +102,9 @@ import { SPACES } from '../spaces.js';
 import { MEMBER_COMMANDS, MEMBER_SHEET, SHEET, commandFor } from './keys.js';
 import { parse, summaryLines } from './markdown.js';
 import { cardLines, chipWords, isDay, leadWords, lengthWords, momentWords, partsOf, peopleChanges, split, stateOf, whenLine, whenOf, withLine } from './meetings.js';
-import { DRAFT, KEY, discussionFor, placesOf, readPageMessage, stack } from './page-talk.js';
-import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, takenLine } from './people.js';
+import { ASKS_PATH, ASK_PATH, CLOSED_LINE, DRAFTS_HINT, agoWords, FIRST_ANSWERERS, answeredHead, answererName, answerersShown, askEventWords, askLink, askShown, countLine, foldWaiting, foldedTitle, foldedWho, markReadLabel, markedWords, nobodyLine, savedLine, stateWords, summaryNoteFor, talkLinkFor, topicLine, visitorHint } from './asks.js';
+import { DRAFT, KEY, discussionFor, helloFor, placesOf, readPageMessage, stack, takesAnswers } from './page-talk.js';
+import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, saidOn, takenLine } from './people.js';
 import { addressOf, invitation, invitationProblem, isAddress, levelOf, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
 import { prepare as prepareBotCheck, sendTo } from '../talk-send.js';
 import {
@@ -98,6 +112,8 @@ import {
   Missing,
   NotShared,
   SignedOut,
+  askAction,
+  askPageAddress,
   attendee,
   comment,
   edit,
@@ -105,8 +121,10 @@ import {
   invite,
   judge,
   listAll,
+  listAsks,
   listMine,
   listPeople,
+  markAskRead,
   me,
   meet,
   move,
@@ -115,6 +133,7 @@ import {
   publicPageAddress,
   search,
   show,
+  showAsk,
   showPerson,
   showPublic,
   signInAddress,
@@ -139,15 +158,19 @@ import {
  * @typedef {import('./threads-store.js').Someone} Someone
  * @typedef {import('./threads-store.js').PersonShown} PersonShown
  * @typedef {import('./threads-store.js').PersonChange} PersonChange
+ * @typedef {import('./threads-store.js').Ask} Ask
+ * @typedef {import('./threads-store.js').AskShown} AskShown
+ * @typedef {import('./threads-store.js').Answerer} Answerer
  * @typedef {import('./meetings.js').Meeting} Meeting
  * @typedef {{ number: number, day: string, time: string, minutes: string, where: string, chosen: number[], named: string[], query: string, problem: string, busy: boolean }} MeetingDraft
  * @typedef {import('./page-talk.js').Places<ThreadComment>} Places
  * @typedef {{ quote: string, prefix: string, suffix: string, top: number }} WordsDraft
- * @typedef {{ ready: boolean, questions: Set<string>, anchors: Map<string, number | null>, questionTops: Map<string, number>, answered: number[], sent: string }} Talk
+ * @typedef {{ ready: boolean, questions: Set<string>, anchors: Map<string, number | null>, questionTops: Map<string, number>, answered: number[], sent: string,
+ *   hello: 'member' | 'visitor' | 'private' | 'read' | null }} Talk
  * @typedef {import('./markdown.js').Inline} Inline
  * @typedef {import('./keys.js').Command} Command
  * @typedef {{ view: 'today' } | { view: 'list', tab: Tab, space: string | null } | { view: 'thread', number: number } | { view: 'people' }
- *   | { view: 'person', number: number } | { view: 'meetings' }} Route
+ *   | { view: 'person', number: number } | { view: 'meetings' } | { view: 'asks' } | { view: 'ask', slug: string }} Route
  * @typedef {{ to: string, subject: string, body: string }} Draft
  * @typedef {{ title: string, summary: string, body: string }} Editing
  * @typedef {{ title: string, space: string, status: 'received' | 'act' | 'discuss', body: string }} NewDraft
@@ -226,7 +249,7 @@ const CARD_GAP = 8;
 
 /** What a new page's frame has said: nothing yet. @returns {Talk} */
 function freshTalk() {
-  return { ready: false, questions: new Set(), anchors: new Map(), questionTops: new Map(), answered: [], sent: '' };
+  return { ready: false, questions: new Set(), anchors: new Map(), questionTops: new Map(), answered: [], sent: '', hello: null };
 }
 
 /** Whether a comment can have replies: shown, not a reply, an answer or words' discussion's reply, not a visitor's or for anyone. @param {ThreadComment} said */
@@ -245,6 +268,8 @@ const THREADS = '/threads/';
 const MEETINGS = '/meetings';
 /** The People room. */
 const PEOPLE = '/people';
+/** The Asks room: his links that ask a few questions, each answer a thread of its own. */
+const ASKS = ASKS_PATH;
 /** The reader's own locale and zone, which every meeting is said in. */
 const LOCALE = undefined;
 const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -322,6 +347,20 @@ function tabOf(status) {
 /** @param {Thread} thread */
 function isOpen(thread) {
   return OPEN.includes(thread.status);
+}
+
+/** An ask's own thread's slug and state, or null for a thread that isn't one. @param {Thread} thread */
+function askOf(thread) {
+  return thread.ask && 'state' in thread.ask ? thread.ask : null;
+}
+
+/**
+ * The ask a response thread answers (one person's answers to it), or null for any other thread.
+ * @param {Thread} thread
+ * @returns {{ number?: number, slug: string, title: string | null } | null}
+ */
+function answeredAsk(thread) {
+  return thread.ask && !('state' in thread.ask) ? thread.ask : null;
 }
 
 /** @param {string} iso */
@@ -412,6 +451,7 @@ function quoted(text) {
 /** @param {Thread} thread */
 function canReply(thread) {
   if (!thread.senderEmail) return false;
+  if (answeredAsk(thread)) return thread.status !== 'dropped';
   if (thread.kind === 'idea') return thread.status !== 'dropped';
   return thread.kind === 'feedback' && thread.status === 'done';
 }
@@ -423,6 +463,11 @@ function canReply(thread) {
  */
 function draftReply(thread) {
   const first = (thread.senderName ?? '').trim().split(/\s+/)[0] || 'there';
+  const asked = answeredAsk(thread);
+  if (asked) {
+    const title = asked.title ?? 'my questions';
+    return { to: thread.senderEmail ?? '', subject: `Your answers to ${title}`, body: `Hi ${first},\n\nThanks for answering ${title}.\n\n\n\nSuresh` };
+  }
   if (thread.kind === 'idea') {
     const about = thread.space === null || thread.space === 'other' ? '' : ` about ${spaceLabel(thread.space)}`;
     return {
@@ -554,9 +599,9 @@ function meetingData(value) {
   return { when: value.when, minutes, where };
 }
 
-/** Whether a view is his alone: the Threads room and the people. @param {Route} route */
+/** Whether a view is his alone: the Threads room, the people and the asks. @param {Route} route */
 function isHis(route) {
-  return route.view === 'list' || route.view === 'people' || route.view === 'person';
+  return route.view === 'list' || route.view === 'people' || route.view === 'person' || route.view === 'asks';
 }
 
 /** @param {Location} at @returns {Route} */
@@ -568,6 +613,9 @@ function routeOf(at) {
   if (person) return { view: 'person', number: Number(person[1]) };
   if (at.pathname === ME) return { view: 'today' };
   if (at.pathname === MEETINGS) return { view: 'meetings' };
+  if (at.pathname === ASKS) return { view: 'asks' };
+  const ask = ASK_PATH.exec(at.pathname);
+  if (ask) return { view: 'ask', slug: ask[1] ?? '' };
   const query = new URLSearchParams(at.search);
   const tab = query.get('tab') ?? '';
   const space = query.get('space') ?? '';
@@ -578,6 +626,8 @@ function routeOf(at) {
 function pathOf(route, threads, people = []) {
   if (route.view === 'today') return ME;
   if (route.view === 'meetings') return MEETINGS;
+  if (route.view === 'asks') return ASKS;
+  if (route.view === 'ask') return `/ask/${route.slug}`;
   if (route.view === 'people') return PEOPLE;
   if (route.view === 'person') {
     const someone = people.find((one) => one.number === route.number);
@@ -783,7 +833,7 @@ class Threads {
 
     /** @type {Route} */
     this.route = routeOf(location);
-    /** Where a thread was opened from, so Esc and the pager go back there. @type {'today' | 'list' | 'person' | 'meetings'} */
+    /** Where a thread was opened from, so Esc and the pager go back there. @type {'today' | 'list' | 'person' | 'meetings' | 'asks'} */
     this.from = 'today';
     /** The person whose page a thread was opened from. @type {number | null} */
     this.fromPerson = null;
@@ -824,6 +874,19 @@ class Threads {
     this.note = { name: '', email: '', body: '', sent: false, busy: false, problem: '' };
     /** Who answers a public page from this browser. @type {Visitor} */
     this.visitor = readVisitor();
+    /** Every ask, as Asks lists them; whether the asks call has answered, and whether it failed. @type {Ask[]} */
+    this.asks = [];
+    this.asksLoaded = false;
+    this.asksFailed = false;
+    /** The ask a visitor answers at /ask/<slug>, as its public call answered it; null until it did. @type {AskShown | null} */
+    this.askShown = null;
+    /** The email a visitor gives an ask, kept for this visit only; their name is kept with their key. */
+    this.askEmail = '';
+    /** Whether an answer to the ask was saved on this visit, so its bar says so. */
+    this.askSaved = false;
+    /** Whether an ask's Answered by shows everyone, and the name it is filtered by. */
+    this.answeredAll = false;
+    this.answeredQuery = '';
     /** Dropped notes whose words are shown under their line. @type {Set<string>} */
     this.notesOpened = new Set();
     /** The Share sheet's state while it is open. @type {Sharing | null} */
@@ -930,6 +993,11 @@ class Threads {
    */
   async start() {
     const route = this.route;
+    // An ask is answered by anyone, signed in or not, so its page asks nobody who is calling.
+    if (route.view === 'ask') {
+      await this.startAsk(route.slug);
+      return;
+    }
     const inviting = route.view === 'thread' && new URLSearchParams(location.search).has('invite');
     if (route.view === 'list') {
       this.tab = route.tab;
@@ -986,8 +1054,30 @@ class Threads {
       const [pages, people] = await Promise.all([Promise.all(TABS.map((tab) => listAll(tab))), listPeople()]);
       this.threads = new Map(pages.flatMap((page) => page.threads).map((thread) => [thread.number, thread]));
       this.people = people;
+      // The asks load on their own, so a failed asks call leaves everything else working; Asks says it failed.
+      void this.loadAsks();
     }
     this.loaded = true;
+  }
+
+  /**
+   * Every ask again, as the asks call answers now: the rail's count follows, and Asks is drawn again when it is shown.
+   * A failure is Asks' own to say; an ended sign-in says so as everywhere.
+   */
+  async loadAsks() {
+    try {
+      this.asks = await listAsks();
+      this.asksFailed = false;
+    } catch (error) {
+      this.asksFailed = true;
+      if (error instanceof SignedOut) this.fail(error, "The asks didn't load.");
+    }
+    this.asksLoaded = true;
+    if (!this.loaded) return;
+    if (this.route.view === 'asks') {
+      this.keepScroll = true;
+      this.render();
+    } else this.renderNav();
   }
 
   /** Everyone again, as the people call answers now, drawn when People is still shown. */
@@ -1101,7 +1191,7 @@ class Threads {
     this.app.hidden = true;
     this.lost.hidden = false;
     const here = location.pathname;
-    const room = here === ME || here === MEETINGS || isPeopleAddress(here);
+    const room = here === ME || here === MEETINGS || here === ASKS || isPeopleAddress(here);
     const index = here === THREADS;
     this.signInLink.href = signInAddress(room || index || isThreadAddress(here) ? here : ME);
     if (room) {
@@ -1147,7 +1237,7 @@ class Threads {
     }
     if (error instanceof SignedOut) {
       const here = location.pathname;
-      const link = el('a', { href: signInAddress(here === ME || here === MEETINGS || here === THREADS || isThreadAddress(here) || isPeopleAddress(here) ? here : ME) }, ['Sign in again']);
+      const link = el('a', { href: signInAddress(here === ME || here === MEETINGS || here === ASKS || here === THREADS || isThreadAddress(here) || isPeopleAddress(here) ? here : ME) }, ['Sign in again']);
       this.banner.replaceChildren(icon('lock'), 'Your sign-in ended. Nothing you did was lost. ', link);
     } else {
       this.banner.replaceChildren(`${what} Check your connection and try again.`);
@@ -1179,6 +1269,9 @@ class Threads {
     }
     if (route.view === 'today') this.from = 'today';
     if (route.view === 'meetings') this.from = 'meetings';
+    if (route.view === 'asks') this.from = 'asks';
+    this.answeredAll = false;
+    this.answeredQuery = '';
     this.route = route;
     this.personEdit = null;
     this.personDraft = null;
@@ -1205,6 +1298,7 @@ class Threads {
       return;
     }
     if (route.view === 'people') void this.loadPeople();
+    if (route.view === 'asks') void this.loadAsks();
     if (route.view !== 'thread') {
       this.shown = null;
       this.missing = null;
@@ -1239,6 +1333,7 @@ class Threads {
     if (this.route.view === 'person') void this.go({ view: 'people' });
     else if (this.from === 'person' && this.fromPerson !== null) void this.go({ view: 'person', number: this.fromPerson });
     else if (this.from === 'meetings') void this.go({ view: 'meetings' });
+    else if (this.from === 'asks') void this.go({ view: 'asks' });
     else void this.go(this.from === 'today' ? { view: 'today' } : { view: 'list', tab: this.tab, space: this.space });
   }
 
@@ -1254,9 +1349,14 @@ class Threads {
     return [...this.threads.values()].filter((thread) => thread.waiting === true).sort((a, b) => b.activityAt.localeCompare(a.activityAt));
   }
 
-  /** New notes, newest first, but for one already waiting on him. */
+  /**
+   * New notes, newest first, but for one already waiting on him, and for one person's answers to an ask: those are told
+   * in Waiting on you while they are new, and once read (Mark read) they are read.
+   */
   fresh() {
-    return [...this.threads.values()].filter((thread) => thread.status === 'received' && !thread.waiting).sort((a, b) => b.activityAt.localeCompare(a.activityAt));
+    return [...this.threads.values()]
+      .filter((thread) => thread.status === 'received' && !thread.waiting && answeredAsk(thread) === null)
+      .sort((a, b) => b.activityAt.localeCompare(a.activityAt));
   }
 
   /** Open threads sorted into a tab that sat a week untouched, the longest first, but for one waiting on him. */
@@ -1286,6 +1386,7 @@ class Threads {
 
   /** The threads J and K walk: an invited person's own, Today's, the meetings', or the list's. */
   walk() {
+    if (this.from === 'asks' && !this.member) return this.asks.map((ask) => ask.number);
     if (this.from === 'meetings') {
       const { coming, past } = this.meetings();
       return [...coming, ...past].map((thread) => thread.number);
@@ -1294,21 +1395,24 @@ class Threads {
     if (this.from === 'person' && this.person) return this.person.threads.map((thread) => thread.number);
     if (this.from !== 'today') return this.inTab(this.tab).map((thread) => thread.number);
     const seen = new Set();
-    return [...this.waiting(), ...this.fresh(), ...this.sat()]
-      .map((thread) => thread.number)
-      .filter((number) => (seen.has(number) ? false : (seen.add(number), true)));
+    // Today's rows as drawn: a folded group of new answers is its ask, so the walk never lands on a thread with no row.
+    return [...this.folded().map((entry) => entry.number), ...this.fresh().map((thread) => thread.number), ...this.sat().map((thread) => thread.number)].filter((number) =>
+      seen.has(number) ? false : (seen.add(number), true),
+    );
   }
 
   /** The thread a key acts on: the open one, or the selected row. */
   target() {
     if (this.route.view === 'thread') return this.shown?.thread ?? null;
-    if (this.route.view === 'people' || this.route.view === 'person' || this.route.view === 'meetings') return this.route.view === 'meetings' && this.sel !== null ? (this.threads.get(this.sel) ?? null) : null;
+    if (this.route.view === 'people' || this.route.view === 'person' || this.route.view === 'meetings' || this.route.view === 'asks') return this.route.view === 'meetings' && this.sel !== null ? (this.threads.get(this.sel) ?? null) : null;
+    // A folded row is several people's answers, so the moves have nothing to act on; Enter opens the ask.
+    if (this.route.view === 'today' && this.sel !== null && this.folded().some((entry) => entry.kind === 'fold' && entry.number === this.sel)) return null;
     return this.sel === null ? null : (this.threads.get(this.sel) ?? null);
   }
 
   /** @param {number} by */
   step(by) {
-    if (this.route.view === 'people' || this.route.view === 'person') return;
+    if (this.route.view === 'people' || this.route.view === 'person' || this.route.view === 'asks') return;
     if (this.route.view === 'meetings') this.from = 'meetings';
     const list = this.walk();
     if (list.length === 0) return;
@@ -1356,6 +1460,9 @@ class Threads {
       const someone = this.person?.person;
       document.title = someone ? `${nameOf(someone)} · People · Threads` : 'People · Threads';
       if (someone && location.pathname !== personPath(someone)) history.replaceState(null, '', personPath(someone));
+    } else if (this.route.view === 'asks') {
+      this.main.replaceChildren(this.asksView());
+      document.title = 'Asks · whysosuresh.com';
     } else if (this.route.view === 'meetings') {
       this.ensureSel();
       this.main.replaceChildren(this.meetingsView());
@@ -1406,7 +1513,7 @@ class Threads {
     const counts = new Map();
     for (const thread of this.threads.values()) if (isOpen(thread) && thread.space !== null) counts.set(thread.space, (counts.get(thread.space) ?? 0) + 1);
     const view = this.route.view;
-    const today = this.waiting().length + this.fresh().length + this.sat().length;
+    const today = this.folded().length + this.fresh().length + this.sat().length;
     const todayItem = el('a', { class: 't-nav-item', href: ME, 'data-go': 'today' }, [icon('sun'), 'Today', el('span', { class: 't-nav-count' }, [String(today)])]);
     const allItem = el('a', { class: 't-nav-item', href: THREADS, 'data-go': 'list' }, [icon('list'), 'Threads']);
     const peopleItem = el('a', { class: 't-nav-item', href: PEOPLE, 'data-go': 'people' }, [
@@ -1417,6 +1524,9 @@ class Threads {
     if (view === 'people' || view === 'person') peopleItem.setAttribute('aria-current', 'page');
     const meetingsItem = el('a', { class: 't-nav-item', href: MEETINGS, 'data-go': 'meetings' }, [icon('cal'), 'Meetings', el('span', { class: 't-nav-count' }, [String(this.meetings().coming.length)])]);
     if (view === 'meetings') meetingsItem.setAttribute('aria-current', 'page');
+    const open = this.asks.filter((ask) => ask.state !== 'closed').length;
+    const asksItem = el('a', { class: 't-nav-item', href: ASKS, 'data-go': 'asks' }, [icon('ask'), 'Asks', el('span', { class: 't-nav-count' }, [String(open)])]);
+    if (view === 'asks') asksItem.setAttribute('aria-current', 'page');
     if (view === 'today') todayItem.setAttribute('aria-current', 'page');
     if (view === 'list' && this.space === null) allItem.setAttribute('aria-current', 'page');
     const spaces = SPACES.map((space) => {
@@ -1429,25 +1539,26 @@ class Threads {
       return item;
     });
     // A space is a filter on the threads, so the five sit under Threads rather than beside the rooms.
-    this.nav.replaceChildren(todayItem, allItem, ...spaces, peopleItem, meetingsItem);
+    this.nav.replaceChildren(todayItem, allItem, ...spaces, peopleItem, meetingsItem, asksItem);
   }
 
   renderTabbar() {
     const view = this.route.view === 'person' ? 'people' : this.route.view;
     for (const button of this.tabbar.querySelectorAll('[data-go], [data-act="more"]')) {
       if (!(button instanceof HTMLElement)) continue;
-      // People and Meetings sit under More on his bar, so More is where he is when he is in either.
-      const current = button.dataset.act === 'more' ? view === 'people' || view === 'meetings' : button.dataset.go === view;
+      // People, Meetings and Asks sit under More on his bar, so More is where he is when he is in any of them.
+      const current = button.dataset.act === 'more' ? view === 'people' || view === 'meetings' || view === 'asks' : button.dataset.go === view;
       if (current) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     }
   }
 
-  /** The rooms that don't fit on his phone's bar, in a sheet: People and Meetings. */
+  /** The rooms that don't fit on his phone's bar, in a sheet: People, Meetings and Asks. */
   openMore() {
     const picks = [
       el('a', { class: 't-pick', href: PEOPLE, 'data-go': 'people' }, [icon('person'), 'People']),
       el('a', { class: 't-pick', href: MEETINGS, 'data-go': 'meetings' }, [icon('cal'), 'Meetings']),
+      el('a', { class: 't-pick', href: ASKS, 'data-go': 'asks' }, [icon('ask'), 'Asks']),
     ];
     this.openOverlay('more', 'More rooms', 'narrow', [this.sheetHead('More'), el('div', { class: 't-sheet-body' }, [el('div', { class: 't-pick-list' }, picks)])]);
     picks[0]?.focus();
@@ -1456,7 +1567,7 @@ class Threads {
   /**
    * One thread as a row: its number, title, the line under it, its space, where it stands and when it last moved.
    * @param {Thread} thread
-   * @param {string} sub
+   * @param {string | Node} sub
    * @param {boolean} [selectable] whether the row may show as selected; a person's page selects none
    */
   row(thread, sub, selectable = true) {
@@ -1515,6 +1626,143 @@ class Threads {
     ];
   }
 
+  /**
+   * The Asks room: his links that ask a few questions, each person who answers one a thread of their own. Drafts first,
+   * "Ready for you to open", because only he puts one before strangers; then every link, open ones first, each with
+   * Copy link and Close, and closed ones with Open again. A row opens the ask's own thread.
+   */
+  asksView() {
+    const drafts = this.asks.filter((ask) => ask.state === 'draft');
+    const links = this.asks.filter((ask) => ask.state !== 'draft').sort((a, b) => Number(b.state === 'open') - Number(a.state === 'open') || b.number - a.number);
+    /** @param {string} title @param {Ask[]} list @param {string} hint @param {string} empty */
+    const section = (title, list, hint, empty) =>
+      el('section', { class: 't-section' }, [
+        el('div', { class: 't-section-head' }, [el('h2', {}, [title]), el('span', { class: 't-n' }, [String(list.length)]), el('span', { class: 't-hint' }, [hint])]),
+        el('div', { class: 't-list' }, list.length > 0 ? list.map((ask) => this.askRow(ask)) : [el('div', { class: 't-empty' }, [empty])]),
+      ]);
+    return el('div', { class: 't-wrap' }, [
+      el('div', { class: 't-head' }, [
+        el('div', {}, [el('h1', {}, ['Asks']), el('p', {}, ['One link you hand to many people. Each person who answers becomes a thread of their own, and nobody sees anyone else’s answers.'])]),
+      ]),
+      ...(this.asksFailed
+        ? [el('div', { class: 't-list' }, [el('div', { class: 't-empty', role: 'status' }, ["The asks didn't load. Check your connection, then open Asks again."])])]
+        : !this.asksLoaded
+          ? [el('div', { class: 't-list' }, [el('div', { class: 't-empty' }, ['Loading…'])])]
+          : [
+              ...(drafts.length > 0 ? [section('Ready for you to open', drafts, DRAFTS_HINT, '')] : []),
+              section('Links', links, 'open first, then closed', 'No asks yet. Ask Claude to make one: “make a form for today’s demo”.'),
+            ]),
+    ]);
+  }
+
+  /**
+   * One ask as a row: its title (which opens its thread), its link, how many answered and when last, its state, the
+   * Send a note topic that opens it, and what he can do with it now.
+   * @param {Ask} ask
+   */
+  askRow(ask) {
+    const topic = topicLine(ask.topic);
+    const acts =
+      ask.state === 'draft'
+        ? [el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'ask-open', 'data-number': String(ask.number) }, ['Open'])]
+        : ask.state === 'open'
+          ? [
+              el('button', { type: 'button', class: 't-btn', 'data-act': 'ask-copy', 'data-slug': ask.slug }, [icon('link'), 'Copy link']),
+              el('button', { type: 'button', class: 't-btn', 'data-act': 'ask-close', 'data-number': String(ask.number) }, ['Close']),
+            ]
+          : [el('button', { type: 'button', class: 't-btn', 'data-act': 'ask-open', 'data-number': String(ask.number) }, ['Open again'])];
+    return el('div', { class: 't-ask-row', 'data-state': ask.state }, [
+      el('a', { class: 't-ask-main', href: `/threads/${ask.number}`, 'data-thread': String(ask.number) }, [
+        el('span', { class: 't-row-title' }, [el('span', { class: 't-num' }, [`#${ask.number}`]), ' ', ask.title ?? ask.slug]),
+        el('span', { class: 't-ask-sub' }, [
+          el('span', { class: 't-ask-link' }, [askShown(ask.slug)]),
+          el('span', {}, [countLine(ask, ask.lastAnsweredAt === null ? null : ago(ask.lastAnsweredAt))]),
+        ]),
+      ]),
+      el('span', { class: 't-ask-chips' }, [el('span', { class: 't-chip t-ask-state', 'data-state': ask.state }, [stateWords(ask.state)]), ...(topic ? [el('span', { class: 't-chip' }, [topic])] : [])]),
+      el('span', { class: 't-ask-acts' }, acts),
+    ]);
+  }
+
+  /**
+   * An ask's own thread's strip, under its byline: its state, its link, and Copy link with Close, or Open (Open again
+   * once closed). His alone.
+   * @param {Thread} thread
+   */
+  askStrip(thread) {
+    const ask = askOf(thread);
+    if (!ask || this.member) return [];
+    const acts =
+      ask.state === 'open'
+        ? [
+            el('button', { type: 'button', class: 't-btn', 'data-act': 'ask-copy', 'data-slug': ask.slug }, [icon('link'), 'Copy link']),
+            el('button', { type: 'button', class: 't-btn', 'data-act': 'ask-close', 'data-number': String(thread.number) }, ['Close']),
+          ]
+        : [el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'ask-open', 'data-number': String(thread.number) }, [ask.state === 'draft' ? 'Open' : 'Open again'])];
+    return [
+      el('div', { class: 't-ask-strip', 'data-state': ask.state }, [
+        icon('ask'),
+        el('span', { class: 't-chip t-ask-state', 'data-state': ask.state }, [stateWords(ask.state)]),
+        el('span', { class: 't-ask-link' }, [askShown(ask.slug)]),
+        el('span', { class: 't-grow' }),
+        ...acts,
+      ]),
+    ];
+  }
+
+  /**
+   * Who answered an ask, above its page: each person a link to their own thread, new answers first, then the newest;
+   * eight until "Show all", which lists everyone in a box of its own with a filter by name. Mark read ends the wait on
+   * every new one at once.
+   * @param {Thread} thread
+   */
+  answeredSection(thread) {
+    const ask = askOf(thread);
+    if (!ask || this.member || !this.shown) return [];
+    const all = this.shown.answeredBy ?? [];
+    const fresh = all.filter((one) => one.waiting).length;
+    const many = all.length > FIRST_ANSWERERS;
+    return [
+      el('section', { class: 't-answered', 'aria-label': 'Answered by' }, [
+        el('div', { class: 't-answered-head' }, [
+          el('h2', {}, ['Answered by']),
+          el('span', { class: 't-hint' }, [answeredHead(all)]),
+          el('span', { class: 't-grow' }),
+          ...(fresh > 0 ? [el('button', { type: 'button', class: 't-btn', 'data-act': 'ask-read', 'data-number': String(thread.number) }, [markReadLabel(fresh) ?? ''])] : []),
+        ]),
+        ...(this.answeredAll && many
+          ? [
+              el('div', { class: 't-answered-find' }, [
+                el('input', { class: 't-field', id: 'answered-find', type: 'search', placeholder: 'Find a name', 'aria-label': 'Find a name', autocomplete: 'off', value: this.answeredQuery }),
+              ]),
+            ]
+          : []),
+        el('div', { class: 't-answered-list', 'data-answered-list': '', 'data-all': String(this.answeredAll && many) }, this.answeredRows(all, ask.state)),
+        ...(many
+          ? [el('button', { type: 'button', class: 't-answered-more', 'data-act': this.answeredAll ? 'answered-less' : 'answered-all' }, [this.answeredAll ? 'Show fewer' : `Show all ${all.length}`])]
+          : []),
+      ]),
+    ];
+  }
+
+  /**
+   * Answered by's rows as they show now: everyone (filtered by the name typed) once "Show all" is pressed, else eight.
+   * @param {Answerer[]} all
+   * @param {'draft' | 'open' | 'closed'} state
+   */
+  answeredRows(all, state) {
+    if (all.length === 0) return [el('div', { class: 't-empty' }, [nobodyLine(state)])];
+    const shown = this.answeredAll ? answerersShown(all, this.answeredQuery) : answerersShown(all, '').slice(0, FIRST_ANSWERERS);
+    if (shown.length === 0) return [el('div', { class: 't-empty' }, ['Nobody by that name.'])];
+    return shown.map((one) =>
+      el('a', { class: 't-answered-row', href: `/threads/${one.number}`, 'data-thread': String(one.number), ...(one.waiting ? { 'data-new': '' } : {}) }, [
+        avatar('visitor', one.name ?? ''),
+        el('span', { class: 't-answered-who' }, [el('span', { class: 't-num' }, [`#${one.number}`]), ' ', answererName(one), ...(one.waiting ? [el('span', { class: 't-chip' }, ['new'])] : [])]),
+        el('time', { datetime: one.at }, [agoWords(ago(one.at))]),
+      ]),
+    );
+  }
+
   /** The Meetings room: his every meeting, or an invited person's own, coming soonest first, then past. */
   meetingsView() {
     const { coming, past } = this.meetings();
@@ -1543,11 +1791,55 @@ class Threads {
     return `${fromWords(thread)}${line ? ` · ${line}` : ''}${dropped}`;
   }
 
+  /**
+   * Waiting on you as rows: one person's new answers to an ask say so ("Ravi answered Tuesday demo") and open their
+   * thread; several people's new answers to one ask fold into one row that opens the ask, so a link two hundred people
+   * answered is one row, not two hundred.
+   * @param {Thread[]} waiting
+   */
+  waitingRows(waiting) {
+    return foldWaiting(waiting, (thread) => answeredAsk(thread)?.number).map((entry) => {
+      if (entry.kind === 'fold') {
+        const asked = entry.threads[0] ? answeredAsk(entry.threads[0]) : null;
+        return this.foldedRow(entry.number, asked?.title ?? (entry.threads[0] ? titleOf(entry.threads[0]) : ''), entry.threads);
+      }
+      const asked = answeredAsk(entry.thread);
+      return asked
+        ? this.row(entry.thread, el('span', {}, [`${answererName({ name: entry.thread.senderName })} answered `, el('i', {}, [asked.title ?? titleOf(entry.thread)])]))
+        : this.row(entry.thread, firstLine(entry.thread));
+    });
+  }
+
+  /** Waiting on you as Today folds it: what its rows, its keyboard walk and the rail's count all follow. */
+  folded() {
+    return foldWaiting(this.waiting(), (thread) => answeredAsk(thread)?.number);
+  }
+
+  /**
+   * Several new answers to one ask, as one row on Today: the ask's title and how many, who by name, when the newest
+   * came; it opens the ask, where the new ones are on top.
+   * @param {number} number the ask's own thread
+   * @param {string} title
+   * @param {Thread[]} group newest first
+   */
+  foldedRow(number, title, group) {
+    const newest = group[0];
+    return el('a', { class: 't-row', href: `/threads/${number}`, 'data-thread': String(number), 'aria-selected': String(this.sel === number) }, [
+      el('span', { class: 't-num' }, [`#${number}`]),
+      el('span', { class: 't-row-main' }, [
+        el('span', { class: 't-row-title' }, [el('span', { class: 't-row-mark', title: 'An ask' }, [icon('ask')]), foldedTitle(title, group.length)]),
+        el('span', { class: 't-row-sub' }, [foldedWho(group.map((thread) => ({ name: thread.senderName })))]),
+      ]),
+      el('span', { class: 't-row-meta' }, [el('span', {}, [newest ? ago(newest.activityAt) : ''])]),
+    ]);
+  }
+
   todayView() {
     const waiting = this.waiting();
+    const waitingRows = this.waitingRows(waiting);
     const fresh = this.fresh();
     const sat = this.sat();
-    const total = waiting.length + fresh.length + sat.length;
+    const total = waitingRows.length + fresh.length + sat.length;
     const date = new Date().toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
     /**
      * @param {string} title
@@ -1570,7 +1862,18 @@ class Threads {
         el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'new' }, [icon('plus'), 'New thread ', kbd('N')]),
       ]),
       ...this.nextMeetingCard('Next meeting'),
-      ...(waiting.length > 0 ? [section('Waiting on you', waiting, ["the last word is someone else's: a person you invited, or a visitor"], (thread) => firstLine(thread), '')] : []),
+      ...(waitingRows.length > 0
+        ? [
+            el('section', { class: 't-section' }, [
+              el('div', { class: 't-section-head' }, [
+                el('h2', {}, ['Waiting on you']),
+                el('span', { class: 't-n' }, [String(waitingRows.length)]),
+                el('span', { class: 't-hint' }, ["the last word is someone else's: a person you invited, a visitor, or someone who answered an ask"]),
+              ]),
+              el('div', { class: 't-list' }, waitingRows),
+            ]),
+          ]
+        : []),
       section('New', fresh, [el('span', { class: 't-keys-hint' }, [kbd('A'), ' act · ', kbd('T'), ' talk · ', kbd('D'), ' drop'])], (thread) => this.rowLine(thread), 'All sorted.'),
       section('Sat a week', sat, ['still open, untouched for 7 days'], (thread) => `${ago(thread.activityAt)} in ${STATUS_NAMES[thread.status]}. Move it, or drop it.`, 'Nothing has sat a week.'),
     ]);
@@ -1657,16 +1960,25 @@ class Threads {
       pager,
     ]);
     const sender = thread.senderName?.trim() || 'Someone';
+    const asked = answeredAsk(thread);
     const by = this.member
       ? ['Suresh shared this with you']
+      : asked
+        ? [
+            this.nameNode(thread.senderNumber, sender),
+            '· answered',
+            asked.number === undefined ? el('i', {}, [asked.title ?? '']) : el('a', { href: `/threads/${asked.number}`, 'data-thread': String(asked.number) }, [el('i', {}, [asked.title ?? ''])]),
+          ]
       : visitor
         ? [this.nameNode(thread.senderNumber, sender), ' sent this from the site']
         : thread.source === 'told'
           ? [this.nameNode(thread.senderNumber, sender), ' told you this']
           : [this.shown.events[0]?.actor === 'owner' ? 'You started this' : 'You said this; the recorder sync wrote it down'];
+    // An ask's summary is his private label: strangers read its title alone, so the head says so.
+    const summaryNote = summaryNoteFor(askOf(thread) !== null, this.member);
     const summary = thread.summary
       ? el('section', { class: 't-summary', 'aria-label': 'Summary' }, [
-          el('div', { class: 't-summary-head' }, [el('span', {}, ['Summary']), el('span', {}, ['kept current by the recorder sync'])]),
+          el('div', { class: 't-summary-head' }, [el('span', {}, ['Summary']), el('span', {}, [summaryNote])]),
           summaryBody(thread.summary),
         ])
       : this.member
@@ -1679,11 +1991,14 @@ class Threads {
     const doc = el('article', { class: 't-doc' }, [
       crumbs,
       el('h1', { class: 't-title' }, [el('span', { class: 't-tn' }, [`#${thread.number}`]), ' ', titleOf(thread)]),
-      el('div', { class: 't-byline' }, [...by, `, ${when(thread.createdAt)} · updated ${ago(thread.activityAt)} ago`]),
+      // The byline's last words and its time sit in one box, so the line's gaps never part a link from its comma.
+      el('div', { class: 't-byline' }, [...by.slice(0, -1), el('span', {}, [...by.slice(-1), `, ${when(thread.createdAt)} · updated ${ago(thread.activityAt)} ago`])]),
       ...(this.member ? [] : [this.moves(thread)]),
+      ...this.askStrip(thread),
       ...this.meetingStrip(thread),
       summary,
       ...(this.reply ? [this.replyPanel(this.reply)] : []),
+      ...this.answeredSection(thread),
       ...text,
       ...(paged && this.columnless() ? this.pageDiscussions(places, thread) : []),
       el('div', { class: 't-feed' }, this.feed(this.shown, thread, places)),
@@ -1774,6 +2089,10 @@ class Threads {
       if (said.height >= PAGE_HEIGHT.min && said.height <= PAGE_HEIGHT.max) frame.style.height = `${Math.round(said.height)}px`;
       return;
     }
+    if (this.route.view === 'ask') {
+      this.onAskPageMessage(said, frame);
+      return;
+    }
     if (!signedIn) {
       this.onPublicPageMessage(said, frame);
       return;
@@ -1783,7 +2102,9 @@ class Threads {
     if (said.kind === 'ready') {
       this.talk = { ...freshTalk(), ready: true, questions: new Set(said.questions) };
       this.wordsDraft = null;
-      frame.contentWindow?.postMessage({ [KEY]: 'hello' }, '*');
+      // He reads an ask and the answers to it; he doesn't answer his own questions in someone else's thread.
+      this.talk.hello = !this.member && thread.ask ? 'read' : 'member';
+      frame.contentWindow?.postMessage(helloFor(this.talk.hello), '*');
       this.tellPage();
       return;
     }
@@ -1814,7 +2135,8 @@ class Threads {
     } else if (said.kind === 'answer') {
       const now = Date.now();
       this.talk.answered = this.talk.answered.filter((at) => now - at < 60_000);
-      if (!this.talk.questions.has(said.question) || this.talk.answered.length >= ANSWERS_A_MINUTE) {
+      // A page he only reads draws no box, so an answer from it is a page script's own: refused, nothing saved.
+      if (this.talk.hello === null || !takesAnswers(this.talk.hello) || !this.talk.questions.has(said.question) || this.talk.answered.length >= ANSWERS_A_MINUTE) {
         frame.contentWindow?.postMessage({ [KEY]: 'saved', question: said.question, ok: false }, '*');
         return;
       }
@@ -1838,7 +2160,8 @@ class Threads {
       this.talk = { ...freshTalk(), ready: true, questions: new Set(said.questions) };
       // A page that asks nothing is read as it is, as every public page was.
       if (said.questions.length === 0) return;
-      frame.contentWindow?.postMessage({ [KEY]: 'hello', visitor: true }, '*');
+      this.talk.hello = 'visitor';
+      frame.contentWindow?.postMessage(helloFor(this.talk.hello), '*');
       prepareBotCheck();
       this.renderPublic();
       this.tellPublicPage();
@@ -2470,7 +2793,8 @@ class Threads {
     let before;
     switch (event.type) {
       case 'created':
-        if (event.actor === 'visitor') [name, words] = ['mail', ['sent this from the site']];
+        if (event.actor === 'visitor' && answeredAsk(thread)) [name, words] = ['ask', ['answered ', el('i', {}, [answeredAsk(thread)?.title ?? titleOf(thread)])]];
+        else if (event.actor === 'visitor') [name, words] = ['mail', ['sent this from the site']];
         else if (event.actor === 'owner') [name, words] = ['plus', ['started this thread']];
         else if (data.source === 'told') [name, words] = ['mic', ['added this, as told by ', word(thread.senderName ?? 'someone')]];
         else [name, words] = ['mic', ['added this']];
@@ -2552,6 +2876,12 @@ class Threads {
         break;
       case 'attendee-removed':
         [name, words] = ['people', ['took ', word(data.name ?? 'someone'), ' off the meeting']];
+        break;
+      case 'ask-drafted':
+      case 'ask-opened':
+      case 'ask-closed':
+      case 'ask-read':
+        [name, words] = ['ask', [askEventWords(event.type, typeof data.slug === 'string' ? data.slug : null) ?? event.type]];
         break;
     }
     const line = el('div', { class: 't-ev' }, [
@@ -3003,15 +3333,18 @@ class Threads {
       const chip =
         word.kind === 'note'
           ? el('span', { class: 't-chip' }, ['From the site'])
+          : word.kind === 'answer'
+            ? el('span', { class: 't-chip' }, [icon('ask'), 'An answer'])
           : word.state === 'dropped'
             ? el('span', { class: 't-chip' }, ['Dropped'])
             : word.audience === 'public'
               ? publicChip()
               : el('span', { class: 't-chip' }, [icon('people'), 'People here']);
+      const title = known ? titleOf(known) : (word.thread.title ?? '');
       const on = el('a', { class: 't-said-on', href: `/threads/${number}`, 'data-thread': String(number) }, [
-        'on ',
+        saidOn(word.kind),
         el('b', {}, [`#${number}`]),
-        el('span', {}, [known ? titleOf(known) : (word.thread.title ?? '')]),
+        el('span', {}, [word.kind === 'answer' ? el('i', {}, [title]) : title]),
       ]);
       return el('div', { class: 't-cm' }, [
         el('div', { class: 't-cm-box' }, [
@@ -3487,6 +3820,7 @@ class Threads {
           { label: 'Go to Threads', hay: 'threads all list', key: '', run: () => void this.go({ view: 'list', tab: this.tab, space: null }) },
           { label: 'Go to people', hay: 'people person everyone who', key: '', run: () => void this.go({ view: 'people' }) },
           { label: 'Go to Meetings', hay: 'meetings calendar when', key: '', run: () => void this.go({ view: 'meetings' }) },
+          { label: 'Go to Asks', hay: 'asks forms questions links answers', key: '', run: () => void this.go({ view: 'asks' }) },
           { label: 'New thread', hay: 'new thread start create', key: 'N', run: () => this.openNew({ title: words !== '' && !/^#?\d+$/.test(words) ? words : '' }) },
           { label: 'Show the keys', hay: 'keys keyboard shortcuts help', key: '?', run: () => this.openKeys() },
         ];
@@ -3896,6 +4230,50 @@ class Threads {
     this.say(said, () => this.judgeNote(thread, note, action === 'show' ? 'drop' : 'show'));
   }
 
+  /**
+   * Opens an ask (a draft, or one closed) or closes one, with Undo; the thread, Asks and its row follow.
+   * @param {number} number
+   * @param {'open' | 'close'} action
+   */
+  async changeAsk(number, action) {
+    /** @type {Thread} */
+    let thread;
+    try {
+      thread = await askAction(number, action);
+    } catch (error) {
+      this.fail(error, action === 'open' ? "The ask didn't open." : "The ask didn't close.");
+      return;
+    }
+    this.clearProblem();
+    this.remember(thread);
+    const title = titleOf(thread);
+    this.say(action === 'open' ? `${title} is open to anyone with the link` : `Closed ${title}. Nobody can answer it now.`, () => this.changeAsk(number, action === 'open' ? 'close' : 'open'));
+    if (this.route.view === 'thread' && this.route.number === number) await this.refreshShown(number);
+    await this.loadAsks();
+    this.keepScroll = true;
+    this.render();
+  }
+
+  /**
+   * Marks an ask's new answers read: each response thread that waited on him stops waiting, so Today lets them go.
+   * Events are never taken back, so there is no Undo.
+   * @param {number} number
+   */
+  async markRead(number) {
+    /** @type {number} */
+    let marked;
+    try {
+      marked = await markAskRead(number);
+    } catch (error) {
+      this.fail(error, "The answers weren't marked read.");
+      return;
+    }
+    this.clearProblem();
+    for (const thread of this.threads.values()) if (answeredAsk(thread)?.number === number && thread.waiting) this.threads.set(thread.number, { ...thread, waiting: false });
+    this.say(markedWords(marked), null);
+    await this.refreshShown(number);
+  }
+
   /* ---------- The public view: a public thread, for anyone who isn't in it ---------- */
 
   /** Draws the public view of `publicShown`, its note form last. */
@@ -3938,11 +4316,19 @@ class Threads {
       ...(shown.truncated ? [el('p', { class: 't-note' }, ['Only the first 500 comments are shown.'])] : []),
       el('div', { 'data-note-area': '' }, [this.noteForm()]),
     ];
+    this.placePublic(view);
+  }
+
+  /**
+   * Puts a view drawn for someone with no sign-in (a public thread, or an ask) into the public view. The page's frame
+   * already loaded stays where it is, and only its bar and what is around it are redrawn: moving a frame in the
+   * document reloads its page, which would lose what the visitor typed and say `ready` again.
+   * @param {HTMLElement[]} view
+   */
+  placePublic(view) {
     const frame = this.pubDoc.querySelector('.t-page');
     const fresh = view.find((node) => node.classList.contains('t-page'));
     if (frame instanceof HTMLElement && frame.parentElement === this.pubDoc && fresh && frame.dataset.pageKey === fresh.dataset.pageKey) {
-      // The frame already loaded stays where it is, and only its bar and what is around it are redrawn: moving a frame
-      // in the document reloads its page, which would lose what the visitor typed and say `ready` again.
       const bar = fresh.querySelector('.t-page-bar');
       if (bar) frame.querySelector('.t-page-bar')?.replaceWith(bar);
       frame.dataset.full = fresh.dataset.full ?? 'false';
@@ -3953,6 +4339,198 @@ class Threads {
       return;
     }
     this.pubDoc.replaceChildren(...view);
+  }
+
+  /* ---------- An ask, for anyone answering it: /ask/<slug> ---------- */
+
+  /**
+   * Opens the ask an address names for whoever opened it, with no sign-in: its page full screen once its public call
+   * answers; a draft, a slug no ask has, or a call that fails shows "Nothing here".
+   * @param {string} slug
+   */
+  async startAsk(slug) {
+    try {
+      this.askShown = await showAsk(slug, this.visitor.key);
+    } catch (error) {
+      this.showNoAsk(error instanceof Missing);
+      return;
+    }
+    this.renderAsk();
+  }
+
+  /** What an ask's address shows when there is no ask to show: nothing here, or that it didn't load. @param {boolean} missing */
+  showNoAsk(missing) {
+    this.app.hidden = true;
+    this.pub.hidden = true;
+    this.lost.hidden = false;
+    this.lostTitle.textContent = missing ? 'Nothing here' : 'This didn’t load';
+    this.lostText.textContent = missing ? 'This link doesn’t lead anywhere now.' : 'Check your connection, then load the page again.';
+    this.signIn.hidden = true;
+    document.title = `${missing ? 'Nothing here' : 'Not loaded'} · whysosuresh.com`;
+  }
+
+  /** Draws the ask a visitor answers: its page, full screen, under one bar with who answers and what happens next. */
+  renderAsk() {
+    const shown = this.askShown;
+    if (shown === null) return;
+    this.app.hidden = true;
+    this.lost.hidden = true;
+    this.pub.hidden = false;
+    this.pubSignIn.hidden = true;
+    const title = shown.ask.title ?? 'Questions from Suresh';
+    document.title = `${title} · whysosuresh.com`;
+    this.placePublic(
+      shown.page
+        ? [this.askPage(shown.ask.slug, title, shown.page)]
+        : [el('div', { class: 't-missing' }, [el('h1', {}, [title]), el('p', {}, ['This has no questions yet.'])])],
+    );
+  }
+
+  /**
+   * An ask's page, full screen: a bar with the site and the ask's title, who answers (a name and an email, both
+   * optional, until the first answer, then "Answering as"), and under it what was saved or that it is closed.
+   * @param {string} slug
+   * @param {string} title
+   * @param {import('./threads-store.js').PublicPage} page
+   */
+  askPage(slug, title, page) {
+    const shown = this.askShown;
+    const state = shown?.ask.state ?? 'open';
+    const answered = (shown?.answers.length ?? 0) > 0;
+    const visitor = this.visitor;
+    /** @type {(Node | string)[]} */
+    let who = [];
+    if (state === 'open' && answered) {
+      who = [
+        el('div', { class: 't-answering', 'data-full': 'true' }, [
+          el('span', {}, visitor.name === '' ? ['Answering without a name'] : ['Answering as ', el('b', {}, [visitor.name])]),
+          ...(this.askEmail !== '' ? [el('span', { class: 't-ask-email' }, [`· ${this.askEmail}`])] : []),
+        ]),
+      ];
+    } else if (state === 'open') {
+      who = [
+        el('div', { class: 't-answering', 'data-full': 'true' }, [
+          el('input', { class: 't-field t-answering-field', id: 'ask-name', autocomplete: 'name', maxlength: String(MAX_VISITOR_NAME), value: visitor.name, placeholder: 'Your name', 'aria-label': 'Your name, optional' }),
+          el('input', { class: 't-field t-answering-field', id: 'ask-email', type: 'email', autocomplete: 'email', maxlength: '200', value: this.askEmail, placeholder: 'Email, for a reply', 'aria-label': 'Your email, optional' }),
+          el('span', { class: 't-answering-hint' }, [visitorHint(visitor.kept)]),
+        ]),
+      ];
+    }
+    const line =
+      state === 'closed'
+        ? [el('div', { class: 't-ask-line', role: 'status' }, [CLOSED_LINE, ' ', el('a', { class: 't-btn', href: talkLinkFor(slug) }, ['Send Suresh a note'])])]
+        : this.askSaved
+          ? [el('div', { class: 't-ask-line', role: 'status' }, [el('b', {}, ['Saved.']), ' ', savedLine(visitor.kept)])]
+          : [];
+    const bar = el('div', { class: 't-page-bar', 'data-answering': '' }, [el('span', { class: 't-page-site' }, [el('b', {}, ['whysosuresh.com']), ` · ${title}`]), ...who, ...line]);
+    const frame = el('iframe', { class: 't-page-frame', sandbox: PAGE_SANDBOX, src: askPageAddress(slug, page.version), title, loading: 'lazy' });
+    return el('section', { class: 't-page', 'aria-label': 'Questions', 'data-page-key': `ask-${slug}-${page.version}`, 'data-full': 'true' }, [bar, frame]);
+  }
+
+  /** Takes the name and email typed above an ask's page, while they are still there; the name is kept with the key. */
+  takeAskFields() {
+    const name = this.pubDoc.querySelector('#ask-name');
+    const email = this.pubDoc.querySelector('#ask-email');
+    if (email instanceof HTMLInputElement) this.askEmail = email.value.trim();
+    if (name instanceof HTMLInputElement) {
+      const given = name.value.trim().slice(0, MAX_VISITOR_NAME);
+      if (given !== this.visitor.name) this.visitor = { ...this.visitor, name: given, naming: false, kept: keepVisitor(given, this.visitor.key) };
+    }
+  }
+
+  /**
+   * What an ask's page says, for whoever answers it: a page that asks questions while the ask is open is answered
+   * `hello` as a private visitor's, so it draws boxes that say only Suresh reads them, and is told this browser's own
+   * answers; a closed ask's page gets no hello, so it shows its questions with no boxes. An answer is taken under the
+   * same gates as every other (the frame's focus, ten a minute, a question the page named) and sent with the site's bot
+   * check as this browser's, with the name and email if given.
+   * @param {import('./page-talk.js').FromPage} said
+   * @param {HTMLIFrameElement} frame
+   */
+  onAskPageMessage(said, frame) {
+    const shown = this.askShown;
+    if (!shown || !shown.page) return;
+    if (said.kind === 'ready') {
+      this.talk = { ...freshTalk(), ready: true, questions: new Set(said.questions) };
+      if (said.questions.length === 0 || shown.ask.state !== 'open') return;
+      this.talk.hello = 'private';
+      frame.contentWindow?.postMessage(helloFor(this.talk.hello), '*');
+      prepareBotCheck();
+      this.tellAskPage();
+      return;
+    }
+    if (said.kind !== 'answer' || document.activeElement !== frame) return;
+    const tell = (/** @type {string} */ problem) => frame.contentWindow?.postMessage({ [KEY]: 'saved', question: said.question, ok: false, problem }, '*');
+    const now = Date.now();
+    this.talk.answered = this.talk.answered.filter((at) => now - at < 60_000);
+    if (!this.talk.questions.has(said.question) || this.talk.answered.length >= ANSWERS_A_MINUTE) {
+      tell('That answer didn’t save. It is still in the box.');
+      return;
+    }
+    this.takeAskFields();
+    if (this.askEmail !== '' && !isAddress(this.askEmail)) {
+      tell('That email doesn’t look right. Fix it at the top, or leave it empty.');
+      focusIn(this.pubDoc, '#ask-email');
+      return;
+    }
+    this.talk.answered.push(now);
+    void this.saveAskAnswer(shown.ask.slug, said.question, said.body);
+  }
+
+  /** Tells an ask's page this browser's own answers, the newest per question, as the public call gave them. */
+  tellAskPage() {
+    const shown = this.askShown;
+    const frame = this.pubDoc.querySelector('.t-page-frame');
+    if (!this.talk.ready || shown === null || !(frame instanceof HTMLIFrameElement)) return;
+    const comments = shown.answers.map((one) => ({ id: '', author: 'visitor', name: this.visitor.name || 'You', state: 'shown', body: one.body, createdAt: one.at, question: one.question, mine: true }));
+    const message = discussionFor(placesOf(comments), { ownerName: 'Suresh', draft: null, active: null, asGiven: true });
+    const text = JSON.stringify(message);
+    if (text === this.talk.sent) return;
+    this.talk.sent = text;
+    frame.contentWindow?.postMessage(message, '*');
+  }
+
+  /**
+   * Sends an answer to an ask as this browser's, tells the page whether it was kept (and why not), and reads the ask
+   * again, so the answer shows as theirs and the bar says it saved, or that the ask closed meanwhile.
+   * @param {string} slug
+   * @param {string} question
+   * @param {string} body
+   */
+  async saveAskAnswer(slug, question, body) {
+    const frame = this.pubDoc.querySelector('.t-page-frame');
+    const tell = (/** @type {boolean} */ ok, /** @type {string | null} */ problem) =>
+      frame instanceof HTMLIFrameElement ? frame.contentWindow?.postMessage({ [KEY]: 'saved', question, ok, ...(problem === null ? {} : { problem }) }, '*') : undefined;
+    try {
+      await sendTo(`/api/asks/${encodeURIComponent(slug)}/answers`, { question, body, name: this.visitor.name, email: this.askEmail, key: this.visitor.key });
+    } catch (error) {
+      const reason = error instanceof Error && 'reason' in error ? error.reason : 'failed';
+      tell(
+        false,
+        reason === 'limit'
+          ? 'Today’s limit for answers is reached. Your answer is still in the box; try again tomorrow.'
+          : reason === 'gone'
+            ? 'These questions aren’t here any more.'
+            : 'That answer didn’t save. It is still in the box.',
+      );
+      // A close that came first refuses the answer: read the ask again, so the page says it is closed.
+      await this.refreshAsk(slug);
+      return;
+    }
+    tell(true, null);
+    this.askSaved = true;
+    await this.refreshAsk(slug);
+  }
+
+  /** Reads an ask again, as this browser, and draws it and what its page is told. @param {string} slug */
+  async refreshAsk(slug) {
+    try {
+      this.askShown = await showAsk(slug, this.visitor.key);
+    } catch {
+      return;
+    }
+    this.renderAsk();
+    this.tellAskPage();
   }
 
   /**
@@ -4274,6 +4852,8 @@ class Threads {
       this.closeOverlay();
       return;
     }
+    // An ask's page has nothing to click but its own links, which go where they say.
+    if (this.route.view === 'ask') return;
     if (!this.pub.hidden) {
       this.onPublicClick(target);
       return;
@@ -4285,13 +4865,14 @@ class Threads {
         if (this.route.view === 'person' && this.person) {
           this.from = 'person';
           this.fromPerson = this.person.person.number;
-        } else if (link.classList.contains('t-row') || link.classList.contains('t-card')) {
-          this.from = this.route.view === 'today' ? 'today' : this.route.view === 'list' ? 'list' : this.route.view === 'meetings' ? 'meetings' : this.from;
+        } else if (link.classList.contains('t-row') || link.classList.contains('t-card') || link.classList.contains('t-ask-main')) {
+          this.from = this.route.view === 'today' ? 'today' : this.route.view === 'list' ? 'list' : this.route.view === 'meetings' ? 'meetings' : this.route.view === 'asks' ? 'asks' : this.from;
         }
         this.openThread(Number(link.dataset.thread));
       } else if (link.dataset.person !== undefined) void this.go({ view: 'person', number: Number(link.dataset.person) });
       else if (link.dataset.go === 'people') void this.go({ view: 'people' });
       else if (link.dataset.go === 'meetings') void this.go({ view: 'meetings' });
+      else if (link.dataset.go === 'asks') void this.go({ view: 'asks' });
       else if (link.dataset.go === 'today') void this.go({ view: 'today' });
       else if (link.dataset.go === 'list') void this.go({ view: 'list', tab: this.tab, space: null });
       else if (link.dataset.tab !== undefined && isTab(link.dataset.tab)) {
@@ -4313,10 +4894,10 @@ class Threads {
       return;
     }
     if (!(button instanceof HTMLElement)) return;
-    if (button.dataset.go === 'today' || button.dataset.go === 'list' || button.dataset.go === 'people' || button.dataset.go === 'meetings') {
+    if (button.dataset.go === 'today' || button.dataset.go === 'list' || button.dataset.go === 'people' || button.dataset.go === 'meetings' || button.dataset.go === 'asks') {
       event.preventDefault();
       const go = button.dataset.go;
-      void this.go(go === 'today' ? { view: 'today' } : go === 'people' ? { view: 'people' } : go === 'meetings' ? { view: 'meetings' } : { view: 'list', tab: this.tab, space: this.space });
+      void this.go(go === 'today' ? { view: 'today' } : go === 'people' ? { view: 'people' } : go === 'meetings' ? { view: 'meetings' } : go === 'asks' ? { view: 'asks' } : { view: 'list', tab: this.tab, space: this.space });
       return;
     }
     const thread = this.target();
@@ -4467,6 +5048,29 @@ class Threads {
           );
         }
         break;
+      case 'ask-copy': {
+        const slug = button.dataset.slug ?? '';
+        navigator.clipboard.writeText(askLink(location.origin, slug)).then(
+          () => this.say(`Copied ${askShown(slug)}`, null),
+          () => this.say("Couldn't copy the link.", null),
+        );
+        break;
+      }
+      case 'ask-open':
+      case 'ask-close':
+        void this.changeAsk(Number(button.dataset.number), button.dataset.act === 'ask-open' ? 'open' : 'close');
+        break;
+      case 'ask-read':
+        void this.markRead(Number(button.dataset.number));
+        break;
+      case 'answered-all':
+      case 'answered-less':
+        this.answeredAll = button.dataset.act === 'answered-all';
+        this.answeredQuery = '';
+        this.keepScroll = true;
+        this.render();
+        if (this.answeredAll) focusIn(this.main, '#answered-find');
+        break;
       case 'copy-link':
         if (thread) {
           navigator.clipboard.writeText(`${location.origin}/threads/${thread.number}`).then(
@@ -4606,6 +5210,12 @@ class Threads {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
     if (target.id === 'find-words' && target instanceof HTMLInputElement) this.findFor(target.value);
+    else if (target.id === 'answered-find' && target instanceof HTMLInputElement) {
+      // Only the list is drawn again, so the box keeps its focus and its cursor.
+      this.answeredQuery = target.value;
+      const ask = this.shown ? askOf(this.shown.thread) : null;
+      if (ask && this.shown) this.main.querySelector('[data-answered-list]')?.replaceChildren(...this.answeredRows(this.shown.answeredBy ?? [], ask.state));
+    } else if ((target.id === 'ask-name' || target.id === 'ask-email') && target instanceof HTMLInputElement) this.takeAskFields();
     else if (target.id === 'comment-text' && target instanceof HTMLTextAreaElement && this.shown) this.drafts.set(this.shown.thread.number, target.value);
     else if (target.id === 'words-text' && target instanceof HTMLTextAreaElement) this.wordsText = target.value;
     else if (target.id === 'reply-text' && target instanceof HTMLTextAreaElement && this.replyingTo !== null) this.replyDrafts.set(this.replyingTo, target.value);
