@@ -1302,7 +1302,7 @@ class Threads {
       const item = el('a', { class: 't-nav-item', href: ME, 'data-go': 'today' }, [icon('people'), 'Yours', el('span', { class: 't-nav-count' }, [String(this.threads.size)])]);
       if (this.route.view === 'today') item.setAttribute('aria-current', 'page');
       const theirs = this.mine().map((thread) => {
-        const link = el('a', { class: 't-nav-item', href: threadPath(thread), 'data-thread': String(thread.number) }, [
+        const link = el('a', { class: 't-nav-item t-nav-sub', href: threadPath(thread), 'data-thread': String(thread.number) }, [
           el('span', { class: 't-nav-pad' }),
           el('span', { class: 't-nav-text' }, [`#${thread.number} ${titleOf(thread)}`]),
         ]);
@@ -1327,7 +1327,7 @@ class Threads {
     if (view === 'today') todayItem.setAttribute('aria-current', 'page');
     if (view === 'list' && this.space === null) allItem.setAttribute('aria-current', 'page');
     const spaces = SPACES.map((space) => {
-      const item = el('a', { class: 't-nav-item', href: `/threads/?tab=${this.tab}&space=${space.slug}`, 'data-space': space.slug }, [
+      const item = el('a', { class: 't-nav-item t-nav-sub', href: `/threads/?tab=${this.tab}&space=${space.slug}`, 'data-space': space.slug }, [
         el('span', { class: 't-nav-pad' }),
         space.label,
         el('span', { class: 't-nav-count' }, [String(counts.get(space.slug) ?? 0)]),

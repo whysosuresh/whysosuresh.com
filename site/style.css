@@ -416,7 +416,7 @@ p { margin: 0; }
 .t-side-find kbd, .t-side-new kbd { margin-left: auto; }
 .t-side-new { background: var(--ink); color: var(--accent-ink); border-color: var(--ink); font-weight: 600; }
 .t-side-new kbd { background: transparent; color: inherit; border-color: currentColor; opacity: 0.6; }
-.t-nav { display: grid; gap: 1px; }
+.t-nav { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; }
 .t-nav-label { padding: 10px 8px 3px; color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .t-nav-item {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px;
@@ -426,6 +426,8 @@ p { margin: 0; }
 .threads .t-nav-item:hover { background: var(--hover); color: var(--ink); }
 .threads .t-nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--ink); }
 .t-nav-pad { width: 15px; flex: none; }
+/* A space under Threads, or a guest's thread under Yours: set in from the room it belongs to. */
+.t-nav-item.t-nav-sub { padding-left: 22px; font-weight: 500; }
 .t-nav-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t-nav-count { margin-left: auto; font-size: 11.5px; font-variant-numeric: tabular-nums; color: var(--faint); }
 .t-side-foot { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 8px; font-size: 12px; }
