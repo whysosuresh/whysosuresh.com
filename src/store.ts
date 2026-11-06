@@ -1623,7 +1623,7 @@ function askOrigin(askId: string, key: string): string {
 
 /** Whether the browser whose key hashes to `key` has a thread for the ask yet. */
 export async function hasAnswered(db: D1Database, askId: string, key: string): Promise<boolean> {
-  return (await db.prepare("SELECT 1 AS yes FROM threads WHERE origin_ref = ?1").bind(askOrigin(askId, key)).first()) !== null;
+  return (await db.prepare("SELECT 1 AS yes FROM threads WHERE origin_ref = ?1 AND ask_thread_id = ?2").bind(askOrigin(askId, key), askId).first()) !== null;
 }
 
 /** A browser's own answer, as the ask's read gives it back to that browser alone. */
@@ -1642,12 +1642,12 @@ export async function ownAnswers(db: D1Database, askId: string, key: string): Pr
     await db
       .prepare(
         `SELECT comments.question, comments.body, comments.created_at AS at FROM comments JOIN threads ON threads.id = comments.thread_id
-         WHERE threads.origin_ref = ?1 AND comments.author = 'visitor' AND comments.question IS NOT NULL AND comments.visitor_key = ?2 AND comments.state = 'shown'
+         WHERE threads.origin_ref = ?1 AND threads.ask_thread_id = ?3 AND comments.author = 'visitor' AND comments.question IS NOT NULL AND comments.visitor_key = ?2 AND comments.state = 'shown'
            AND NOT EXISTS (SELECT 1 FROM comments AS newer WHERE newer.thread_id = comments.thread_id AND newer.question = comments.question
              AND newer.visitor_key = comments.visitor_key AND (newer.created_at > comments.created_at OR (newer.created_at = comments.created_at AND newer.id > comments.id)))
          ORDER BY comments.question`,
       )
-      .bind(askOrigin(askId, key), key)
+      .bind(askOrigin(askId, key), key, askId)
       .all<OwnAnswerRow>()
   ).results;
 }
@@ -1684,7 +1684,7 @@ export async function answerAsk(db: D1Database, ask: Pick<AskRow, "id" | "title"
     db,
     `INSERT INTO comments (id, thread_id, author, body, created_at, audience, state, sender_name, question, visitor_key, person_id)
      SELECT ${p.add(id)}, threads.id, 'visitor', ${p.list([answer.body, now])}, 'thread', 'shown', threads.sender_name, ${p.list([answer.question, answer.key])}, threads.person_id
-     FROM threads WHERE threads.origin_ref = ${p.add(origin)} AND ${askOpen(ask.id, p)} RETURNING id`,
+     FROM threads WHERE threads.origin_ref = ${p.add(origin)} AND threads.ask_thread_id = ${p.add(ask.id)} AND ${askOpen(ask.id, p)} RETURNING id`,
     p,
   );
   const u = new Params();
@@ -1811,26 +1811,23 @@ export async function answeredBy(db: D1Database, askId: string): Promise<Answere
 
 /**
  * Marks an ask's answers read, the owner's alone: one `ask-read` event by him on each of its response threads that
- * waits on him now, and their last activity, in one batch, so each stops waiting; a response thread that doesn't wait
- * gets nothing. There is no undoing it, because events are never deleted. Answers how many were marked; `no-thread`,
+ * waits on him now, in one batch, so each stops waiting; a response thread that doesn't wait gets nothing. It leaves
+ * their last activity alone, so a respondent he invited back never sees a thread move for his reading it. There is no undoing it, because events are never deleted. Answers how many were marked; `no-thread`,
  * or `not-an-ask` when the thread has no slug.
  */
 export async function markAskRead(db: D1Database, number: number): Promise<{ marked: number } | "no-thread" | "not-an-ask"> {
   const now = new Date().toISOString();
   const waiting = (p: Params): string =>
     `response.ask_thread_id = (SELECT id FROM threads WHERE number = ${p.add(number)} AND ask_slug IS NOT NULL) AND ${waitingOn("response")}`;
-  // The touch runs first; it changes nothing the wait reads, so both statements find the same threads.
-  const t = new Params();
-  const touch = statement(db, `UPDATE threads SET activity_at = ${t.add(now)} WHERE id IN (SELECT response.id FROM threads AS response WHERE ${waiting(t)})`, t);
   const e = new Params();
   const event = statement(
     db,
     `INSERT INTO events (thread_id, at, actor, type, data) SELECT response.id, ${e.add(now)}, 'owner', 'ask-read', json_object() FROM threads AS response WHERE ${waiting(e)} RETURNING id`,
     e,
   );
-  const [, marked] = await db.batch<{ id: number }>([touch, event]);
+  const marked = await event.all<{ id: number }>();
   const there = await find(db, { number }, EVERY_THREAD);
   if (there === null) return "no-thread";
   if (there.ask_slug === null) return "not-an-ask";
-  return { marked: marked?.results.length ?? 0 };
+  return { marked: marked.results.length };
 }

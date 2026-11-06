@@ -17,9 +17,9 @@
 //
 // An answer runs every visitor answer's checks in the same order (src/note.ts), with a name and an email both
 // optional, as a note's: the shape, the bot check, then the ask (404 `no-ask`, 409 `closed`), then the asks' own daily
-// budgets (src/quota.ts), apart from the notes' and the public pages' answers': every answer counts against
-// `askAnswers` (400 a day from one network, 2,000 in all), and the answer that makes this browser's thread against
-// `askThreads` too (100 and 500), which caps how many threads strangers can make. The store keeps the
+// budgets (src/quota.ts), apart from the notes' and the public pages' answers': the answer that makes this browser's
+// thread counts first against `askThreads` (100 a day from one network, 500 in all), which caps how many threads
+// strangers can make, so a refused thread spends no answer; then every answer against `askAnswers` (400 and 2,000). The store keeps the
 // answer, and the first time its thread, in one batch that holds the ask being open (src/store.ts, `answerAsk`). The
 // `key` is 32 random bytes as hex that the visitor's browser made once and keeps; only its SHA-256 is kept, so the
 // thread is that browser's, and answering again from it adds an answer that shows in place of its last. Every answer
@@ -94,12 +94,13 @@ async function sendAnswer(request: Request, slug: string, env: Bindings): Promis
   if (ask === null) return noAsk();
   if (ask.state !== "open") return answer(409, { reason: "closed" });
   const key = await keyHash(given.key);
-  const answers = await takeLimit(env, sender.network, "askAnswers");
-  if (answers !== null) return withNoindex(answers);
+  // A new thread is checked first, so a refused one spends no answer.
   if (!(await hasAnswered(env.DB, ask.id, key))) {
     const threads = await takeLimit(env, sender.network, "askThreads");
     if (threads !== null) return withNoindex(threads);
   }
+  const answers = await takeLimit(env, sender.network, "askAnswers");
+  if (answers !== null) return withNoindex(answers);
   const kept = await answerAsk(env.DB, ask, { question: given.question, body: given.body, name: given.name, email: given.email, key });
   return kept ? answer(201, {}) : answer(409, { reason: "closed" });
 }
