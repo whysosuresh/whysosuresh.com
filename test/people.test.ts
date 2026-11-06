@@ -411,10 +411,10 @@ describe("a person in meetings", () => {
   it("is someone new for a name given to a meeting, with no address, and on no other thread", async () => {
     const n = await thread();
     await answer(await call(`/threads/${n}/meeting`, { as: "sync", body: { when: "2026-11-09", minutes: null, where: null } }));
-    const added = await answer<{ thread: { meeting: { attendees: { number: number }[] } } }>(await call(`/threads/${n}/attendees`, { as: "sync", body: { add: { name: "Raghav's manager" } } }));
+    const added = await answer<{ thread: { meeting: { attendees: { number: number }[] } } }>(await call(`/threads/${n}/attendees`, { as: "sync", body: { add: { name: "Asha's manager" } } }));
     const number = added.thread.meeting.attendees[0]?.number ?? 0;
     const one = await person(number);
-    expect(one.person).toMatchObject({ name: "Raghav's manager", email: null, invited: false, dropped: false });
+    expect(one.person).toMatchObject({ name: "Asha's manager", email: null, invited: false, dropped: false });
     expect(one.person.counts).toEqual({ sent: 0, told: 0, invited: 0, removed: 0, commented: 0, noted: 0, met: 1 });
     expect(one.threads.map((row) => [row.number, row.roles])).toEqual([[n, ["met"]]]);
   });

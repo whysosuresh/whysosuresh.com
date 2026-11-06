@@ -395,7 +395,7 @@ describe("meeting", () => {
 
 describe("attendees", () => {
   it("sends one change per flag in the order given, and prints the thread after the last", async () => {
-    const after = { ...THREAD, meeting: { when: "2026-11-09", minutes: null, where: null, attendees: [{ number: 4, name: "Swarup" }, { number: 9, name: "Leela" }] } };
+    const after = { ...THREAD, meeting: { when: "2026-11-09", minutes: null, where: null, attendees: [{ number: 4, name: "Dev" }, { number: 9, name: "Leela" }] } };
     const { io, sent, out } = client([{ status: 200, body: { thread: THREAD } }, { status: 200, body: { thread: THREAD } }, { status: 200, body: { thread: THREAD } }, { status: 200, body: { thread: after } }]);
     expect(await run(["attendees", "42", "--add", "5", "--add", "4", "--new", "Leela", "--remove", "5"], io)).toBe(0);
     expect(sent.map((one) => [one.url, one.body && JSON.parse(one.body)])).toEqual([
@@ -415,7 +415,7 @@ describe("attendees", () => {
     expect(err).toEqual(["inbox: attendees refused at change 2 of 3 (409 not-attending); the changes before it were kept"]);
   });
 
-  it.each([[["attendees", "42"]], [["attendees", "42", "--add"]], [["attendees", "42", "--add", "Raghav"]], [["attendees", "42", "--remove", "05"]], [["attendees", "42", "--invite", "5"]]])(
+  it.each([[["attendees", "42"]], [["attendees", "42", "--add"]], [["attendees", "42", "--add", "Asha"]], [["attendees", "42", "--remove", "05"]], [["attendees", "42", "--invite", "5"]]])(
     "is a usage error for %j, sending nothing",
     async (argv) => {
       const { io, sent } = client([]);

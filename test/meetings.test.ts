@@ -132,8 +132,8 @@ describe("a meeting's when", () => {
 
   it("keeps a moment as its instant in UTC, whatever zone it was given in, with its length and where", async () => {
     const n = await thread();
-    const kept = await meet(n, { when: "2026-11-09T15:00+05:30", minutes: 45, where: "  Raghav's office  " });
-    expect(kept.meeting).toEqual({ when: "2026-11-09T09:30:00.000Z", minutes: 45, where: "Raghav's office", attendees: [] });
+    const kept = await meet(n, { when: "2026-11-09T15:00+05:30", minutes: 45, where: "  Asha's office  " });
+    expect(kept.meeting).toEqual({ when: "2026-11-09T09:30:00.000Z", minutes: 45, where: "Asha's office", attendees: [] });
     expect((await meet(n, { when: "2026-11-09T01:15:30.5-08:00" })).meeting?.when).toBe("2026-11-09T09:15:30.500Z");
     expect((await meet(n, { when: "2026-11-09T09:30Z" })).meeting?.when).toBe("2026-11-09T09:30:00.000Z");
     // A moment early in the day east of UTC is the day before in UTC.
