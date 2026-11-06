@@ -4,8 +4,8 @@
 // holds: the two doors (/api/, /threads/api/) answer the Worker's JSON, the public threads' calls under
 // /api/threads/ among them; the pages come from site/; /inbox, the
 // threads' old address, and everything under it, its old calls included, redirect for good to /threads/;
-// a page's .html address redirects to its clean one; /threads/ and every thread's address answer the threads
-// page with the site's headers (its CSP among them) and status 200, whatever the number, with no sign-in, because
+// a page's .html address redirects to its clean one; /threads/, every thread's address and the people pages
+// (/threads/people, /threads/people/<n>) answer the threads page with the site's headers (its CSP among them) and status 200, whatever the number, with no sign-in, because
 // Access guards only the threads' calls, never a thread's page; and any other path under /threads/ is what the
 // site's files make of it.
 
@@ -73,7 +73,18 @@ describe("the site's own files", () => {
     expect(new URL(response.headers.get("location") ?? "", SITE).pathname).toBe("/feedback");
   });
 
-  it.each(["/threads/", "/threads/?tab=act&space=company", "/threads/42", "/threads/42-who-owns-what", "/threads/999999999"])(
+  it.each([
+    "/threads/",
+    "/threads/?tab=act&space=company",
+    "/threads/42",
+    "/threads/42-who-owns-what",
+    "/threads/999999999",
+    "/threads/people",
+    "/threads/people/",
+    "/threads/people/7",
+    "/threads/people/7-meera",
+    "/threads/people/999999999",
+  ])(
     "answer %s with the threads page and the site's headers, with no sign-in",
     async (path) => {
       const response = await harness.fetch(`${SITE}${path}`, { redirect: "manual" });
@@ -90,7 +101,7 @@ describe("the site's own files", () => {
     expect(new URL(response.headers.get("location") ?? "", SITE).pathname).toBe("/threads/");
   });
 
-  it.each(["/threads/042", "/threads/42/comments", "/threads/0", "/threads/nope"])("answer %s with the site's 404 page", async (path) => {
+  it.each(["/threads/042", "/threads/42/comments", "/threads/0", "/threads/nope", "/threads/people/07", "/threads/people/7/threads", "/threads/peoples"])("answer %s with the site's 404 page", async (path) => {
     const response = await harness.fetch(`${SITE}${path}`, { redirect: "manual" });
     expect(response.status).toBe(404);
     expect(response.headers.get("content-type")).toContain("text/html");
@@ -98,7 +109,7 @@ describe("the site's own files", () => {
   });
 
   it("serve the threads page's scripts as files", async () => {
-    for (const path of ["/app/threads.js", "/app/threads-store.js", "/app/keys.js", "/app/markdown.js"]) {
+    for (const path of ["/app/threads.js", "/app/threads-store.js", "/app/keys.js", "/app/markdown.js", "/app/people.js"]) {
       const response = await harness.fetch(`${SITE}${path}`);
       expect([path, response.status]).toEqual([path, 200]);
       expect(response.headers.get("content-type")).toContain("javascript");

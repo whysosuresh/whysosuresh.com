@@ -25,6 +25,7 @@ const SERVED = [
   "_redirects",
   "app/keys.js",
   "app/markdown.js",
+  "app/people.js",
   "app/share.js",
   "app/threads-store.js",
   "app/threads.js",

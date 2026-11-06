@@ -28,6 +28,15 @@ export function addressOf(email) {
 }
 
 /**
+ * Whether an address as typed is one the Worker takes, for an invitation or a person's page.
+ * @param {string} email
+ */
+export function isAddress(email) {
+  const address = addressOf(email);
+  return EMAIL_SHAPE.test(address) && address.length <= 254;
+}
+
+/**
  * Why an invitation can't be sent yet, in words for the sheet, or null when it can.
  * @param {string} email the address as typed
  * @param {string} name the name as typed
@@ -37,7 +46,7 @@ export function addressOf(email) {
  */
 export function invitationProblem(email, name, owner, people) {
   const address = addressOf(email);
-  if (!EMAIL_SHAPE.test(address) || address.length > 254) return "That isn't an email address.";
+  if (!isAddress(email)) return "That isn't an email address.";
   if (owner !== '' && address === owner.trim().toLowerCase()) return "That's your own address. You're in every thread.";
   if (name.trim() === '') return 'Add their name. People in a thread see each other by name, never by address.';
   if (name.trim().length > MAX_NAME || /[\n\r]/.test(name)) return 'Keep the name to one short line.';

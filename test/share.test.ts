@@ -6,9 +6,14 @@
 // visitor's note on a public thread is a draft to them alone, about that thread, quoting their words.
 
 import { describe, expect, it } from "vitest";
-import { SEATS, addressOf, invitation, invitationProblem, levelOf, listed, noteReply, publicLines, seatsLine, seesLines } from "../site/app/share.js";
+import { SEATS, addressOf, invitation, invitationProblem, isAddress, levelOf, listed, noteReply, publicLines, seatsLine, seesLines } from "../site/app/share.js";
 
 describe("an invitation's check", () => {
+  it("takes an address the Worker takes, for an invitation and a person's page alike", () => {
+    expect(isAddress(" Meera@Example.com. ")).toBe(true);
+    for (const typed of ["", "meera", "meera@example", "meera@example..com", "a@b.c, d@e.f"]) expect([typed, isAddress(typed)]).toEqual([typed, false]);
+  });
+
   it("passes an address and a name, and a dictated address's closing full stop", () => {
     expect(invitationProblem(" Meera@Example.com ", "Meera", "owner@example.com", [])).toBeNull();
     expect(invitationProblem("meera@example.com.", "Meera", "owner@example.com", [])).toBeNull();

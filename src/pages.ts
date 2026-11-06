@@ -1,6 +1,8 @@
 // The threads page's addresses, which the Worker answers because no file can sit at every thread's number:
-// /threads/ (Today and the list, which the page tells apart by its query) and /threads/<n>, with the thread's
-// title after the number or not (/threads/42-who-owns-what). Each gets the one page, site/threads/index.html,
+// /threads/ (Today and the list, which the page tells apart by its query), /threads/<n>, with the thread's
+// title after the number or not (/threads/42-who-owns-what), and the people pages, /threads/people and
+// /threads/people/<n> with the person's name after it or not (/threads/people/7-meera), which read nothing: a
+// person's address gets the plain shell whatever the number, so it never says whether that person exists. Each gets the one page, site/threads/index.html,
 // handed over from the site's own files through the assets binding, so it carries site/_headers (the CSP among
 // them) exactly as a file served straight from site/ would. The status is 200 whatever the number: the page asks
 // the calls for the thread, and a missing thread, a thread this browser may not read and a signed-out visitor all
@@ -22,8 +24,8 @@ import { parse, type Inline } from "../site/app/markdown.js";
 import type { Bindings } from "./bindings.ts";
 import { publicPreview, type PreviewRow } from "./store.ts";
 
-/** Today, the list, and a thread by its number with any title after it. */
-const PAGE = /^\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?)?$/;
+/** Today, the list, a thread by its number with any title after it, everyone, and a person by their number. */
+const PAGE = /^\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?|people(?:\/(?:[1-9]\d{0,8}(?:-[^/]*)?)?)?)?$/;
 
 /** The page's own address among the site's files. */
 const SHELL = "/threads/";
