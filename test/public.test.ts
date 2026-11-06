@@ -7,7 +7,8 @@
 // served only while the page is the thread's main section. A visitor's note waits for his OK, answers no number, is
 // refused once the thread is taken back, and counts against the note flow's daily limits. Only he shows, drops or
 // holds a note; members see shown notes and never a waiting or dropped one, an email, or the events that would
-// tell them one arrived. The sync never writes for anyone. A public thread's address carries its title and preview
+// tell them one arrived. The sync never writes for anyone. Nobody replies under a public comment or a visitor's note,
+// and answers, comments on words and replies never reach a stranger. A public thread's address carries its title and preview
 // tags, escaped, with no ETag; a private and a missing number get the shell byte for byte.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -313,7 +314,21 @@ describe("a note on a public thread", () => {
     expect(await response.text()).toBe("{}");
     const view = await shown(n);
     expect(view.comments).toEqual([
-      { id: expect.any(String), author: "visitor", name: "Tomás", audience: "public", state: "pending", body: "Loved this. **not bold**", createdAt: expect.any(String), personNumber: 1, senderEmail: "tomas@example.com" },
+      {
+        id: expect.any(String),
+        author: "visitor",
+        name: "Tomás",
+        audience: "public",
+        state: "pending",
+        body: "Loved this. **not bold**",
+        createdAt: expect.any(String),
+        parent: null,
+        question: null,
+        quote: null,
+        mine: false,
+        personNumber: 1,
+        senderEmail: "tomas@example.com",
+      },
     ]);
     expect(view.events.map((event) => event.type)).toEqual(["created", "published"]);
     expect((await shown(n, "sync")).comments[0]?.senderEmail).toBe("tomas@example.com");
@@ -439,6 +454,28 @@ describe("writing for anyone", () => {
     expect(await reasonOf(await call(`/threads/${n}/comments`, { as: { email: MEERA }, body: { body: "x", audience: "public" } }))).toEqual([409, "not-public"]);
     const other = await published();
     expect(await reasonOf(await call(`/threads/${other}/comments`, { as: { email: MEERA }, body: { body: "x", audience: "public" } }))).toEqual([404, "no-thread"]);
+  });
+});
+
+describe("replies, answers and words on a public thread", () => {
+  it("refuses a reply to a public comment or a visitor's note, and keeps every answer, word and reply from strangers", async () => {
+    const n = await published();
+    await savePage(n, "<!doctype html><title>Plan</title><p>Who opens the meeting?</p>");
+    const open = await answer<{ comment: { id: string } }>(await call(`/threads/${n}/comments`, { body: { body: "For the people here." } }), 201);
+    const forAnyone = await answer<{ comment: { id: string } }>(await call(`/threads/${n}/comments`, { body: { body: "For anyone.", audience: "public" } }), 201);
+    const note = await noteOn(n);
+    await answer(await judge(n, note, "show"));
+    for (const parent of [forAnyone.comment.id, note]) {
+      expect(await reasonOf(await call(`/threads/${n}/comments`, { body: { body: "x", parent } }))).toEqual([409, "no-replies-here"]);
+    }
+    await answer(await call(`/threads/${n}/comments`, { body: { body: "Re.", parent: open.comment.id } }), 201);
+    await answer(await call(`/threads/${n}/comments`, { body: { body: "Yes.", question: "order" } }), 201);
+    await answer(await call(`/threads/${n}/comments`, { body: { body: "Why?", quote: "Who opens", prefix: "", suffix: "", version: 1 } }), 201);
+    const read = await answer<{ comments: Record<string, unknown>[] }>(await publicRead(String(n)));
+    expect(read.comments).toEqual([
+      { author: "owner", name: "Suresh", body: "For anyone.", createdAt: expect.any(String) },
+      { author: "visitor", name: "Tomás", body: "Loved this. **not bold**", createdAt: expect.any(String) },
+    ]);
   });
 });
 

@@ -1,7 +1,7 @@
 // The inbox's command line (tools/inbox/), driven through its logic with a played fetch: each verb's request to
 // the threads' calls, by the thread's number, with the service token's two Access headers and the client id
 // wrangler.jsonc names; everyone, and one person by their number, read through the people calls; a told thread's
-// person passed through an add; a list followed through every page; an add answered line by line; a comment (for everyone
+// person passed through an add; a thread shown with each comment's place passed through whole; a list followed through every page; an add answered line by line; a comment (for everyone
 // in the thread, or with --only-me for the owner alone) and an edit taking their words from stdin as they are; a page sent from a file as HTML, refused here past 16 MiB; a link set
 // and cleared; the Worker's refusals and the edge's passed through with a
 // non-zero exit; usage errors; and the secret in no line it prints. One run of the real entry point as a child
@@ -263,6 +263,17 @@ describe("show", () => {
   it("passes a public thread's fields through whole: its public time, and each note's state, name and email", async () => {
     const note = { id: "c9", author: "visitor", name: "Tomás", audience: "public", state: "pending", body: "Hi.", createdAt: "2026-11-05T10:00:00.000Z", senderEmail: "tomas@example.com" };
     const answer = { thread: { ...THREAD, publicAt: "2026-11-05T09:00:00.000Z" }, comments: [note], events: [], truncated: false };
+    const { io, out } = client([{ status: 200, body: answer }]);
+    expect(await run(["show", "42"], io)).toBe(0);
+    expect(out.map((line) => JSON.parse(line))).toEqual([answer]);
+  });
+
+  it("passes each comment's place through whole: its parent, question, quoted words, and whose it is", async () => {
+    const general = { id: "c1", author: "owner", name: null, audience: "thread", state: "shown", body: "Root.", createdAt: "2026-11-06T10:00:00.000Z", parent: null, question: null, quote: null, mine: false };
+    const reply = { ...general, id: "c2", author: "member", name: "Meera", body: "Re.", parent: "c1", personNumber: 3 };
+    const answered = { ...general, id: "c3", body: "Fine as is.", question: "order" };
+    const words = { ...general, id: "c4", body: "Why?", quote: { text: "Who opens", prefix: "Plan ", suffix: " the meeting?", version: 2 } };
+    const answer = { thread: THREAD, comments: [general, reply, answered, words], events: [], truncated: false };
     const { io, out } = client([{ status: 200, body: answer }]);
     expect(await run(["show", "42"], io)).toBe(0);
     expect(out.map((line) => JSON.parse(line))).toEqual([answer]);

@@ -43,6 +43,11 @@
 // person, his typed name winning. A comment shows an invited person's name as it stands, and a visitor's as they
 // typed it, so linking a note to a person changes nothing anyone else reads. People are his alone to read with the
 // sync and to change (`editPerson`): their name, their address while they have none, and his own notes on them.
+//
+// A comment may sit somewhere other than the thread itself (migrations/0013_anchors.sql): under another comment (a
+// reply), as an answer to a question of the thread's page, or on words of a version of the page. `comment` checks
+// the place in its own INSERT, under the same reader as the thread: a reader replies only under a comment they can
+// see, so an invited person never replies under "Only me", and a reply takes its parent's audience.
 
 /** Where a thread came from: the site's note flow, something told to him in person, or his own. */
 export type Source = "talk" | "told" | "self";
@@ -147,7 +152,29 @@ export interface CommentRow {
   /** A visitor's note only: the name and email they typed, each null when not given. */
   sender_name: string | null;
   sender_email: string | null;
+  /**
+   * Where it sits (migrations/0013_anchors.sql), each null for a general comment: the comment a reply is under, the
+   * page's question an answer answers, or the words of a page version a comment is on, with the text either side.
+   */
+  parent_id: string | null;
+  question: string | null;
+  quote: string | null;
+  quote_prefix: string | null;
+  quote_suffix: string | null;
+  page_version: number | null;
+  /** The address of the person who wrote it, for the door to tell a reader their own; never shown to anyone. */
+  person_email: string | null;
 }
+
+/**
+ * Where a comment sits other than on the thread itself: under another comment (a reply), as an answer to one of the
+ * thread's page's questions, by the id the page marks it with, or on words of one version of the page, found again by
+ * the text either side of them. Exactly one, because a reply sits where its parent does.
+ */
+export type Anchor =
+  | { readonly parent: string }
+  | { readonly question: string }
+  | { readonly quote: string; readonly prefix: string; readonly suffix: string; readonly version: number };
 
 /** A visitor's note as he rules on it: shown on the thread, dropped, or back to waiting (how the page undoes either). */
 export type Judgement = "show" | "drop" | "hold";
@@ -403,10 +430,11 @@ export async function listShared(db: D1Database, email: string, limit: number): 
 
 /**
  * The columns a comment is read with: its own, the number of the person who wrote it, and their name as it stands
- * for an invited person's only, so a visitor's note keeps the name they typed wherever it is shown.
+ * for an invited person's only, so a visitor's note keeps the name they typed wherever it is shown; and their address,
+ * which the door reads only to tell a reader which comments are their own.
  */
 const COMMENT_COLUMNS =
-  "comments.id, comments.thread_id, comments.author, comments.body, comments.created_at, comments.audience, comments.state, comments.person_id, CASE WHEN comments.author = 'member' THEN people.name END AS person_name, people.number AS person_number, comments.sender_name, comments.sender_email";
+  "comments.id, comments.thread_id, comments.author, comments.body, comments.created_at, comments.audience, comments.state, comments.person_id, CASE WHEN comments.author = 'member' THEN people.name END AS person_name, people.number AS person_number, comments.sender_name, comments.sender_email, comments.parent_id, comments.question, comments.quote, comments.quote_prefix, comments.quote_suffix, comments.page_version, people.email AS person_email";
 
 /**
  * Events an invited person never sees: the owner's mail opening, the copy from the old inbox, and a visitor's note
@@ -600,20 +628,66 @@ export async function edit(db: D1Database, locator: Locator, field: TextField, t
 }
 
 /**
+ * A comment a reply may sit under, as a condition on the comment `alias` names: a root (none of a reply and an answer),
+ * shown, and neither a visitor's note nor written for anyone. An answer is changed by answering again, and a reply
+ * under a public comment would be a reply strangers read, which the public view doesn't show.
+ */
+function repliable(alias: string): string {
+  return `${alias}.parent_id IS NULL AND ${alias}.question IS NULL AND ${alias}.author <> 'visitor' AND ${alias}.audience <> 'public' AND ${alias}.state = 'shown'`;
+}
+
+/**
+ * The comments a reader may see, as a condition on the comment `alias` names: all of them for the owner and the sync,
+ * and for an invited person, those for everyone that are shown, as `history` answers them.
+ */
+function visible(alias: string, reader: Reader): string {
+  return reader.caller === "member" ? ` AND ${alias}.audience <> 'owner' AND ${alias}.state = 'shown'` : "";
+}
+
+/** Why a comment wasn't kept, beyond a thread the reader can't read (null). */
+export type CommentRefusal = "not-public" | "no-parent" | "no-replies-here" | "no-version";
+
+/**
  * Adds a comment to a thread the reader may read, which is activity on it; null when there is no such thread, or
  * none they may read, and `not-public` when it is written as Public on a thread that isn't. An invited person's
  * comment names them; the door keeps `owner` to the owner and the sync, and `public` to the owner and members.
+ *
+ * An `anchor` places it (migrations/0013_anchors.sql), checked in the same INSERT as the thread: a reply's parent is
+ * a comment in the same thread the reader can see, that a reply may sit under (`repliable`; `no-parent` when there is
+ * no such comment the reader can see, `no-replies-here` when there is one but not of that kind), and the reply takes
+ * its parent's audience whatever `audience` says, so a reply under "Only me" stays his; words are on a version the
+ * thread's page has (`no-version`). Answers and words are for everyone in the thread, as the door asks.
  */
-export async function comment(db: D1Database, locator: Locator, reader: Reader, body: string, audience: Audience): Promise<CommentRow | null | "not-public"> {
+export async function comment(
+  db: D1Database,
+  locator: Locator,
+  reader: Reader,
+  body: string,
+  audience: Audience,
+  anchor: Anchor | null = null,
+): Promise<CommentRow | null | CommentRefusal> {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   const p = new Params();
   const person = reader.caller === "member" ? `(SELECT id FROM people WHERE email = ${p.add(reader.email)})` : "NULL";
-  const columns = `${p.add(id)}, id, ${p.add(reader.caller)}, ${p.add(body)}, ${p.add(now)}, ${p.add(audience)}, ${person}`;
+  const parent = anchor !== null && "parent" in anchor ? anchor.parent : null;
+  const parentKey = parent === null ? "NULL" : p.add(parent);
+  const audienceOf = parent === null ? p.add(audience) : `(SELECT audience FROM comments WHERE id = ${parentKey})`;
+  const question = anchor !== null && "question" in anchor ? anchor.question : null;
+  const quote = anchor !== null && "quote" in anchor ? anchor : null;
+  const placed = [parentKey, p.add(question), p.add(quote?.quote ?? null), p.add(quote?.prefix ?? null), p.add(quote?.suffix ?? null), p.add(quote?.version ?? null)];
+  const columns = `${p.add(id)}, id, ${p.add(reader.caller)}, ${p.add(body)}, ${p.add(now)}, ${audienceOf}, ${person}, ${placed.join(", ")}`;
+  const conditions = [
+    audience === "public" ? ` AND ${PUBLIC}` : "",
+    parent === null
+      ? ""
+      : ` AND EXISTS (SELECT 1 FROM comments AS parent WHERE parent.id = ${parentKey} AND parent.thread_id = threads.id AND ${repliable("parent")}${visible("parent", reader)})`,
+    quote === null ? "" : ` AND EXISTS (SELECT 1 FROM pages WHERE pages.thread_id = threads.id AND pages.version = ${p.add(quote.version)})`,
+  ];
   const insert = statement(
     db,
-    `INSERT INTO comments (id, thread_id, author, body, created_at, audience, person_id)
-     SELECT ${columns} FROM threads WHERE ${locate(locator, p)}${readable(reader, p)}${audience === "public" ? ` AND ${PUBLIC}` : ""}`,
+    `INSERT INTO comments (id, thread_id, author, body, created_at, audience, person_id, parent_id, question, quote, quote_prefix, quote_suffix, page_version)
+     SELECT ${columns} FROM threads WHERE ${locate(locator, p)}${readable(reader, p)}${conditions.join("")}`,
     p,
   );
   // Only the thread the comment above went into is touched, so a refused comment changes nothing.
@@ -628,7 +702,19 @@ export async function comment(db: D1Database, locator: Locator, reader: Reader, 
   const [, , added] = await db.batch<CommentRow>([insert, touch, read]);
   const row = added?.results[0];
   if (row !== undefined) return row;
-  return audience === "public" && (await find(db, locator, reader)) !== null ? "not-public" : null;
+  // Refused: say why, reading only what the reader may read.
+  const thread = await find(db, locator, reader);
+  if (thread === null) return null;
+  if (audience === "public" && anchor === null) return "not-public";
+  if (quote !== null) return "no-version";
+  if (parent === null) return null;
+  const q = new Params();
+  const seen = await statement(
+    db,
+    `SELECT 1 AS found FROM comments AS parent WHERE parent.id = ${q.add(parent)} AND parent.thread_id = ${q.add(thread.id)}${visible("parent", reader)}`,
+    q,
+  ).first<{ found: number }>();
+  return seen === null ? "no-parent" : "no-replies-here";
 }
 
 /** The most threads one search answers. */

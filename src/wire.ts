@@ -75,6 +75,15 @@ export function text(value: unknown, max: number): string | null {
   return trimmed;
 }
 
+/**
+ * Words quoted from a page, or the text either side of them, at most `max` UTF-16 code units: kept exactly as
+ * selected, untrimmed, with their line breaks and tabs; every other control character is refused.
+ */
+export function quoted(value: unknown, max: number): string | null {
+  if (typeof value !== "string" || value.length > max || !value.isWellFormed() || BODY_CONTROL.test(value)) return null;
+  return value;
+}
+
 /** A person's number as an add names it: a positive whole number of at most nine digits. */
 function isPersonNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 999_999_999;

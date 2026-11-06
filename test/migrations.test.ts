@@ -12,7 +12,8 @@
 // no invited person, and no one is invited. For 0012, which rebuilds `people` in place so everyone he deals with is
 // a person: every person keeps their id, each address on a site note or visitor's note and each told name becomes
 // one person, all numbered by age; each thread and note is linked to its person, one with no address to nobody; and
-// the invitations stay joined, the foreign keys enforced, and the invited person signs in.
+// the invitations stay joined, the foreign keys enforced, and the invited person signs in. For 0013, where a comment
+// sits: every earlier comment is a general one, and a reply's parent is a comment that is there.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -440,5 +441,27 @@ describe("0012, everyone he deals with is a person", () => {
     const lost = ["PRAGMA defer_foreign_keys = on", "DROP TABLE people", "CREATE TABLE people (id TEXT PRIMARY KEY, email TEXT)"];
     await expect(database.batch(lost.map((statement) => database.prepare(statement)))).rejects.toThrow();
     expect(await database.prepare("SELECT id, email FROM people").all().then((r) => r.results)).toEqual([{ id: "p1", email: "a@example.com" }]);
+  });
+});
+
+describe("0013, where a comment sits", () => {
+  it("leaves every earlier comment a general one, and refuses a reply to a comment that isn't there", async () => {
+    harness = await startHarness({ through: "0012" });
+    const database = await harness.db();
+    await database.batch([
+      database.prepare("INSERT INTO threads (id, number, created_at, source, body, status) VALUES ('t1', 1, '2026-11-01T00:00:00.000Z', 'self', 'x', 'act')"),
+      database.prepare("INSERT INTO comments (id, thread_id, author, body, created_at, audience) VALUES ('c1', 't1', 'owner', 'Mine.', '2026-11-02T00:00:00.000Z', 'owner')"),
+      database.prepare("INSERT INTO comments (id, thread_id, author, body, created_at, state, sender_name) VALUES ('c2', 't1', 'visitor', 'Hi.', '2026-11-03T00:00:00.000Z', 'pending', 'Asha')"),
+    ]);
+    await harness.migrate();
+    const comments = (await database.prepare("SELECT id, audience, state, parent_id, question, quote, quote_prefix, quote_suffix, page_version FROM comments ORDER BY id").all()).results;
+    const general = { parent_id: null, question: null, quote: null, quote_prefix: null, quote_suffix: null, page_version: null };
+    expect(comments).toEqual([
+      { id: "c1", audience: "owner", state: "shown", ...general },
+      { id: "c2", audience: "thread", state: "pending", ...general },
+    ]);
+    await expect(
+      database.prepare("INSERT INTO comments (id, thread_id, author, body, created_at, parent_id) VALUES ('c3', 't1', 'owner', 'Re.', '2026-11-04T00:00:00.000Z', 'c-nobody')").run(),
+    ).rejects.toThrow(/FOREIGN KEY/);
   });
 });

@@ -8,7 +8,9 @@
 // each from either caller, an edit keeping the text it replaced and leaving `moved_at` alone, and a visitor's own
 // words never rewritten; every write stamps the thread's last activity; a search answers a number or words; the
 // sign-in sends the owner back only to a threads page; the owner's writes only from his own page, the sync alone
-// filing, the owner alone marking his mail opened. The checks of who gets in (every token Access might be handed,
+// filing, the owner alone marking his mail opened; a comment's place (a reply under a root that isn't a reply, an
+// answer or a visitor's note, in its parent's audience; an answer to a page's question; words of a version the thread
+// has, their context kept as selected), never the sync's, each comment saying whose it is. The checks of who gets in (every token Access might be handed,
 // the keys) and each move's exact row are test/threads-door.test.ts's.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -385,7 +387,19 @@ describe("a comment", () => {
     const response = await call(`/${thread.number}/comments`, { body: { body: "  **Meera** agreed.\n\n- releases need two people  " } });
     expect(response.status).toBe(201);
     const { comment } = (await response.json()) as { comment: { id: string; author: string; body: string; createdAt: string } };
-    expect(comment).toEqual({ id: expect.any(String), author: "sync", name: null, audience: "thread", state: "shown", body: "**Meera** agreed.\n\n- releases need two people", createdAt: expect.any(String) });
+    expect(comment).toEqual({
+      id: expect.any(String),
+      author: "sync",
+      name: null,
+      audience: "thread",
+      state: "shown",
+      body: "**Meera** agreed.\n\n- releases need two people",
+      createdAt: expect.any(String),
+      parent: null,
+      question: null,
+      quote: null,
+      mine: true,
+    });
     expect((await shown(thread.number)).events).toHaveLength(1);
   });
 
@@ -403,6 +417,163 @@ describe("a comment", () => {
   it("on a thread that isn't there is 404", async () => {
     const response = await call("/12/comments", { body: { body: "Hello" } });
     expect([response.status, await reasonOf(response)]).toEqual([404, "no-thread"]);
+  });
+});
+
+describe("a comment's place", () => {
+  interface Placed {
+    id: string;
+    author: string;
+    audience: string;
+    body: string;
+    parent: string | null;
+    question: string | null;
+    quote: { text: string; prefix: string; suffix: string; version: number } | null;
+    mine: boolean;
+  }
+
+  async function placed(number: number, body: Record<string, unknown>, as: Who = "owner"): Promise<Placed> {
+    const response = await call(`/${number}/comments`, { as, body });
+    expect([response.status, response.status === 201 ? "" : await reasonOf(response)]).toEqual([201, ""]);
+    return ((await response.json()) as { comment: Placed }).comment;
+  }
+
+  /** A page saved into the thread by the sync, as `inbox page` saves it. */
+  async function withPage(number: number): Promise<void> {
+    const response = await harness.fetch(`${THREADS}/${number}/pages`, {
+      method: "POST",
+      headers: { "Content-Type": "text/html; charset=utf-8", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.syncClaims()) },
+      body: new TextEncoder().encode("<!doctype html><title>Plan</title><p>Who opens the meeting?</p>"),
+    });
+    expect(response.status).toBe(201);
+  }
+
+  async function comments(): Promise<number> {
+    return (await (await harness.db()).prepare("SELECT COUNT(*) AS n FROM comments").first<{ n: number }>())?.n ?? 0;
+  }
+
+  it("is a reply under a general comment, in its parent's audience, and the thread lists it with its parent", async () => {
+    const thread = await added();
+    const root = await placed(thread.number, { body: "Shall we move it?" });
+    const secret = await placed(thread.number, { body: "Only me.", audience: "owner" });
+    const reply = await placed(thread.number, { body: "  Yes, to Friday.  ", parent: root.id });
+    expect(reply).toMatchObject({ author: "owner", audience: "thread", body: "Yes, to Friday.", parent: root.id, question: null, quote: null, mine: true });
+    expect(await placed(thread.number, { body: "Noted.", parent: secret.id })).toMatchObject({ audience: "owner", parent: secret.id });
+    const listed = (await shown(thread.number)).comments as unknown as Placed[];
+    expect(listed.map((one) => [one.body, one.parent])).toEqual([
+      ["Shall we move it?", null],
+      ["Only me.", null],
+      ["Yes, to Friday.", root.id],
+      ["Noted.", secret.id],
+    ]);
+  });
+
+  it("is an answer to a page's question, for everyone in the thread", async () => {
+    const thread = await added();
+    const answer = await placed(thread.number, { body: "Fine as is.", question: "order-2" });
+    expect(answer).toMatchObject({ audience: "thread", question: "order-2", parent: null, quote: null });
+    // Changing an answer is a new answer, so the history keeps both.
+    await placed(thread.number, { body: "Swap them.", question: "order-2" });
+    expect((await shown(thread.number)).comments.map((one) => one.body)).toEqual(["Fine as is.", "Swap them."]);
+  });
+
+  it("is a comment on words of a version the thread has, with its context kept exactly as selected", async () => {
+    const thread = await added();
+    await withPage(thread.number);
+    const said = await placed(thread.number, { body: "Why him?", quote: "Who opens", prefix: "Plan ", suffix: " the meeting?", version: 1 });
+    expect(said).toMatchObject({ audience: "thread", parent: null, question: null, quote: { text: "Who opens", prefix: "Plan ", suffix: " the meeting?", version: 1 } });
+    expect(await placed(thread.number, { body: "Because.", parent: said.id })).toMatchObject({ parent: said.id, quote: null });
+  });
+
+  it("on a version the thread doesn't have is 404 no-version, and writes nothing", async () => {
+    const thread = await added();
+    const before = await comments();
+    const response = await call(`/${thread.number}/comments`, { as: "owner", body: { body: "x", quote: "Who", prefix: "", suffix: "", version: 1 } });
+    expect([response.status, await reasonOf(response)]).toEqual([404, "no-version"]);
+    await withPage(thread.number);
+    const later = await call(`/${thread.number}/comments`, { as: "owner", body: { body: "x", quote: "Who", prefix: "", suffix: "", version: 2 } });
+    expect([later.status, await reasonOf(later)]).toEqual([404, "no-version"]);
+    expect(await comments()).toBe(before);
+  });
+
+  it("refuses a reply to a reply, to an answer and to a visitor's note with 409 no-replies-here, writing nothing", async () => {
+    const thread = await added();
+    const root = await placed(thread.number, { body: "Root." });
+    const reply = await placed(thread.number, { body: "Re.", parent: root.id });
+    const answer = await placed(thread.number, { body: "Yes.", question: "q1" });
+    const note = crypto.randomUUID();
+    const database = await harness.db();
+    await database
+      .prepare("INSERT INTO comments (id, thread_id, author, body, created_at, audience, state, sender_name) VALUES (?3, ?1, 'visitor', 'Hi.', ?2, 'public', 'shown', 'Asha')")
+      .bind(thread.id, new Date().toISOString(), note)
+      .run();
+    const before = await comments();
+    for (const parent of [reply.id, answer.id, note]) {
+      const response = await call(`/${thread.number}/comments`, { as: "owner", body: { body: "x", parent } });
+      expect([parent, response.status, await reasonOf(response)]).toEqual([parent, 409, "no-replies-here"]);
+    }
+    expect(await comments()).toBe(before);
+  });
+
+  it("refuses a reply to a comment that isn't in the thread with 404 no-parent", async () => {
+    const [one, other] = [await added(), await added()];
+    const elsewhere = await placed(other.number, { body: "Elsewhere." });
+    for (const parent of [elsewhere.id, crypto.randomUUID(), "not-an-id"]) {
+      const response = await call(`/${one.number}/comments`, { as: "owner", body: { body: "x", parent } });
+      expect([response.status, await reasonOf(response)]).toEqual([404, "no-parent"]);
+    }
+    const missing = await call("/999/comments", { as: "owner", body: { body: "x", parent: elsewhere.id } });
+    expect([missing.status, await reasonOf(missing)]).toEqual([404, "no-thread"]);
+  });
+
+  it.each([
+    ["a question of capitals", { body: "x", question: "Order" }],
+    ["a question over 40", { body: "x", question: "q".repeat(41) }],
+    ["an empty question", { body: "x", question: "" }],
+    ["a parent that isn't a string", { body: "x", parent: 7 }],
+    ["a reply with an audience", { body: "x", parent: "00000000-0000-4000-8000-000000000000", audience: "owner" }],
+    ["an answer with a parent", { body: "x", question: "q1", parent: "00000000-0000-4000-8000-000000000000" }],
+    ["a blank quote", { body: "x", quote: "   ", prefix: "", suffix: "", version: 1 }],
+    ["a quote over 500", { body: "x", quote: "w".repeat(501), prefix: "", suffix: "", version: 1 }],
+    ["a prefix over 64", { body: "x", quote: "w", prefix: "p".repeat(65), suffix: "", version: 1 }],
+    ["a suffix with a control character", { body: "x", quote: "w", prefix: "", suffix: "a\u0000", version: 1 }],
+    ["a version of 0", { body: "x", quote: "w", prefix: "", suffix: "", version: 0 }],
+    ["a version as text", { body: "x", quote: "w", prefix: "", suffix: "", version: "1" }],
+    ["a quote with no context", { body: "x", quote: "w", version: 1 }],
+    ["a quote on a question", { body: "x", quote: "w", prefix: "", suffix: "", version: 1, question: "q1" }],
+    ["an empty body", { body: " ", question: "q1" }],
+  ])("with %s is refused with 400", async (_, body) => {
+    const thread = await added();
+    const response = await call(`/${thread.number}/comments`, { as: "owner", body });
+    expect([response.status, await reasonOf(response)]).toEqual([400, "comment"]);
+  });
+
+  it("is never the sync's: answers and words come from a page, and a reply from a person", async () => {
+    const thread = await added();
+    await withPage(thread.number);
+    const root = await placed(thread.number, { body: "Root." });
+    const before = await comments();
+    for (const body of [
+      { body: "x", parent: root.id },
+      { body: "x", question: "q1" },
+      { body: "x", quote: "Who", prefix: "", suffix: "", version: 1 },
+    ]) {
+      const response = await call(`/${thread.number}/comments`, { as: "sync", body });
+      expect([response.status, await reasonOf(response)]).toEqual([403, "not-for-sync"]);
+    }
+    expect(await comments()).toBe(before);
+  });
+
+  it("says whose each comment is: the owner's are his, the sync's the sync's", async () => {
+    const thread = await added();
+    await placed(thread.number, { body: "His." });
+    await placed(thread.number, { body: "Claude's." }, "sync");
+    const his = (await (await call(`/${thread.number}`, { as: "owner" })).json()) as { comments: Placed[] };
+    expect(his.comments.map((one) => [one.body, one.mine])).toEqual([
+      ["His.", true],
+      ["Claude's.", false],
+    ]);
+    expect((await shown(thread.number)).comments.map((one) => (one as unknown as Placed).mine)).toEqual([false, true]);
   });
 });
 
