@@ -9,8 +9,12 @@
 // keeps its own move; a ref a thread already holds is never kept twice; and the table is gone. For 0008, each
 // thread's last activity: the latest of its arrival, its events and its comments, the inbox's copy left out. For
 // 0010, the people a thread is shared with: every comment written before it is for everyone in the thread and by
-// no invited person, and no one is invited.
+// no invited person, and no one is invited. For 0012, which rebuilds `people` in place so everyone he deals with is
+// a person: every person keeps their id, each address on a site note or visitor's note and each told name becomes
+// one person, all numbered by age; each thread and note is linked to its person, one with no address to nobody; and
+// the invitations stay joined, the foreign keys enforced, and the invited person signs in.
 
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { SITE, startHarness, type Harness } from "./harness.ts";
 
@@ -248,8 +252,8 @@ describe("0007, the inbox retired a deploy later", () => {
     expect((await database.prepare("SELECT COUNT(*) AS n FROM threads WHERE origin_ref = 'chat:twice'").first<{ n: number }>())?.n).toBe(1);
     expect(await thread(harness, "00000000-0000-4000-8000-000000000007")).toBeNull();
     const after = (await database.prepare("SELECT * FROM threads WHERE id NOT IN (?1, ?2, ?3) ORDER BY number").bind("00000000-0000-4000-8000-000000000003", "00000000-0000-4000-8000-000000000005", "00000000-0000-4000-8000-000000000006").all<Record<string, unknown>>()).results;
-    // Later migrations add a thread's last activity and its main section; everything 0007 found stays as it was.
-    expect(after.map(({ activity_at: _activity, main: _main, link_url: _url, link_title: _title, public_at: _public, ...rest }) => rest)).toEqual(before);
+    // Later migrations add a thread's last activity, its main section and who it is from; everything 0007 found stays as it was.
+    expect(after.map(({ activity_at: _activity, main: _main, link_url: _url, link_title: _title, public_at: _public, person_id: _person, ...rest }) => rest)).toEqual(before);
   });
 
   it("drops the inbox's table", async () => {
@@ -327,5 +331,114 @@ describe("0011, public threads and the notes on them", () => {
       { id: "c1", audience: "owner", state: "shown", sender_name: null, sender_email: null },
       { id: "c2", audience: "thread", state: "shown", sender_name: null, sender_email: null },
     ]);
+  });
+});
+
+describe("0012, everyone he deals with is a person", () => {
+  /** The tables as 0011 left them: an invited person with a comment, site notes, told threads and visitors' notes. */
+  async function staged(): Promise<Harness> {
+    const target = await startHarness({ through: "0011" });
+    const database = await target.db();
+    const thread = (id: string, number: number, at: string, source: string, name: string | null, email: string | null, status = "received") =>
+      database
+        .prepare("INSERT INTO threads (id, number, created_at, source, body, status, sender_name, sender_email) VALUES (?1, ?2, ?3, ?4, 'Words.', ?5, ?6, ?7)")
+        .bind(id, number, at, source, status, name, email);
+    const comment = (id: string, thread: string, at: string, author: string, person: string | null, name: string | null, email: string | null, state = "shown") =>
+      database
+        .prepare("INSERT INTO comments (id, thread_id, author, body, created_at, audience, state, person_id, sender_name, sender_email) VALUES (?1, ?2, ?3, 'Said.', ?4, 'public', ?5, ?6, ?7, ?8)")
+        .bind(id, thread, author, at, state, person, name, email);
+    await database.batch([
+      thread("t1", 1, "2026-11-01T00:00:00.000Z", "self", null, null),
+      // Asha wrote twice from the site, her address typed two ways; the newest name she typed names her.
+      thread("t2", 2, "2026-11-02T00:00:00.000Z", "talk", "Asha", "Asha@Example.com"),
+      thread("t3", 3, "2026-11-04T00:00:00.000Z", "talk", "Asha S.", " asha@example.com "),
+      // A note with no address links to nobody.
+      thread("t4", 4, "2026-11-03T00:00:00.000Z", "talk", "Nobody", null),
+      // Dev told him things twice, his name said two ways; the newest names him.
+      thread("t5", 5, "2026-11-05T00:00:00.000Z", "told", "Dev K.", null),
+      thread("t6", 6, "2026-11-06T00:00:00.000Z", "told", " dev k. ", null),
+      // The site note of someone he later invited.
+      thread("t7", 7, "2026-11-01T12:00:00.000Z", "talk", "Meera from the site", "meera@example.com", "dropped"),
+      database.prepare("INSERT INTO people (id, email, name, created_at) VALUES ('p-meera', 'meera@example.com', 'Meera', '2026-11-02T12:00:00.000Z')"),
+      database.prepare("INSERT INTO members (thread_id, person_id, added_at) VALUES ('t1', 'p-meera', '2026-11-02T12:00:00.000Z')"),
+      comment("c1", "t1", "2026-11-03T00:00:00.000Z", "member", "p-meera", null, null),
+      // A visitor's note typed with Meera's address, and one by a stranger, and one with no address.
+      comment("c2", "t1", "2026-11-04T00:00:00.000Z", "visitor", null, "M.", "MEERA@example.com", "pending"),
+      comment("c3", "t1", "2026-11-01T00:00:00.000Z", "visitor", null, "Lin", "lin@example.net", "dropped"),
+      comment("c4", "t1", "2026-11-05T00:00:00.000Z", "visitor", null, "Shy", null),
+    ]);
+    return target;
+  }
+
+  it("keeps every person with their id, adds everyone else he dealt with, and numbers them all by age", async () => {
+    harness = await staged();
+    await harness.migrate();
+    const database = await harness.db();
+    const people = (await database.prepare("SELECT id, number, email, name, note, created_at FROM people ORDER BY number").all<Record<string, unknown>>()).results;
+    expect(people.map(({ id: _id, ...rest }) => rest)).toEqual([
+      { number: 1, email: "lin@example.net", name: "Lin", note: null, created_at: "2026-11-01T00:00:00.000Z" },
+      { number: 2, email: "asha@example.com", name: "Asha S.", note: null, created_at: "2026-11-02T00:00:00.000Z" },
+      { number: 3, email: "meera@example.com", name: "Meera", note: null, created_at: "2026-11-02T12:00:00.000Z" },
+      { number: 4, email: null, name: "dev k.", note: null, created_at: "2026-11-05T00:00:00.000Z" },
+    ]);
+    expect(people[2]?.id).toBe("p-meera");
+    for (const person of people.filter((row) => row.id !== "p-meera")) {
+      expect(person.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    }
+    expect((await database.prepare("SELECT name FROM sqlite_master WHERE name = 'people_before'").all()).results).toEqual([]);
+  });
+
+  it("links each site note, told thread and visitor's note to its person, and a note with no address to nobody", async () => {
+    harness = await staged();
+    await harness.migrate();
+    const database = await harness.db();
+    const named = async (sql: string): Promise<Record<string, unknown>[]> => (await database.prepare(sql).all<Record<string, unknown>>()).results;
+    expect(await named("SELECT threads.id, people.number FROM threads LEFT JOIN people ON people.id = threads.person_id ORDER BY threads.number")).toEqual([
+      { id: "t1", number: null },
+      { id: "t2", number: 2 },
+      { id: "t3", number: 2 },
+      { id: "t4", number: null },
+      { id: "t5", number: 4 },
+      { id: "t6", number: 4 },
+      { id: "t7", number: 3 },
+    ]);
+    expect(await named("SELECT comments.id, people.number FROM comments LEFT JOIN people ON people.id = comments.person_id ORDER BY comments.id")).toEqual([
+      { id: "c1", number: 3 },
+      { id: "c2", number: 3 },
+      { id: "c3", number: 1 },
+      { id: "c4", number: null },
+    ]);
+    // What a visitor typed stays as typed.
+    expect(await named("SELECT sender_name, sender_email FROM comments WHERE id = 'c2'")).toEqual([{ sender_name: "M.", sender_email: "MEERA@example.com" }]);
+  });
+
+  it("leaves the invitation joined, the foreign keys enforced, and the invited person signing in", async () => {
+    harness = await staged();
+    await harness.migrate();
+    const database = await harness.db();
+    expect(await database.prepare("SELECT members.thread_id, people.email FROM members JOIN people ON people.id = members.person_id").all().then((r) => r.results)).toEqual([
+      { thread_id: "t1", email: "meera@example.com" },
+    ]);
+    await expect(database.prepare("INSERT INTO members (thread_id, person_id, added_at) VALUES ('t1', 'p-nobody', 'x')").run()).rejects.toThrow(/FOREIGN KEY/);
+    await expect(database.prepare("UPDATE threads SET person_id = 'p-nobody' WHERE id = 't1'").run()).rejects.toThrow(/FOREIGN KEY/);
+    const me = await harness.fetch(`${SITE}/threads/api/me`, { headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.memberClaims("meera@example.com")) } });
+    expect(me.status).toBe(200);
+  });
+
+  it("never turns the deferred foreign keys off by hand, which would forget a child left without a parent", async () => {
+    // SQLite clears the violations it deferred when the pragma is turned off, so the commit would no longer refuse
+    // them; the deferral ends with the commit instead. A rebuild that loses a parent is then refused whole.
+    const sql = readFileSync(new URL("../migrations/0012_people.sql", import.meta.url), "utf8");
+    expect(sql.split("\n").filter((line) => !line.startsWith("--") && /defer_foreign_keys/i.test(line))).toEqual(["PRAGMA defer_foreign_keys = on;"]);
+    harness = await startHarness({ through: "0011" });
+    const database = await harness.db();
+    await database.batch([
+      database.prepare("INSERT INTO threads (id, number, created_at, source, body, status) VALUES ('t1', 1, '2026-11-01T00:00:00.000Z', 'self', 'x', 'act')"),
+      database.prepare("INSERT INTO people (id, email, name, created_at) VALUES ('p1', 'a@example.com', 'A', '2026-11-01T00:00:00.000Z')"),
+      database.prepare("INSERT INTO members (thread_id, person_id, added_at) VALUES ('t1', 'p1', '2026-11-01T00:00:00.000Z')"),
+    ]);
+    const lost = ["PRAGMA defer_foreign_keys = on", "DROP TABLE people", "CREATE TABLE people (id TEXT PRIMARY KEY, email TEXT)"];
+    await expect(database.batch(lost.map((statement) => database.prepare(statement)))).rejects.toThrow();
+    expect(await database.prepare("SELECT id, email FROM people").all().then((r) => r.results)).toEqual([{ id: "p1", email: "a@example.com" }]);
   });
 });

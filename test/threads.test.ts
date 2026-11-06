@@ -154,6 +154,7 @@ describe("an add", () => {
       body: body.body,
       summary: null,
       senderName: null,
+      senderNumber: null,
       senderEmail: null,
       status: "discuss",
       kind: "idea",

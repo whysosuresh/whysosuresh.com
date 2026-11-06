@@ -110,8 +110,13 @@ describe("a good note", () => {
       link_url: null,
       link_title: null,
       public_at: null,
+      person_id: expect.any(String),
     });
     expect(String(row?.created_at) >= before).toBe(true);
+    // The address is a person now, named as typed, and the note is from them.
+    expect((await rows("people")).map(({ id, number, email, name, note }) => ({ id, number, email, name, note }))).toEqual([
+      { id: row?.person_id, number: 1, email: "asha@example.com", name: "Asha", note: null },
+    ]);
     expect(await rows("events")).toEqual([
       { id: 1, thread_id: id, at: row?.created_at, actor: "visitor", type: "created", data: JSON.stringify({ source: "talk", status: "received" }) },
     ]);

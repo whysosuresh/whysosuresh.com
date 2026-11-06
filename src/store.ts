@@ -31,6 +31,18 @@
 // `historyPublic`, `findPublicPage`, `publicPreview`), each holding the public condition (`PUBLIC`) in its own SQL.
 // A stranger sees only the comments written as Public that are shown. A visitor may send a note on a public thread
 // (`addNote`): it is a comment that waits for his OK (`state` `pending`), and only he shows or drops it (`judgeNote`).
+//
+// Everyone he deals with is a person (`people`, migrations/0012_people.sql), numbered as threads are: the people he
+// invites, a visitor who wrote from the site or on a public thread with an address, and someone who told him
+// something in person. Who a site note or a told thread is from is `threads.person_id`; who wrote an invited
+// person's comment or a visitor's note is `comments.person_id`. The person is found or made here, once, in the same
+// batch as the write that names them: by the address a visitor typed, lowercased (a visitor's typing never renames
+// anyone, so a person made from it is named by what they typed only when new); for a told thread by the person
+// number the sync names, else by the told name when exactly one person has it (trimmed, ignoring case), else a new
+// person; and an invitation by the address it names, so a person who wrote from the site and is then invited is one
+// person, his typed name winning. A comment shows an invited person's name as it stands, and a visitor's as they
+// typed it, so linking a note to a person changes nothing anyone else reads. People are his alone to read with the
+// sync and to change (`editPerson`): their name, their address while they have none, and his own notes on them.
 
 /** Where a thread came from: the site's note flow, something told to him in person, or his own. */
 export type Source = "talk" | "told" | "self";
@@ -62,8 +74,9 @@ export function isTab(value: string): value is Tab {
 
 // The last activity reads the arrival time when it was never set: a thread the code before 0008 created between
 // that migration and its deploy. A plain expression, so it is safe in RETURNING.
+// Who a thread is from is read with their number, so a page can link the name; a subquery, which RETURNING allows.
 export const COLUMNS =
-  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at";
+  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at, person_id, (SELECT people.number FROM people WHERE people.id = threads.person_id) AS sender_number";
 
 export interface ThreadRow {
   id: string;
@@ -90,6 +103,9 @@ export interface ThreadRow {
   link_title: string | null;
   /** When he made it public; null while it isn't. */
   public_at: string | null;
+  /** The person a site note or told thread is from, and their number; null for his own and a note with no address. */
+  person_id: string | null;
+  sender_number: number | null;
   /** On a list's rows only (`LIST_EXTRAS`): how many people the thread is shared with now. */
   shared?: number;
   /** On a list's rows only: 1 when the last word on it is an invited person's, else 0. */
@@ -121,9 +137,13 @@ export interface CommentRow {
   audience: string;
   /** `shown`, `pending` (a visitor's note waiting for his OK) or `dropped`. */
   state: string;
-  /** The invited person who wrote it, and their name as it stands; null for the owner's and the sync's. */
+  /**
+   * The person who wrote it (an invited person, or a visitor who typed an address) and their number; null for the
+   * owner's and the sync's. `person_name` is their name as it stands for an invited person's comment only.
+   */
   person_id: string | null;
   person_name: string | null;
+  person_number: number | null;
   /** A visitor's note only: the name and email they typed, each null when not given. */
   sender_name: string | null;
   sender_email: string | null;
@@ -135,6 +155,7 @@ export type Judgement = "show" | "drop" | "hold";
 /** A person a thread is shared with, as the owner sees them. */
 export interface PersonRow {
   id: string;
+  number: number;
   email: string;
   name: string | null;
   added_at: string;
@@ -214,19 +235,79 @@ export interface NewThread {
   readonly status: keyof typeof KIND_OF;
   /** Where an added thread came from; adding the same one again answers the thread already there. */
   readonly originRef: string | null;
+  /** A told thread only: the person the sync names as the teller, by number; null to find them by name. */
+  readonly person: number | null;
+}
+
+/** The number the next person gets: one more than the largest, given inside their INSERT, as a thread's is. */
+const NEXT_PERSON = "(SELECT COALESCE(MAX(number), 0) + 1 FROM people)";
+
+/** Who a new thread is from, as the store finds them: by a typed address, by the sync's number, by a told name, or no one. */
+type Sender =
+  | { readonly by: "email"; readonly email: string; readonly name: string | null }
+  | { readonly by: "number"; readonly number: number }
+  | { readonly by: "name"; readonly name: string }
+  | null;
+
+function senderOf(thread: NewThread): Sender {
+  if (thread.source === "talk") return thread.senderEmail === null ? null : { by: "email", email: thread.senderEmail.trim().toLowerCase(), name: thread.senderName };
+  if (thread.source !== "told") return null;
+  if (thread.person !== null) return { by: "number", number: thread.person };
+  return thread.senderName === null ? null : { by: "name", name: thread.senderName };
+}
+
+/** A told name compared as the store compares names: trimmed, ignoring case for ASCII letters. */
+function sameName(column: string, name: string, p: Params): string {
+  return `lower(trim(${column})) = lower(${p.add(name.trim())})`;
 }
 
 /**
- * Keeps a new thread, numbered after the largest, with its `created` event. With an `originRef` already kept,
- * nothing is written and the thread already there is answered, `created` false.
+ * The person a write names, as two parts of its batch: the statement that makes them when they are new (null when
+ * nothing is made), run first, and the SQL expression for their id, bound into the write itself. `when` is a
+ * condition the write needs, so nobody is made for a write that isn't kept.
  */
-export async function create(db: D1Database, thread: NewThread, actor: Actor): Promise<{ row: ThreadRow; created: boolean } | null> {
+function personOf(db: D1Database, sender: Sender, now: string, when: (p: Params) => string, into: Params): { make: D1PreparedStatement | null; id: string } {
+  if (sender === null) return { make: null, id: "NULL" };
+  if (sender.by === "number") return { make: null, id: `(SELECT id FROM people WHERE number = ${into.add(sender.number)})` };
+  const id = crypto.randomUUID();
+  const p = new Params();
+  if (sender.by === "email") {
+    // A known address makes nobody and renames nobody.
+    const make = statement(
+      db,
+      `INSERT INTO people (id, number, email, name, created_at) SELECT ${p.add(id)}, ${NEXT_PERSON}, ${p.list([sender.email, sender.name, now])} WHERE ${when(p)}
+       ON CONFLICT (email) DO NOTHING`,
+      p,
+    );
+    return { make, id: `(SELECT id FROM people WHERE email = ${into.add(sender.email)})` };
+  }
+  // A told name joins the one person who has it; none, or several, make a new person.
+  const make = statement(
+    db,
+    `INSERT INTO people (id, number, email, name, created_at) SELECT ${p.add(id)}, ${NEXT_PERSON}, NULL, ${p.list([sender.name.trim(), now])}
+     WHERE (SELECT COUNT(*) FROM people WHERE ${sameName("name", sender.name, p)}) <> 1 AND ${when(p)}`,
+    p,
+  );
+  return { make, id: `COALESCE((SELECT id FROM people WHERE id = ${into.add(id)}), (SELECT id FROM people WHERE ${sameName("name", sender.name, into)}))` };
+}
+
+/**
+ * Keeps a new thread, numbered after the largest, with its `created` event and the person it is from, found or made
+ * in the same batch. With an `originRef` already kept, nothing is written and the thread already there is answered,
+ * `created` false. `no-person` when the sync names a person number nobody has; then nothing is written.
+ */
+export async function create(db: D1Database, thread: NewThread, actor: Actor): Promise<{ row: ThreadRow; created: boolean } | null | "no-person"> {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
+  const sender = senderOf(thread);
+  if (sender?.by === "number" && (await db.prepare("SELECT 1 AS yes FROM people WHERE number = ?1").bind(sender.number).first()) === null) return "no-person";
   const p = new Params();
+  // Nobody is made for an add that answers the thread already there.
+  const fresh = (q: Params): string => (thread.originRef === null ? "1" : `NOT EXISTS (SELECT 1 FROM threads WHERE origin_ref = ${q.add(thread.originRef)})`);
+  const person = personOf(db, sender, now, fresh, p);
   const insert = statement(
     db,
-    `INSERT INTO threads (id, number, created_at, activity_at, source, space, title, body, status, kind, sender_name, sender_email, origin_ref)
+    `INSERT INTO threads (id, number, created_at, activity_at, source, space, title, body, status, kind, sender_name, sender_email, origin_ref, person_id)
      VALUES (${p.add(id)}, (SELECT COALESCE(MAX(number), 0) + 1 FROM threads), ${p.list([
        now,
        now,
@@ -239,7 +320,7 @@ export async function create(db: D1Database, thread: NewThread, actor: Actor): P
        thread.senderName,
        thread.senderEmail,
        thread.originRef,
-     ])})
+     ])}, ${person.id})
      ON CONFLICT (origin_ref) WHERE origin_ref IS NOT NULL DO NOTHING
      RETURNING ${COLUMNS}`,
     p,
@@ -252,8 +333,8 @@ export async function create(db: D1Database, thread: NewThread, actor: Actor): P
      SELECT id, created_at, ${e.add(actor)}, 'created', json_object('source', source, 'status', status) FROM threads WHERE id = ${e.add(id)}`,
     e,
   );
-  const [inserted] = await db.batch<ThreadRow>([insert, event]);
-  const row = inserted?.results[0];
+  const results = await db.batch<ThreadRow>([...(person.make === null ? [] : [person.make]), insert, event]);
+  const row = results[person.make === null ? 0 : 1]?.results[0];
   if (row !== undefined) return { row, created: true };
   if (thread.originRef === null) return null;
   const there = await db.prepare(`SELECT ${COLUMNS} FROM threads WHERE origin_ref = ?1`).bind(thread.originRef).first<ThreadRow>();
@@ -320,9 +401,12 @@ export async function listShared(db: D1Database, email: string, limit: number): 
   ).results;
 }
 
-/** The columns a comment is read with: its own, and the name of the invited person who wrote it. */
+/**
+ * The columns a comment is read with: its own, the number of the person who wrote it, and their name as it stands
+ * for an invited person's only, so a visitor's note keeps the name they typed wherever it is shown.
+ */
 const COMMENT_COLUMNS =
-  "comments.id, comments.thread_id, comments.author, comments.body, comments.created_at, comments.audience, comments.state, comments.person_id, people.name AS person_name, comments.sender_name, comments.sender_email";
+  "comments.id, comments.thread_id, comments.author, comments.body, comments.created_at, comments.audience, comments.state, comments.person_id, CASE WHEN comments.author = 'member' THEN people.name END AS person_name, people.number AS person_number, comments.sender_name, comments.sender_email";
 
 /**
  * Events an invited person never sees: the owner's mail opening, the copy from the old inbox, and a visitor's note
@@ -687,7 +771,7 @@ export async function peopleOf(db: D1Database, threadId: string): Promise<Person
   return (
     await db
       .prepare(
-        `SELECT people.id, people.email, people.name, members.added_at FROM members JOIN people ON people.id = members.person_id
+        `SELECT people.id, people.number, people.email, people.name, members.added_at FROM members JOIN people ON people.id = members.person_id
          WHERE members.thread_id = ?1 AND members.removed_at IS NULL ORDER BY members.added_at, people.id`,
       )
       .bind(threadId)
@@ -708,17 +792,18 @@ export interface Invitee {
 
 /**
  * Invites a person to a thread, by the owner, in one batch: the person (kept once per address, their name the one
- * typed now), the `invited` event (only when they weren't already in it), the invitation (a new one, or a
- * removed one standing again) and the thread's last activity. Inviting someone already in the thread changes
- * nothing but their name. Null when there is no such thread, and then nothing is written, the person included.
+ * typed now; a new one numbered after the largest), the `invited` event (only when they weren't already in it), the
+ * invitation (a new one, or a removed one standing again) and the thread's last activity. Inviting someone already
+ * in the thread changes nothing but their name. Null when there is no such thread, and then nothing is written, the
+ * person included. An address someone typed on the site, or he gave a told person, lands on that person.
  */
 export async function invite(db: D1Database, number: number, invitee: Invitee): Promise<ThreadRow | null> {
   const now = new Date().toISOString();
   const p = new Params();
   const person = statement(
     db,
-    `INSERT INTO people (id, email, name, created_at)
-     SELECT ${p.list([crypto.randomUUID(), invitee.email, invitee.name, now])} WHERE EXISTS (SELECT 1 FROM threads WHERE number = ${p.add(number)})
+    `INSERT INTO people (id, number, email, name, created_at)
+     SELECT ${p.add(crypto.randomUUID())}, ${NEXT_PERSON}, ${p.list([invitee.email, invitee.name, now])} WHERE EXISTS (SELECT 1 FROM threads WHERE number = ${p.add(number)})
      ON CONFLICT (email) DO UPDATE SET name = excluded.name`,
     p,
   );
@@ -843,24 +928,28 @@ export interface VisitorNote {
 
 /**
  * Keeps a visitor's note on a public thread: a comment for anyone that waits for his OK, with the name and email
- * they typed, and the thread's last activity. It writes no event, because a comment is its own entry. The insert
- * holds the public condition itself, so a note racing the thread being taken back is refused, not kept: false then.
+ * they typed, the person that address is (made when new), and the thread's last activity. It writes no event,
+ * because a comment is its own entry. The insert holds the public condition itself, so a note racing the thread
+ * being taken back is refused, not kept: false then, and nobody is made.
  */
 export async function addNote(db: D1Database, number: number, note: VisitorNote): Promise<boolean> {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   const p = new Params();
+  const sender: Sender = note.email === null ? null : { by: "email", email: note.email.trim().toLowerCase(), name: note.name };
+  const isPublic = (q: Params): string => `EXISTS (SELECT 1 FROM threads WHERE threads.number = ${q.add(number)} AND ${PUBLIC})`;
+  const person = personOf(db, sender, now, isPublic, p);
   const insert = statement(
     db,
-    `INSERT INTO comments (id, thread_id, author, body, created_at, audience, state, sender_name, sender_email)
-     SELECT ${p.add(id)}, threads.id, 'visitor', ${p.list([note.body, now])}, 'public', 'pending', ${p.list([note.name, note.email])}
+    `INSERT INTO comments (id, thread_id, author, body, created_at, audience, state, sender_name, sender_email, person_id)
+     SELECT ${p.add(id)}, threads.id, 'visitor', ${p.list([note.body, now])}, 'public', 'pending', ${p.list([note.name, note.email])}, ${person.id}
      FROM threads WHERE threads.number = ${p.add(number)} AND ${PUBLIC} RETURNING id`,
     p,
   );
   const u = new Params();
   const touch = statement(db, `UPDATE threads SET activity_at = ${u.add(now)} WHERE id = (SELECT thread_id FROM comments WHERE id = ${u.add(id)})`, u);
-  const [inserted] = await db.batch<{ id: string }>([insert, touch]);
-  return (inserted?.results.length ?? 0) > 0;
+  const results = await db.batch<{ id: string }>([...(person.make === null ? [] : [person.make]), insert, touch]);
+  return (results[person.make === null ? 0 : 1]?.results.length ?? 0) > 0;
 }
 
 /** What each ruling on a note starts from, goes to, and the event it writes. */
@@ -908,4 +997,165 @@ export async function judgeNote(
   if ((updated?.results.length ?? 0) > 0 && row !== undefined) return row;
   if (row !== undefined) return "not-from-here";
   return (await find(db, { number }, EVERY_THREAD)) === null ? "no-thread" : "no-note";
+}
+
+/** A person as the owner and the sync read them: who they are, how he knows them, and when they last were in touch. */
+export interface PeopleRow {
+  id: string;
+  number: number;
+  email: string | null;
+  name: string | null;
+  note: string | null;
+  created_at: string;
+  /** Site notes they sent, things they told him, threads shared with them now and taken back, their comments and notes. */
+  sent: number;
+  told: number;
+  invited: number;
+  removed: number;
+  commented: number;
+  noted: number;
+  /** The latest of when they appeared, their threads and notes, and their invitations. */
+  last_contact: string;
+  /**
+   * 1 while anything of theirs is live: a thread from them that isn't dropped, an invitation that stands or one to a
+   * thread that isn't dropped, or a comment or note of theirs that isn't dropped on such a thread. A person with
+   * none was only ever in threads he dropped, which the page folds away.
+   */
+  live: number;
+}
+
+/** The person columns every people read uses, on `people`, with what is derived from the rows that name them. */
+const PEOPLE_COLUMNS = `people.id, people.number, people.email, people.name, people.note, people.created_at,
+  (SELECT COUNT(*) FROM threads WHERE threads.person_id = people.id AND threads.source = 'talk') AS sent,
+  (SELECT COUNT(*) FROM threads WHERE threads.person_id = people.id AND threads.source = 'told') AS told,
+  (SELECT COUNT(*) FROM members WHERE members.person_id = people.id AND members.removed_at IS NULL) AS invited,
+  (SELECT COUNT(*) FROM members WHERE members.person_id = people.id AND members.removed_at IS NOT NULL) AS removed,
+  (SELECT COUNT(*) FROM comments WHERE comments.person_id = people.id AND comments.author = 'member') AS commented,
+  (SELECT COUNT(*) FROM comments WHERE comments.person_id = people.id AND comments.author = 'visitor') AS noted,
+  MAX(people.created_at,
+    COALESCE((SELECT MAX(created_at) FROM threads WHERE threads.person_id = people.id), ''),
+    COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.person_id = people.id), ''),
+    COALESCE((SELECT MAX(added_at) FROM members WHERE members.person_id = people.id), '')) AS last_contact,
+  (EXISTS (SELECT 1 FROM threads WHERE threads.person_id = people.id AND threads.status <> 'dropped')
+    OR EXISTS (SELECT 1 FROM members JOIN threads ON threads.id = members.thread_id
+               WHERE members.person_id = people.id AND (members.removed_at IS NULL OR threads.status <> 'dropped'))
+    OR EXISTS (SELECT 1 FROM comments JOIN threads ON threads.id = comments.thread_id
+               WHERE comments.person_id = people.id AND comments.state <> 'dropped' AND threads.status <> 'dropped')) AS live`;
+
+/** The people order: whoever was last in touch first. */
+const PEOPLE_ORDER = "ORDER BY last_contact DESC, people.number DESC";
+
+/** Up to `limit` people, whoever was last in touch first. */
+export async function listPeople(db: D1Database, limit: number): Promise<PeopleRow[]> {
+  return (await db.prepare(`SELECT ${PEOPLE_COLUMNS} FROM people ${PEOPLE_ORDER} LIMIT ${limit}`).all<PeopleRow>()).results;
+}
+
+/** One person by their number; null when nobody has it. */
+export async function findPerson(db: D1Database, number: number): Promise<PeopleRow | null> {
+  return db.prepare(`SELECT ${PEOPLE_COLUMNS} FROM people WHERE people.number = ?1`).bind(number).first<PeopleRow>();
+}
+
+/**
+ * People for a search, whoever was last in touch first: those whose name or address holds the words as typed,
+ * ignoring case for ASCII letters, `%` and `_` matching only themselves. Up to `SEARCH_LIMIT`.
+ */
+export async function searchPeople(db: D1Database, words: string): Promise<PeopleRow[]> {
+  const p = new Params();
+  const pattern = p.add(`%${words.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+  return (
+    await statement(
+      db,
+      `SELECT ${PEOPLE_COLUMNS} FROM people WHERE (people.name LIKE ${pattern} ESCAPE '\\' OR people.email LIKE ${pattern} ESCAPE '\\')
+       ${PEOPLE_ORDER} LIMIT ${SEARCH_LIMIT}`,
+      p,
+    ).all<PeopleRow>()
+  ).results;
+}
+
+/** A thread a person is in, with how: it is from them (`mine`), their invitation to it, and how many comments or notes of theirs it holds. */
+export interface PersonThreadRow extends ThreadRow {
+  mine: number;
+  membership: "invited" | "removed" | null;
+  wrote: number;
+}
+
+/** Up to `limit` of the threads a person is in, most recently active first: from them, shared with them, or written on. */
+export async function threadsOfPerson(db: D1Database, personId: string, limit: number): Promise<PersonThreadRow[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT ${COLUMNS}, (threads.person_id IS ?1) AS mine,
+           (SELECT CASE WHEN members.removed_at IS NULL THEN 'invited' ELSE 'removed' END FROM members
+            WHERE members.thread_id = threads.id AND members.person_id = ?1) AS membership,
+           (SELECT COUNT(*) FROM comments WHERE comments.thread_id = threads.id AND comments.person_id = ?1) AS wrote
+         FROM threads
+         WHERE threads.person_id = ?1
+           OR EXISTS (SELECT 1 FROM members WHERE members.thread_id = threads.id AND members.person_id = ?1)
+           OR EXISTS (SELECT 1 FROM comments WHERE comments.thread_id = threads.id AND comments.person_id = ?1)
+         ORDER BY COALESCE(activity_at, created_at) DESC, number DESC LIMIT ${limit}`,
+      )
+      .bind(personId)
+      .all<PersonThreadRow>()
+  ).results;
+}
+
+/** Something a person said: a site note (`note`), a comment as an invited person (`comment`), or a note on a public thread (`public-note`). */
+export interface WordsRow {
+  kind: "note" | "comment" | "public-note";
+  number: number;
+  title: string | null;
+  body: string;
+  at: string;
+  /** A comment's or note's state and audience; null for a site note. */
+  state: string | null;
+  audience: string | null;
+}
+
+/** Up to `limit` of what a person said, newest first, each with the thread it is on. */
+export async function wordsOfPerson(db: D1Database, personId: string, limit: number): Promise<WordsRow[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT 'note' AS kind, threads.number, threads.title, threads.body, threads.created_at AS at, NULL AS state, NULL AS audience, threads.id AS key
+         FROM threads WHERE threads.person_id = ?1 AND threads.source = 'talk'
+         UNION ALL
+         SELECT CASE comments.author WHEN 'member' THEN 'comment' ELSE 'public-note' END, threads.number, threads.title, comments.body, comments.created_at,
+           comments.state, comments.audience, comments.id
+         FROM comments JOIN threads ON threads.id = comments.thread_id WHERE comments.person_id = ?1
+         ORDER BY at DESC, key DESC LIMIT ${limit}`,
+      )
+      .bind(personId)
+      .all<WordsRow>()
+  ).results;
+}
+
+/** A change the owner makes to a person: their name, their address while they have none, or his notes on them (null clears them). */
+export type PersonChange = { readonly name: string } | { readonly email: string } | { readonly note: string | null };
+
+/**
+ * Changes a person, by the owner. An address is given once, lowercased, and only while they have none, because it
+ * is what an invited person signs in with: `has-email` when they have one, `email-taken` with the number of the
+ * person who holds it. `no-person` when nobody has the number. Answers the person as they now stand.
+ */
+export async function editPerson(
+  db: D1Database,
+  number: number,
+  change: PersonChange,
+): Promise<PeopleRow | "no-person" | "has-email" | { readonly taken: number }> {
+  const p = new Params();
+  let update: string;
+  if ("email" in change) {
+    const email = p.add(change.email);
+    update = `UPDATE people SET email = ${email} WHERE number = ${p.add(number)} AND email IS NULL AND NOT EXISTS (SELECT 1 FROM people WHERE email = ${email}) RETURNING id`;
+  } else {
+    const [column, value] = "name" in change ? ["name", change.name] : ["note", change.note];
+    update = `UPDATE people SET ${column} = ${p.add(value)} WHERE number = ${p.add(number)} RETURNING id`;
+  }
+  const changed = await statement(db, update, p).first<{ id: string }>();
+  const person = await findPerson(db, number);
+  if (person === null) return "no-person";
+  if (changed !== null || !("email" in change)) return person;
+  if (person.email !== null) return "has-email";
+  const holder = await db.prepare("SELECT number FROM people WHERE email = ?1").bind(change.email).first<{ number: number }>();
+  return holder === null ? person : { taken: holder.number };
 }

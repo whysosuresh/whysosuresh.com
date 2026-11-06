@@ -1,9 +1,10 @@
 // The note flow's send, the site's first public write: a typed note about one of Suresh's topics, with an
-// optional name and email, kept as a new thread (src/store.ts), from the site's own page, as JSON with exactly five
-// string keys. Its checks and their order are every visitor note's (src/note.ts): no bot-check secret (503), another
-// origin (403), no or too large a declared length (411, 413), a body that isn't JSON (415), a malformed note (400;
-// the topic is checked right after the shape), a failed bot check (403), and the daily limits (429). Nothing
-// personal is ever logged: a refusal's line holds its status and reason only.
+// optional name and email, kept as a new thread (src/store.ts, which links it to the person that address is), from
+// the site's own page, as JSON with exactly five string keys. Its checks and their order are every visitor note's
+// (src/note.ts): no bot-check secret (503), another origin (403), no or too large a declared length (411, 413), a
+// body that isn't JSON (415), a malformed note (400; the topic is checked right after the shape), a failed bot check
+// (403), and the daily limits (429). Nothing personal is ever logged: a refusal's line holds its status and reason
+// only.
 
 import { isTopic } from "../site/talk-topics.js";
 import { create } from "./store.ts";
@@ -35,10 +36,10 @@ export async function handleTalk(request: Request, env: Bindings): Promise<Respo
   try {
     const kept = await create(
       env.DB,
-      { source: "talk", space: topic, title: null, body: note.body, senderName: note.name, senderEmail: note.email, status: "received", originRef: null },
+      { source: "talk", space: topic, title: null, body: note.body, senderName: note.name, senderEmail: note.email, status: "received", originRef: null, person: null },
       "visitor",
     );
-    if (kept === null) return refuse(500, "store");
+    if (kept === null || kept === "no-person") return refuse(500, "store");
     id = kept.row.id;
   } catch {
     return refuse(500, "store");

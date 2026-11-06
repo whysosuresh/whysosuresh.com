@@ -313,7 +313,7 @@ describe("a note on a public thread", () => {
     expect(await response.text()).toBe("{}");
     const view = await shown(n);
     expect(view.comments).toEqual([
-      { id: expect.any(String), author: "visitor", name: "Tomás", audience: "public", state: "pending", body: "Loved this. **not bold**", createdAt: expect.any(String), senderEmail: "tomas@example.com" },
+      { id: expect.any(String), author: "visitor", name: "Tomás", audience: "public", state: "pending", body: "Loved this. **not bold**", createdAt: expect.any(String), personNumber: 1, senderEmail: "tomas@example.com" },
     ]);
     expect(view.events.map((event) => event.type)).toEqual(["created", "published"]);
     expect((await shown(n, "sync")).comments[0]?.senderEmail).toBe("tomas@example.com");

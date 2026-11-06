@@ -22,6 +22,7 @@
 //   POST /threads/api/threads/<n>/people      {"add": {"email", "name"}} | {"remove": <person id>}   owner
 //   GET  /threads/api/search?q=<words or a number>                            everyone
 //   GET  /threads/api/sign-in?next=<a threads page>                           everyone
+//   GET  /threads/api/people[/<n>], POST /threads/api/people/<n>               owner and sync read; owner writes (src/people.ts)
 //
 // An invited person reads only the threads they are in: every read takes the caller as its reader, and the
 // store's queries see no other thread, so one they aren't in answers 404 `no-thread`, exactly as a number never
@@ -60,11 +61,19 @@
 // shows it, drops it or sends it back to waiting at its own address, and the owner's list counts the notes waiting
 // on each thread (`pending`). An invited person never reads a note that isn't shown, and nobody but the owner and the
 // sync ever reads a visitor's email.
+//
+// Everyone he deals with is a person with a number (src/people.ts holds their calls). To the owner and the sync, a
+// thread names the person it is from (`senderNumber`), a comment its writer's (`personNumber`), a thread's people
+// theirs (`number`), and a search answers the people whose name or address holds the words beside the threads
+// (`people`), so a name on his page opens that person. An invited person's shapes gain none of these, and every
+// people call refuses them. The sync's add may name a told thread's teller by number (`person`); a number nobody
+// has is refused 404 `no-person`, and nothing is written.
 
 import { identify, type Caller, type Refusal } from "./access.ts";
 import type { Bindings } from "./bindings.ts";
 import { json, type JsonValue } from "./json.ts";
 import { servePage, withSkeleton } from "./page.ts";
+import { handlePeople, personView } from "./people.ts";
 import { sameOrigin } from "./request.ts";
 import {
   comment,
@@ -85,6 +94,7 @@ import {
   peopleOf,
   savePage,
   search,
+  searchPeople,
   setLink,
   uninvite,
   judgeNote,
@@ -100,10 +110,13 @@ import {
   MAX_BODY,
   MAX_CHANGE_BYTES,
   MAX_TEXT_BYTES,
+  MAX_PERSON_NAME,
   MAX_TITLE,
+  exactly,
   lengthRefusal,
   line,
   readAdd,
+  readEmail,
   readJson,
   readMove,
   readOwnAdd,
@@ -136,16 +149,6 @@ const MAX_ADDRESS = 500;
 const MAX_LINK_TITLE = 200;
 /** The most threads an invited person's list answers, by last activity, in one page. */
 const SHARED_PAGE = 200;
-/** The longest name the owner gives a person he invites, in UTF-16 code units of the trimmed text. */
-const MAX_PERSON_NAME = 80;
-/** The longest email address. */
-const MAX_EMAIL = 254;
-/**
- * An email address as an invitation takes it: one `@`, a domain of two or more dot-separated parts with none empty (so
- * no trailing dot, which a dictated address often carries and which no sign-in could ever match), and none of the
- * characters that would split or quote it in a mail draft's recipients.
- */
-const EMAIL_SHAPE = /^[^\s@,;:<>()"\[\]\\]+@(?:[^\s@,;:<>()"\[\]\\.]+\.)+[^\s@,;:<>()"\[\]\\.]+$/;
 /** A person's or a comment's id, as the store gives it. */
 const ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** How invited people see the owner among a thread's people: the site is his, and so is every thread. */
@@ -179,6 +182,7 @@ function thread(row: ThreadRow, reader: Reader): { readonly [key: string]: JsonV
   if (reader.caller === "member") return said;
   return {
     ...said,
+    senderNumber: row.sender_number,
     senderEmail: row.sender_email,
     dropReason: row.drop_reason,
     replyOpenedAt: row.reply_opened_at,
@@ -187,10 +191,10 @@ function thread(row: ThreadRow, reader: Reader): { readonly [key: string]: JsonV
   };
 }
 
-/** The people on a thread: by id, name and address to the owner and the sync; by name only, the owner first, to the people themselves. */
+/** The people on a thread: by id, number, name and address to the owner and the sync; by name only, the owner first, to the people themselves. */
 function peopleView(people: readonly PersonRow[], reader: Reader): JsonValue {
   if (reader.caller === "member") return [{ name: OWNER_NAME, owner: true }, ...people.map((person) => ({ name: person.name }))];
-  return people.map((person) => ({ id: person.id, name: person.name, email: person.email, addedAt: person.added_at }));
+  return people.map((person) => ({ id: person.id, number: person.number, name: person.name, email: person.email, addedAt: person.added_at }));
 }
 
 /** A thread's page as its call answers it: the newest version, and every version; null when it has none. */
@@ -218,8 +222,8 @@ function claudeAddress(value: unknown): string | null {
 
 /**
  * A comment, with who may read it, its state, and the name of who wrote it: the invited person's, or the name a
- * visitor typed (null for the owner's and the sync's, and a visitor who gave none). A visitor's email reaches the
- * owner and the sync only.
+ * visitor typed (null for the owner's and the sync's, and a visitor who gave none). A visitor's email, and the number
+ * of the person who wrote it, reach the owner and the sync only.
  */
 function commentView(row: CommentRow, reader: Reader): { readonly [key: string]: JsonValue } {
   const said = {
@@ -231,7 +235,9 @@ function commentView(row: CommentRow, reader: Reader): { readonly [key: string]:
     body: row.body,
     createdAt: row.created_at,
   };
-  return reader.caller === "member" || row.author !== "visitor" ? said : { ...said, senderEmail: row.sender_email };
+  if (reader.caller === "member") return said;
+  const owners = row.person_number === null ? said : { ...said, personNumber: row.person_number };
+  return row.author === "visitor" ? { ...owners, senderEmail: row.sender_email } : owners;
 }
 
 /** An event; an invited person reads its data without what is the owner's own (`OWNERS_DATA`). */
@@ -280,6 +286,7 @@ async function add(request: Request, env: Bindings, caller: Writer): Promise<Res
   if (typeof found === "string") return refuse(400, found);
 
   const kept = await create(env.DB, found, caller.caller);
+  if (kept === "no-person") return refuse(404, "no-person");
   if (kept === null) return refuse(500, "store");
   return json(kept.created ? 201 : 200, { thread: thread(kept.row, caller) });
 }
@@ -315,13 +322,6 @@ async function move(request: Request, number: number, env: Bindings, caller: Wri
   if (moved === "not-from-here") return refuse(409, "not-from-here");
   if (moved === "not-his-words") return refuse(409, "not-his-words");
   return json(200, { thread: thread(moved, caller) });
-}
-
-/** Exactly the given keys, as a record; null for anything else. */
-function exactly(value: unknown, keys: readonly string[]): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  return Object.keys(record).sort().join(",") === [...keys].sort().join(",") ? record : null;
 }
 
 /**
@@ -367,7 +367,10 @@ async function lookUp(url: URL, env: Bindings, caller: Caller): Promise<Response
   if (words === null || [...url.searchParams.keys()].some((key) => key !== "q") || url.searchParams.getAll("q").length !== 1) return refuse(400, "query");
   const trimmed = line(words, MAX_SEARCH);
   if (trimmed === null) return refuse(400, "query");
-  return json(200, { threads: (await search(env.DB, trimmed, caller)).map((row) => thread(row, caller)) });
+  const threads = (await search(env.DB, trimmed, caller)).map((row) => thread(row, caller));
+  // People are the owner's and the sync's alone; an invited person's answer is threads only, as it always was.
+  if (caller.caller === "member") return json(200, { threads });
+  return json(200, { threads, people: (await searchPeople(env.DB, trimmed)).map(personView) });
 }
 
 /**
@@ -448,12 +451,11 @@ async function peopleAnswer(row: ThreadRow, env: Bindings, caller: Caller): Prom
 function readInvitee(value: unknown, env: Bindings): { email: string; name: string } | "person" | "owner" {
   const fields = exactly(value, ["email", "name"]);
   if (fields === null) return "person";
-  const address = line(fields.email, MAX_EMAIL);
+  const email = readEmail(fields.email, env);
   const name = line(fields.name, MAX_PERSON_NAME);
-  if (address === null || name === null || !EMAIL_SHAPE.test(address)) return "person";
-  const email = address.toLowerCase();
-  if (email === (env.INBOX_OWNER_EMAIL ?? "").trim().toLowerCase()) return "owner";
-  return { email, name };
+  if (email === "person" || name === null) return "person";
+  if (email === "owner") return "owner";
+  return { email: email.email, name };
 }
 
 /**
@@ -524,6 +526,9 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
   if (!("caller" in who)) return refuse(who.status, who.reason);
 
   const url = new URL(request.url);
+  if (url.pathname === "/threads/api/people" || url.pathname.startsWith("/threads/api/people/")) {
+    return handlePeople(request, url, env, who, (row) => thread(row, who));
+  }
   if (url.pathname === "/threads/api/search" || url.pathname === "/threads/api/sign-in" || url.pathname === "/threads/api/me") {
     if (request.method !== "GET") return json(405, { reason: "method" }, { Allow: "GET" });
     if (url.pathname === "/threads/api/me") return me(who);

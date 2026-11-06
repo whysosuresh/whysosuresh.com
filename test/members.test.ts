@@ -103,7 +103,7 @@ describe("inviting", () => {
   it("keeps the person once, by their address lowercased, with an event naming them and never their address", async () => {
     const n = await thread();
     const first = await invite(n, "Meera@Example.com", "  Meera  ");
-    expect(first.people).toEqual([{ id: expect.any(String), name: "Meera", email: MEERA, addedAt: expect.any(String) }]);
+    expect(first.people).toEqual([{ id: expect.any(String), number: 1, name: "Meera", email: MEERA, addedAt: expect.any(String) }]);
     expect(first.invitedCount).toBe(1);
     const shown = await answer<Shown>(await call(`/threads/${n}`));
     const invited = shown.events.filter((event) => event.type === "invited");
