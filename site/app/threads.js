@@ -1338,11 +1338,11 @@ class Threads {
     const tabs = el(
       'div',
       { class: 't-tabs', role: 'tablist', 'aria-label': 'Where it stands' },
-      TABS.map((tab, i) =>
+      // The keys 1 to 4 still open each tab (keys.js, and the keys sheet lists them); the tabs show only their counts.
+      TABS.map((tab) =>
         el('a', { class: 't-tab', role: 'tab', href: pathOf({ view: 'list', tab, space: this.space }, this.threads), 'data-tab': tab, 'aria-selected': String(this.tab === tab) }, [
           TAB_NAMES[tab],
           el('span', { class: 't-nav-count' }, [String(this.inTab(tab).length)]),
-          kbd(String(i + 1)),
         ]),
       ),
     );
