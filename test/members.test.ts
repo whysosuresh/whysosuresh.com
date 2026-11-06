@@ -8,7 +8,8 @@
 // thread, its page, a comment, a search and their list; and every call that isn't theirs is refused with 403
 // `owner-only` before anything is read. What they see of their thread: no visitor's email, origin, issue link,
 // drop reason or mail opening, no earlier version of any text, no "Only me" comment, and the people by name only.
-// The owner's list says how many people each thread is shared with, and which wait on him: an invited person had
+// They reply, answer and comment on words, never under an Only me comment, and their own comments are told apart from
+// a namesake's by their address, which is never shown. The owner's list says how many people each thread is shared with, and which wait on him: an invited person had
 // the last word, until he comments, moves or edits.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -367,6 +368,37 @@ describe("what an invited person sees", () => {
     expect(await reasonOf(await call(`/threads/${n}/comments`, { ...meera, origin: null, body: { body: "x" } }))).toEqual([403, "origin"]);
     const dev = await answer<Shown>(await call(`/threads/${n}`, { as: { email: DEV } }));
     expect(dev.comments.at(-1)).toMatchObject({ author: "member", name: "Meera", body: "Thanks!" });
+  });
+
+  it("takes their reply, answer and comment on words, and never lets them reply to an Only me comment they can't see", async () => {
+    const n = await shared();
+    const meera = { as: { email: MEERA } } as const;
+    const his = await answer<{ comments: { id: string; audience: string }[] }>(await call(`/threads/${n}`));
+    const open = his.comments.find((one) => one.audience === "thread");
+    const secret = his.comments.find((one) => one.audience === "owner");
+    const reply = await answer<{ comment: Record<string, unknown> }>(await call(`/threads/${n}/comments`, { ...meera, body: { body: "Agreed.", parent: open?.id } }), 201);
+    expect(reply.comment).toMatchObject({ author: "member", name: "Meera", audience: "thread", parent: open?.id, mine: true });
+    expect(await reasonOf(await call(`/threads/${n}/comments`, { ...meera, body: { body: "Peek.", parent: secret?.id } }))).toEqual([404, "no-parent"]);
+    expect(await count("SELECT COUNT(*) AS n FROM comments WHERE body = 'Peek.'")).toBe(0);
+    const answered = await answer<{ comment: Record<string, unknown> }>(await call(`/threads/${n}/comments`, { ...meera, body: { body: "Fine as is.", question: "order" } }), 201);
+    expect(answered.comment).toMatchObject({ question: "order", audience: "thread", mine: true });
+    expect(JSON.stringify(answered)).not.toMatch(/meera@|personNumber/);
+  });
+
+  it("says which comments are theirs by their address, never by their name, and tells another person nothing of it", async () => {
+    const n = await shared();
+    await call(`/threads/${n}/comments`, { as: { email: MEERA }, body: { body: "Mine.", question: "order" } });
+    await invite(n, "other@example.com", "Meera");
+    await call(`/threads/${n}/comments`, { as: { email: "other@example.com" }, body: { body: "Also Meera.", question: "order" } });
+    const seen = await answer<{ comments: { body: string; name: string | null; mine: boolean }[] }>(await call(`/threads/${n}`, { as: { email: MEERA } }));
+    expect(seen.comments.map((one) => [one.body, one.name, one.mine])).toEqual([
+      ["For everyone.", null, false],
+      ["Mine.", "Meera", true],
+      ["Also Meera.", "Meera", false],
+    ]);
+    expect(JSON.stringify(seen)).not.toMatch(/meera@|other@/);
+    const his = await answer<{ comments: { body: string; mine: boolean }[] }>(await call(`/threads/${n}`));
+    expect(his.comments.filter((one) => one.mine).map((one) => one.body)).toEqual(["For everyone.", "Only me: her budget."]);
   });
 
   it("refuses a comment's audience that is none of thread, owner and public", async () => {

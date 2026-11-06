@@ -13,6 +13,8 @@
 //   GET  /threads/api/threads/<n>                                             everyone
 //   POST /threads/api/threads/<n>             {"action": ...}                  owner and sync
 //   POST /threads/api/threads/<n>/comments    {"body": ..., "audience"?: ...}  everyone
+//                                             {"body", "parent"} | {"body", "question"} | {"body", "quote", "prefix", "suffix", "version"}
+//                                             owner and invited people
 //   POST /threads/api/threads/<n>/comments/<id>   {"action": "show" | "drop" | "hold"}   owner
 //   POST /threads/api/threads/<n>/text        {"field": ..., "text": ...}      owner and sync
 //   POST /threads/api/threads/<n>/pages[?from=<claude.ai address>]   an HTML document   sync
@@ -98,6 +100,8 @@ import {
   setLink,
   uninvite,
   judgeNote,
+  type Anchor,
+  type Audience,
   type CommentRow,
   type Judgement,
   type EventRow,
@@ -120,6 +124,7 @@ import {
   readJson,
   readMove,
   readOwnAdd,
+  quoted,
   refuse,
   text,
 } from "./wire.ts";
@@ -154,6 +159,13 @@ const SHARED_PAGE = 200;
 const ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** How invited people see the owner among a thread's people: the site is his, and so is every thread. */
 const OWNER_NAME = "Suresh";
+/** The id a page marks a question with (`data-thread-question`), which stays fixed across its versions. */
+const QUESTION_SHAPE = /^[a-z0-9-]{1,40}$/;
+/** The most words a comment on a page may quote, in UTF-16 code units, and the most text kept either side of them. */
+const MAX_QUOTE = 500;
+const MAX_CONTEXT = 64;
+/** A page's version as a comment on its words names it. */
+const MAX_VERSION = 999_999_999;
 /** What an event's data may say that an invited person never reads: earlier texts, drop reasons, issue links, people's ids. */
 const OWNERS_DATA = new Set(["before", "reason", "link", "person"]);
 
@@ -235,10 +247,27 @@ function commentView(row: CommentRow, reader: Reader): { readonly [key: string]:
     state: row.state,
     body: row.body,
     createdAt: row.created_at,
+    parent: row.parent_id,
+    question: row.question,
+    quote:
+      row.quote === null || row.page_version === null
+        ? null
+        : { text: row.quote, prefix: row.quote_prefix ?? "", suffix: row.quote_suffix ?? "", version: row.page_version },
+    mine: isMine(row, reader),
   };
   if (reader.caller === "member") return said;
   const owners = row.person_number === null ? said : { ...said, personNumber: row.person_number };
   return row.author === "visitor" ? { ...owners, senderEmail: row.sender_email } : owners;
+}
+
+/**
+ * Whether the reader wrote a comment, so the page can show their own answer in its box and their comments as theirs:
+ * the owner's for him, the sync's for the sync, and for an invited person the comments whose person has their address,
+ * never their name, which two people may share. The address itself is never shown.
+ */
+function isMine(row: CommentRow, reader: Reader): boolean {
+  if (reader.caller !== "member") return row.author === reader.caller;
+  return row.author === "member" && row.person_email === reader.email;
 }
 
 /** An event; an invited person reads its data without what is the owner's own (`OWNERS_DATA`). */
@@ -326,24 +355,60 @@ async function move(request: Request, number: number, env: Bindings, caller: Wri
 }
 
 /**
+ * A comment as the wire asks for it: its body, its audience, and where it sits, or null when it is none of the shapes
+ * below. `parent` is a comment's id as given, any string, because one that can't be an id is answered as a comment
+ * that isn't there (404 `no-parent`), not as a malformed call.
+ */
+function readComment(given: unknown): { body: string; audience: string; anchor: Anchor | null } | null {
+  const plain = exactly(given, ["body"]) ?? exactly(given, ["audience", "body"]);
+  const reply = exactly(given, ["body", "parent"]);
+  const answer = exactly(given, ["body", "question"]);
+  const words = exactly(given, ["body", "prefix", "quote", "suffix", "version"]);
+  const fields = plain ?? reply ?? answer ?? words;
+  const body = fields === null ? null : text(fields.body, MAX_BODY);
+  if (fields === null || body === null || body === "") return null;
+  if (plain !== null) {
+    const audience = plain.audience ?? "thread";
+    return typeof audience === "string" ? { body, audience, anchor: null } : null;
+  }
+  if (reply !== null) return typeof reply.parent === "string" ? { body, audience: "thread", anchor: { parent: reply.parent } } : null;
+  if (answer !== null) {
+    return typeof answer.question === "string" && QUESTION_SHAPE.test(answer.question) ? { body, audience: "thread", anchor: { question: answer.question } } : null;
+  }
+  const quote = quoted(words?.quote, MAX_QUOTE);
+  const prefix = quoted(words?.prefix, MAX_CONTEXT);
+  const suffix = quoted(words?.suffix, MAX_CONTEXT);
+  const version = words?.version;
+  if (quote === null || quote.trim() === "" || prefix === null || suffix === null) return null;
+  if (typeof version !== "number" || !Number.isInteger(version) || version < 1 || version > MAX_VERSION) return null;
+  return { body, audience: "thread", anchor: { quote, prefix, suffix, version } };
+}
+
+/**
  * Adds a comment: Markdown, for everyone in the thread (`audience` `thread`, the default), from the owner or the
  * sync for them alone (`owner`, his "Only me"), or, from the owner or an invited person on a public thread, for
- * anyone (`public`). The sync never writes for anyone.
+ * anyone (`public`). The sync never writes for anyone. A comment may also sit somewhere (src/store.ts, `Anchor`):
+ * under another (`parent`, taking its audience), as an answer to the page's question (`question`), or on words of a
+ * version of the page (`quote`, `prefix`, `suffix`, `version`); each of those is for everyone in the thread, or for
+ * whoever its parent is for, and never the sync's, because answers and words come from a page and a reply from a person.
  */
 async function addComment(request: Request, number: number, env: Bindings, caller: Caller): Promise<Response> {
   const length = lengthRefusal(request, MAX_TEXT_BYTES);
   if (length !== null) return length;
-  const given = await readJson(request);
-  const fields = exactly(given, ["body"]) ?? exactly(given, ["audience", "body"]);
-  const body = fields === null ? null : text(fields.body, MAX_BODY);
-  const audience = fields?.audience ?? "thread";
-  if (body === null || body === "" || (audience !== "thread" && audience !== "owner" && audience !== "public")) return refuse(400, "comment");
+  const asked = readComment(await readJson(request));
+  const audience = asked?.audience;
+  if (asked === null || (audience !== "thread" && audience !== "owner" && audience !== "public")) return refuse(400, "comment");
   if (audience === "owner" && caller.caller === "member") return refuse(403, "owner-only");
-  if (audience === "public" && caller.caller === "sync") return refuse(403, "not-for-sync");
+  if ((audience === "public" || asked.anchor !== null) && caller.caller === "sync") return refuse(403, "not-for-sync");
+  const anchor = asked.anchor;
+  if (anchor !== null && "parent" in anchor && !ID_SHAPE.test(anchor.parent)) {
+    return (await find(env.DB, { number }, caller)) === null ? refuse(404, "no-thread") : refuse(404, "no-parent");
+  }
 
-  const added = await comment(env.DB, { number }, caller, body, audience);
+  const added = await comment(env.DB, { number }, caller, asked.body, audience satisfies Audience, anchor);
   if (added === null) return refuse(404, "no-thread");
-  if (added === "not-public") return refuse(409, "not-public");
+  if (added === "not-public" || added === "no-replies-here") return refuse(409, added);
+  if (added === "no-parent" || added === "no-version") return refuse(404, added);
   return json(201, { comment: commentView(added, caller) });
 }
 

@@ -42,7 +42,9 @@ export const USAGE = `Usage: inbox <verb> [arguments]
   edit <number> <summary|body>    the thread's living summary or main text, replaced by stdin;
                                   an empty summary clears it
   show <number>                   the thread with its comments and history, its page's versions, its
-                                  link and the people it is shared with, as one JSON line
+                                  link and the people it is shared with, as one JSON line; a comment
+                                  names where it sits: the comment it replies to (parent), the page's
+                                  question it answers (question) or the page's words it is on (quote)
   page <number> <file> [--from <claude.ai address>]
                                   the HTML file as the thread's page, a new version of it; --from names the
                                   artifact it was read from
