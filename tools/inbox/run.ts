@@ -10,7 +10,10 @@
 // claude.ai. A meeting is set on a thread by its when (a day, or a moment always with its zone), and its people are
 // added by their person number, or by name as someone new. An ask (a questions page anyone answers by one link) is
 // made a draft from a thread whose page holds its questions, and closed; it has no verb that opens one, because
-// putting it before strangers is Suresh's own act, from his page. This module is the logic, with fetch, the environment and
+// putting it before strangers is Suresh's own act, from his page. His journal (src/journal.ts) is read and written
+// under `journal`: an entry's page text comes on stdin and is saved on the version it was built on, so a save built on
+// an older text is refused as stale and the sync reads, rebuilds and writes again; a photo goes up from a file and comes
+// back to one, byte for byte. This module is the logic, with fetch, the environment and
 // the streams handed in, so the tests drive it with a played fetch; tools/inbox/inbox.ts is the entry point
 // that hands it the real ones.
 
@@ -35,6 +38,19 @@ const THREADS = "/threads/api/threads";
 const PEOPLE = "/threads/api/people";
 /** Where the asks' list lives. */
 const ASKS = "/threads/api/asks";
+/** Where the journal's calls live. */
+const JOURNAL = "/threads/api/journal";
+/** A journal entry's key: a day (2026-11-06) or an ISO week (2026-W44); the Worker refuses one that isn't real. */
+const KEY_SHAPE = /^\d{4}-(?:\d{2}-\d{2}|W\d{2})$/;
+const DAY_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
+/** A version or a base as typed: whole digits only. */
+const VERSION_SHAPE = /^\d{1,9}$/;
+/** A photo's id, as its upload answered it. */
+const PHOTO_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** The largest journal photo the Worker keeps: 4 MiB. */
+export const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
+/** A photo's type, by its file's extension. */
+const PHOTO_TYPES: Record<string, string> = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png" };
 
 export const USAGE = `Usage: inbox <verb> [arguments]
 
@@ -76,6 +92,19 @@ export const USAGE = `Usage: inbox <verb> [arguments]
   ask <number> --slug <slug>      the thread (his own, its page the questions) made an ask, a draft at
                                   whysosuresh.com/ask/<slug>; he opens it himself, in Asks
   ask <number> --close            the ask closed: it takes no more answers
+  journal list                    every journal entry's newest version, newest first, one JSON line each: its key,
+                                  kind, version, title, one line, stories, photos and question
+  journal read <key> [--version <n>]
+                                  one entry (a day, 2026-11-06, or a week, 2026-W44) as one JSON line: its text,
+                                  every version and a day's typed answers; --version an earlier text
+  journal write <key> --base <version>
+                                  the page text on stdin saved as a new version, built on <version> (0 for a new
+                                  entry); a save built on an older version is refused, printing
+                                  {"reason":"stale","version":<newest>}: read again, rebuild, write again
+  journal photo <file>            a JPEG or PNG uploaded for a page, which names it ![caption](photo:<id>)
+  journal photo-read <id> <file>  the photo's bytes written to the file, as uploaded
+  journal answers <day>           the answers typed to the day's question, oldest first; the newest is the answer
+  journal storylines              every storyline's trail across the days, one JSON line each
 
 The service token's secret is read from ${SECRET_VARIABLE}; the client id from wrangler.jsonc.
 Exit status: 0 when every request was answered as asked, 1 on any refusal, 2 on a usage error.
@@ -87,8 +116,10 @@ export interface Io {
   readonly env: Readonly<Record<string, string | undefined>>;
   /** The whole of stdin, read only by `add`, `comment` and `edit`. */
   readonly stdin: () => Promise<string>;
-  /** A file's bytes, read only by `page`; throws when it can't be read. */
+  /** A file's bytes, read only by `page` and `journal photo`; throws when it can't be read. */
   readonly readFile: (path: string) => Uint8Array;
+  /** Writes a file's bytes, only for `journal photo-read`; throws when it can't be written. */
+  readonly writeFile: (path: string, bytes: Uint8Array) => void;
   readonly out: (line: string) => void;
   readonly err: (line: string) => void;
   /** The service token's client id. */
@@ -390,6 +421,121 @@ async function ask(io: Io, secret: string, args: readonly string[]): Promise<num
   return report(io, "ask", await call(io, secret, `${THREADS}/${number}/ask`, { method: "POST", body: JSON.stringify(change) }), "thread");
 }
 
+/** A journal entry's key from the command line, or a usage error naming the verb. */
+function keyOf(verb: string, given: string | undefined, shape: RegExp = KEY_SHAPE): string {
+  if (given === undefined || !shape.test(given)) throw new Usage(`journal ${verb} takes ${shape === DAY_SHAPE ? "a day, such as 2026-11-06" : "a day or a week, such as 2026-11-06 or 2026-W44"}`);
+  return given;
+}
+/** The journal's verbs, each one call. */
+async function journal(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const [sub, ...rest] = args;
+  if (sub === "list") {
+    if (rest.length > 0) throw new Usage("journal list takes nothing more");
+    const answer = await call(io, secret, JOURNAL, { method: "GET" });
+    if (answer.status !== 200) {
+      io.err(`inbox: journal list refused (${answer.status} ${reasonOf(answer)})`);
+      return 1;
+    }
+    for (const one of Array.isArray(answer.body.entries) ? (answer.body.entries as unknown[]) : []) io.out(JSON.stringify(one));
+    return 0;
+  }
+  if (sub === "read") {
+    const key = keyOf("read", rest[0]);
+    let query = "";
+    if (rest.length > 1) {
+      if (rest.length !== 3 || rest[1] !== "--version" || !VERSION_SHAPE.test(rest[2] ?? "")) throw new Usage("journal read takes a key and --version <n> at most");
+      query = `?version=${rest[2] ?? ""}`;
+    }
+    return report(io, "journal read", await call(io, secret, `${JOURNAL}/${key}${query}`, { method: "GET" }), null);
+  }
+  if (sub === "write") {
+    const key = keyOf("write", rest[0]);
+    if (rest.length !== 3 || rest[1] !== "--base" || !VERSION_SHAPE.test(rest[2] ?? "")) throw new Usage("journal write takes a key and --base <version>, and the page text on stdin");
+    const text = await io.stdin();
+    if (text.trim() === "") throw new Usage("journal write read nothing on stdin");
+    const answer = await call(io, secret, `${JOURNAL}/${key}`, { method: "POST", body: JSON.stringify({ text, base: Number(rest[2]) }) });
+    if (answer.status === 409 && answer.body.reason === "stale") {
+      io.out(JSON.stringify({ reason: "stale", version: answer.body.version ?? null }));
+      io.err(`inbox: journal write refused (409 stale): ${key} is at version ${String(answer.body.version)}; read it again and rebuild`);
+      return 1;
+    }
+    return report(io, "journal write", answer, null);
+  }
+  if (sub === "photo") {
+    const [file, ...more] = rest;
+    const type = PHOTO_TYPES[(file ?? "").split(".").pop()?.toLowerCase() ?? ""];
+    if (file === undefined || more.length > 0 || type === undefined) throw new Usage("journal photo takes one .jpg or .png file");
+    let bytes: Uint8Array;
+    try {
+      bytes = io.readFile(file);
+    } catch {
+      io.err(`inbox: journal photo can't read ${file}`);
+      return 1;
+    }
+    if (bytes.byteLength > MAX_PHOTO_BYTES) {
+      io.err(`inbox: journal photo refused (${file} is ${bytes.byteLength} bytes; the most is ${MAX_PHOTO_BYTES})`);
+      return 1;
+    }
+    return report(io, "journal photo", await call(io, secret, `${JOURNAL}/photos`, { method: "POST", body: bytes, type }), null);
+  }
+  if (sub === "photo-read") {
+    const [id, file, ...more] = rest;
+    if (id === undefined || !PHOTO_ID.test(id) || file === undefined || more.length > 0) throw new Usage("journal photo-read takes a photo's id and a file to write");
+    return photoRead(io, secret, id, file);
+  }
+  if (sub === "answers") {
+    const key = keyOf("answers", rest[0], DAY_SHAPE);
+    if (rest.length > 1) throw new Usage("journal answers takes one day");
+    const answer = await call(io, secret, `${JOURNAL}/${key}`, { method: "GET" });
+    if (answer.status !== 200) return report(io, "journal answers", answer, null);
+    io.out(JSON.stringify({ key, answers: answer.body.answers ?? [] }));
+    return 0;
+  }
+  if (sub === "storylines") {
+    if (rest.length > 0) throw new Usage("journal storylines takes nothing more");
+    const answer = await call(io, secret, `${JOURNAL}/storylines`, { method: "GET" });
+    if (answer.status !== 200) {
+      io.err(`inbox: journal storylines refused (${answer.status} ${reasonOf(answer)})`);
+      return 1;
+    }
+    for (const one of Array.isArray(answer.body.storylines) ? (answer.body.storylines as unknown[]) : []) io.out(JSON.stringify(one));
+    return 0;
+  }
+  throw new Usage("journal takes list, read, write, photo, photo-read, answers or storylines");
+}
+/** A photo's bytes, fetched as they are and written to a file; a refusal is the Worker's JSON, as every call's. */
+async function photoRead(io: Io, secret: string, id: string, file: string): Promise<number> {
+  let response: Response;
+  try {
+    response = await io.fetch(`${ORIGIN}${JOURNAL}/photos/${id}`, {
+      method: "GET",
+      headers: { "CF-Access-Client-Id": io.clientId, "CF-Access-Client-Secret": secret },
+      redirect: "manual",
+    });
+  } catch {
+    io.err("inbox: journal photo-read refused (0 unreachable)");
+    return 1;
+  }
+  const type = response.headers.get("Content-Type") ?? "";
+  if (response.status !== 200 || !type.startsWith("image/")) {
+    let reason = response.status >= 300 && response.status < 400 ? "sign-in" : `http-${response.status}`;
+    if (type.startsWith("application/json")) {
+      const body: unknown = await response.json().catch(() => null);
+      if (typeof body === "object" && body !== null && typeof (body as { reason?: unknown }).reason === "string") reason = (body as { reason: string }).reason;
+    }
+    io.err(`inbox: journal photo-read refused (${response.status} ${reason})`);
+    return 1;
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  try {
+    io.writeFile(file, bytes);
+  } catch {
+    io.err(`inbox: journal photo-read can't write ${file}`);
+    return 1;
+  }
+  io.out(JSON.stringify({ id, type, bytes: bytes.byteLength }));
+  return 0;
+}
 /** Runs one command line; answers the exit status. */
 export async function run(argv: readonly string[], io: Io): Promise<number> {
   const [verb, ...args] = argv;
@@ -417,6 +563,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     if (verb === "person") return await person(io, secret, args);
     if (verb === "asks") return await asks(io, secret, args);
     if (verb === "ask") return await ask(io, secret, args);
+    if (verb === "journal") return await journal(io, secret, args);
     throw new Usage(`unknown verb: ${verb}`);
   } catch (error) {
     if (error instanceof Usage) {

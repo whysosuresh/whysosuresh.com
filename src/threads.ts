@@ -32,6 +32,7 @@
 //   GET  /threads/api/search?q=<words or a number>                            everyone
 //   GET  /threads/api/sign-in?next=<a threads page>                           everyone
 //   GET  /threads/api/people[/<n>], POST /threads/api/people/<n>               owner and sync read; owner writes (src/people.ts)
+//   GET  /threads/api/journal[/...], POST /threads/api/journal/...             owner and sync; never invited people (src/journal.ts)
 //
 // An invited person reads only the threads they are in: every read takes the caller as its reader, and the
 // store's queries see no other thread, so one they aren't in answers 404 `no-thread`, exactly as a number never
@@ -112,6 +113,7 @@ import { identify, type Caller, type Refusal } from "./access.ts";
 import type { Bindings } from "./bindings.ts";
 import { json, type JsonValue } from "./json.ts";
 import { servePage, withSkeleton } from "./page.ts";
+import { handleJournal } from "./journal.ts";
 import { handlePeople, personView } from "./people.ts";
 import { SLUG_SHAPE } from "./asks.ts";
 import { TOPICS } from "../site/talk-topics.js";
@@ -776,6 +778,9 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
   const url = new URL(request.url);
   if (url.pathname === "/threads/api/people" || url.pathname.startsWith("/threads/api/people/")) {
     return handlePeople(request, url, env, who, (row) => thread(row, who));
+  }
+  if (url.pathname === "/threads/api/journal" || url.pathname.startsWith("/threads/api/journal/")) {
+    return handleJournal(request, url, env, who);
   }
   if (url.pathname === "/threads/api/search" || url.pathname === "/threads/api/sign-in" || url.pathname === "/threads/api/me") {
     if (request.method !== "GET") return json(405, { reason: "method" }, { Allow: "GET" });

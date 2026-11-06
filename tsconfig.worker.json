@@ -1,8 +1,9 @@
 // The type check for the Worker (src/), against the runtime and bindings `wrangler types` writes to
 // worker-configuration.d.ts from wrangler.jsonc. That file is generated and committed; `npm run typecheck`
 // fails when it no longer matches the config. The Worker also imports the site's topic list
-// (site/talk-topics.js), its spaces (site/spaces.js) and the threads' Markdown reader (site/app/markdown.js, for a
-// public thread's link preview), which are checked here too, with no browser library, so they can never reach for
+// (site/talk-topics.js), its spaces (site/spaces.js), the threads' Markdown reader (site/app/markdown.js, for a
+// public thread's link preview) and the journal's reader (site/app/journal.js, to index each saved page), which are
+// checked here too, with no browser library, so they can never reach for
 // a page. es2024.string gives `isWellFormed`, which the note's checks use.
 {
   "compilerOptions": {
@@ -25,5 +26,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "site/talk-topics.js", "site/spaces.js", "site/app/markdown.js", "worker-configuration.d.ts"]
+  "include": ["src/**/*.ts", "site/talk-topics.js", "site/spaces.js", "site/app/markdown.js", "site/app/journal.js", "worker-configuration.d.ts"]
 }

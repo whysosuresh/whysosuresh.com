@@ -23,7 +23,9 @@
 // address, whom he invited back to her own thread, and 31 more, a few without a name), its earlier answers marked
 // read and the newest still new, so Today folds them into one row and Answered by has enough for Show all and its
 // filter; "Founders dinner", a draft at /ask/founders-dinner, which only he can open; and "October meetup", closed,
-// whose page reads with no boxes. Pages are seeded the way the sync saves them, through the threads' call with its
+// whose page reads with no boxes. A journal of three made-up days before today, written as the sync writes them (the
+// latest with no page for today yet), with a storyline counting down, one new and one closed, a photo, a hand edit
+// that made the latest day's version 2, a typed answer to one day's question, and last week's chapter. Pages are seeded the way the sync saves them, through the threads' call with its
 // played token: the sealed probe (test/fixtures/sealed-probe.html, every line of which should read "blocked" in the
 // browser), a made-up page that asks questions ("The review on Wednesday", shared with the guest and Asha), with
 // answers, a discussion on its words, one on words its second version cut, and replies, and each file given with
@@ -35,6 +37,7 @@
 
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { addDays, weekDays, weekOf } from "../site/app/journal.js";
 import { SITE, TEST_SECRET, startHarness, type Harness } from "./harness.ts";
 
 const PORT = 8790;
@@ -348,6 +351,55 @@ ${ids.map((id) => `<div class="q" data-thread-question="${id}"><p>${ASK_QUESTION
   await database.prepare("UPDATE threads SET activity_at = ?1 WHERE origin_ref = 'chat:seed-2'").bind(old).run();
 }
 
+/** A made-up 1x1 grey PNG, the photo the seeded journal shows. */
+const SEED_PHOTO = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mN8+v9/PQAI8wNPvd7POQAAAABJRU5ErkJggg==";
+
+/** The made-up journal: three days before today, a hand edit, an answer, and last week's chapter. */
+async function seedJournal(): Promise<void> {
+  const journal = `${SITE}/threads/api/journal`;
+  const write = async (key: string, text: string, base: number, as: "sync" | "owner" = "sync"): Promise<void> => {
+    const claims = as === "sync" ? harness.access.syncClaims() : harness.access.ownerClaims();
+    const response = await harness.fetch(`${journal}/${key}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(claims), Origin: SITE },
+      body: new TextEncoder().encode(JSON.stringify({ text, base })),
+    });
+    if (response.status !== 201) throw new Error(`seeding the journal's ${key} answered ${response.status}: ${await response.text()}`);
+  };
+  const photo = await harness.fetch(`${journal}/photos`, {
+    method: "POST",
+    headers: { "Content-Type": "image/png", "Cf-Access-Jwt-Assertion": sync() },
+    body: new Uint8Array(Buffer.from(SEED_PHOTO, "base64")),
+  });
+  if (photo.status !== 201) throw new Error(`seeding the journal's photo answered ${photo.status}: ${await photo.text()}`);
+  const photoId = ((await photo.json()) as { id: string }).id;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const [d3, d2, d1] = [addDays(today, -3), addDays(today, -2), addDays(today, -1)];
+  const words = (key: string): string => new Date(`${key}T12:00:00Z`).toLocaleDateString("en-GB", { timeZone: "UTC", weekday: "long", day: "numeric", month: "long" });
+  const page = (key: string, title: string, line: string, storylines: string[], stories: string, close: string): string =>
+    `## ${title}\n*${words(key)} · two stories*\n\n**In one line:** ${line}\n\n- **Morning** · The walk\n- **At the desk** · The day at the desk\n\n**People:** Ada, Grace\n**Wins:** a walk · a draft\n${storylines.join("\n")}\n\n· · ·\n\n${stories}\n\n· · ·\n\n${close}\n`;
+  const story = (extra = ""): string =>
+    `### The walk\n*7:10 am, along the river*\n\nThe river was high and loud.\n\nAda called halfway and we talked about the launch.\n\n> Slow is a speed too.${extra}\n\n· · ·\n\n### The day at the desk\n*At the desk*\n\nMost of the day went to the draft. It is nearly there.`;
+
+  await write(d3, page(d3, "The river was high", "A loud river and a quiet desk.", ["**Storyline · The launch:** 8 days to go. The draft is half done.", "**Storyline · Morning walks:** day three."], story(), "**Sitting with:** slow mornings make fast afternoons.\n\n→ [#1](https://whysosuresh.com/threads/1) · The launch plan\n\n*From two recordings.*"), 0);
+  await write(d2, page(d2, "Seeds in the ground", "The garden started, and the draft moved.", ["**Storyline · The launch:** 7 days to go.", "**Storyline · The garden (new):** seeds in the ground.", "**Storyline · Morning walks:** day four."], story(`\n\n![The bed, freshly dug](photo:${photoId})`), "**Sitting with:** starting small.\n\n**Tomorrow's question:** Did the seeds survive the rain?\n\n→ [#1484](https://github.com/example/example/issues/1484) · The launch checklist"), 0);
+  const latest = (fix: string): string => page(d1, "A day of rain", fix, ["**Storyline · The launch:** 6 days to go. Rehearsal tomorrow.", "**Storyline · Old habit:** let go (closed)"], story(), "**Sitting with:** rain days are desk days.\n\n**Still asking:** Did the seeds survive the rain?\n\n**Tomorrow's question:** What will the rehearsal show you?\n\n*From one recording and 40 desk dictations.*");
+  await write(d1, latest("Rain all day, and the draft is dnoe."), 0);
+  await write(d1, latest("Rain all day, and the draft is done."), 1, "owner");
+
+  const answer = await harness.fetch(`${journal}/${d2}/answers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()), Origin: SITE },
+    body: new TextEncoder().encode(JSON.stringify({ body: "They did. Two came up already." })),
+  });
+  if (answer.status !== 201) throw new Error(`seeding the journal's answer answered ${answer.status}: ${await answer.text()}`);
+
+  const lastWeek = weekOf(addDays(today, -7));
+  const [monday = today, , , , , , sunday = today] = weekDays(lastWeek);
+  await write(lastWeek, `## Week ${Number(lastWeek.slice(6))} · Small steps\n*${words(monday)} – ${words(sunday)}*\n\nThe week opened slowly and ended with a plan.\n\nThe draft found its shape, and the garden found a corner.\n\n> Slow is a speed too.\n\n**People:** Ada, Grace\n**Wins:** a draft · a walk every day\n**Storyline · The launch:** 11 days to go.\n**The week ahead:** What does the launch need first?\n`, 0);
+}
+
 async function body(request: IncomingMessage): Promise<Uint8Array | undefined> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) chunks.push(chunk as Buffer);
@@ -378,6 +430,7 @@ async function serve(request: IncomingMessage, response: ServerResponse): Promis
 }
 
 await seed();
+await seedJournal();
 createServer((request, response) => {
   serve(request, response).catch((error: unknown) => {
     console.error(error);
