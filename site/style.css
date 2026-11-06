@@ -1121,7 +1121,9 @@ a.j-chip:hover { border-color: var(--ink); }
 .j-quote { margin: 22px 0; padding: 0 0 0 18px; border-left: 2px solid var(--ink); font-size: 21px; line-height: 1.45; }
 .j-list { margin: 0 0 14px; padding-left: 22px; }
 .j-photo { margin: 22px 0; }
-.j-photo img { display: block; width: 100%; height: auto; border-radius: 6px; background: var(--accent-soft); }
+/* A portrait photo would be taller than the window at the column's width, so a photo is at most three quarters of it. */
+.j-photo img { display: block; max-width: 100%; max-height: 75vh; width: auto; height: auto; margin: 0 auto; border-radius: 6px; background: var(--accent-soft); }
+.j-photo figcaption { text-align: center; }
 .j-photo figcaption, .j-caption { font-style: italic; color: var(--muted); font-size: 15px; margin-top: 6px; }
 .j-sep { text-align: center; color: var(--faint); letter-spacing: 0.5em; margin: 30px 0; }
 .j-close { display: grid; gap: 20px; }
