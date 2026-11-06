@@ -32,6 +32,12 @@
 // with no sign-in from its public call outside Access (`showAsk`, /api/asks/<slug>, src/asks.ts), sending their
 // browser's key so it answers their own answers and nobody else's, and its page loads from that address too. Both
 // public reads go through one fetch (`readPublic`).
+//
+// His journal (src/journal.ts) is read and written under /threads/api/journal: `listJournal` reads every entry's
+// newest version, `readJournal` one entry's text with its versions and a day's typed answers, `journalStorylines`
+// every storyline's trail. `saveJournal` saves his hand edit on the version it was opened at; a save the sync has
+// since overtaken is refused as Failed `stale`, whose `detail` names the newest version, and nothing is written.
+// `answerJournal` keeps a typed answer to a day's question. A photo loads from its own address (`journalPhoto`).
 
 /**
  * @typedef {'look' | 'act' | 'discuss' | 'done'} Tab
@@ -95,6 +101,13 @@
  *   | { action: 'space', space: string }} Action
  * @typedef {'title' | 'summary' | 'body'} Field
  * @typedef {{ title: string, body: string, space: string, status: 'received' | 'act' | 'discuss' }} Start
+ * @typedef {{ key: string, kind: 'day' | 'week', version: number, savedAt: string, title: string, oneLine: string | null,
+ *   stories: number, photos: number, question: string | null }} JournalEntry
+ * @typedef {{ id: number, body: string, createdAt: string }} JournalAnswer
+ * @typedef {{ key: string, kind: 'day' | 'week', version: number, newest: number, text: string, savedAt: string, actor: string,
+ *   versions: { version: number, savedAt: string, actor: string, bytes: number }[], answers: JournalAnswer[] }} JournalRead
+ * @typedef {{ key: string, state: string, mark: 'new' | 'closed' | null }} JournalTouch
+ * @typedef {{ name: string, first: string, last: string, state: string, mark: 'new' | 'closed' | null, days: JournalTouch[] }} JournalTrail
  */
 
 /** The sign-in has run out, or this browser isn't signed in. */
@@ -463,4 +476,38 @@ export function pageAddress(number, version) {
  */
 export function signInAddress(path) {
   return `${API}/sign-in?${new URLSearchParams({ next: path }).toString()}`;
+}
+
+/** Every journal entry's newest version, newest first. @returns {Promise<JournalEntry[]>} */
+export async function listJournal() {
+  return /** @type {{ entries: JournalEntry[] }} */ (await call('/journal', { method: 'GET' })).entries;
+}
+
+/** One journal entry: its newest text, every version, and a day's typed answers. @param {string} key @returns {Promise<JournalRead>} */
+export async function readJournal(key) {
+  return /** @type {JournalRead} */ (await call(`/journal/${key}`, { method: 'GET' }));
+}
+
+/**
+ * His hand edit of an entry, saved on the version it was opened at; Failed `stale` when the sync saved since.
+ * @param {string} key @param {string} text @param {number} base
+ * @returns {Promise<number>} the version it was saved as
+ */
+export async function saveJournal(key, text, base) {
+  return /** @type {{ version: number }} */ (await post(`/journal/${key}`, { text, base })).version;
+}
+
+/** A typed answer to a day's question; an empty one takes it back. @param {string} key @param {string} body @returns {Promise<JournalAnswer>} */
+export async function answerJournal(key, body) {
+  return /** @type {{ answer: JournalAnswer }} */ (await post(`/journal/${key}/answers`, { body })).answer;
+}
+
+/** Every storyline's trail across the days. @returns {Promise<JournalTrail[]>} */
+export async function journalStorylines() {
+  return /** @type {{ storylines: JournalTrail[] }} */ (await call('/journal/storylines', { method: 'GET' })).storylines;
+}
+
+/** The address a journal photo loads from, behind the same sign-in as every call. @param {string} id */
+export function journalPhoto(id) {
+  return `${API}/journal/photos/${id}`;
 }

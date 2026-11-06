@@ -1,4 +1,4 @@
-// The Worker's code, which runs only for /api/*, /threads/*, /me, /meetings, /people, /people/*, /asks and /ask/*
+// The Worker's code, which runs only for /api/*, /threads/*, /me, /meetings, /people, /people/*, /asks, /ask/*, /journal and /journal/*
 // (`run_worker_first` in wrangler.jsonc); every other
 // path is a file from site/, /inbox's redirect to /threads/ among them (site/_redirects). Four doors: POST /api/talk,
 // the note flow's public send (src/talk.ts); the threads' private calls under /threads/api/ (src/threads.ts),
@@ -42,6 +42,7 @@ export default {
     if (pathname.startsWith("/threads/api/")) return handleThreads(request, env);
     if (pathname.startsWith("/threads/") || pathname.startsWith("/people/") || pathname === "/me" || pathname === "/meetings" || pathname === "/people") return handlePage(request, env);
     if (pathname === "/asks" || pathname.startsWith("/ask/")) return handlePage(request, env);
+    if (pathname === "/journal" || pathname.startsWith("/journal/")) return handlePage(request, env);
     return json(404, { reason: "not-found" });
   },
 } satisfies ExportedHandler<Bindings>;

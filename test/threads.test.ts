@@ -720,12 +720,12 @@ describe("the sign-in", () => {
     });
   }
 
-  it.each(["/me", "/meetings", "/threads/", "/threads/42", "/threads/42-who-owns-what", "/people", "/people/7", "/people/7-meera"])("sends the owner on to %s", async (next) => {
+  it.each(["/me", "/meetings", "/threads/", "/threads/42", "/threads/42-who-owns-what", "/people", "/people/7", "/people/7-meera", "/journal", "/journal/2026-11-06", "/journal/2026-W44", "/journal/storylines", "/journal/storylines/the-demo"])("sends the owner on to %s", async (next) => {
     const response = await signIn(next);
     expect([response.status, response.headers.get("location")]).toEqual([303, next]);
   });
 
-  it.each([null, "https://elsewhere.example/", "//elsewhere.example/threads/", "/inbox/", "/threads/42/../../x", "/threads/042", "/threads/42-Who", "/threads/people", "/threads/people/7", "/people/07", "/peoplex", "/people/", "/meetings/", "/meetingsx", "/me/", "/me/x", "/mex", "/me?x"])(
+  it.each([null, "https://elsewhere.example/", "//elsewhere.example/threads/", "/inbox/", "/threads/42/../../x", "/threads/042", "/threads/42-Who", "/threads/people", "/threads/people/7", "/people/07", "/peoplex", "/people/", "/meetings/", "/meetingsx", "/me/", "/me/x", "/mex", "/me?x", "/journal/", "/journalx", "/journal/today", "/journal/storylines/The-Demo", "/journal/2026-11-06/edit"])(
     "sends %j to /me, never anywhere else",
     async (next) => {
       const response = await signIn(next);
