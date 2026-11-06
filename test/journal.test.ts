@@ -234,6 +234,8 @@ describe("the index and the storylines", () => {
     const week = "## Week 44 · Going public\n*Monday 26 October – Sunday 1 November*\n\nThe week.\n\n**Storyline · The demo:** 8 days to go.\n**Storyline · Quiet one:** nothing.\n**The week ahead:** What next?\n";
     const saved = await post("/2026-W44", { text: week, base: 0 });
     expect([saved.status, await saved.json()]).toEqual([201, { key: "2026-W44", version: 1 }]);
+    const weekLines = await (await harness.db()).prepare("SELECT COUNT(*) AS n FROM journal_storylines WHERE key = '2026-W44'").first<{ n: number }>();
+    expect(weekLines?.n).toBe(0);
     expect((await post("/2026-11-02", { text: day("Monday", []), base: 0 })).status).toBe(201);
 
     const list = (await (await get("")).json()) as { entries: { key: string; kind: string; question: string | null }[] };
