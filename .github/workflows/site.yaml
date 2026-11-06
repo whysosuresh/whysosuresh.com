@@ -5,6 +5,8 @@
 # key that signs the site's answers to Access's sign-in question, from the environment `production`, which only main may use. The key can deploy Workers and their routes, read zones and
 # edit the account's D1 databases, and nothing in DNS. The deploy job checks out only what the deploy
 # reads and installs only the wrangler pinned in deploy/, so none of the check tools runs beside the key.
+# After it, `private` asks the live site for every private address as a stranger, holding no key (tools/probe/),
+# and fails the run if any lets one in, so a deploy that opened Suresh's journal or threads is reported at once.
 # The zone, its records, its redirect, the database and the bot check are Planton's
 # (infrastructure/), not this workflow's.
 
@@ -120,3 +122,29 @@ jobs:
           trap 'rm -f "$secrets"' EXIT
           (umask 077 && jq -n '{TURNSTILE_SECRET: env.TURNSTILE_SECRET, INBOX_OWNER_EMAIL: env.INBOX_OWNER_EMAIL, THREADS_EVALUATION_KEY: env.THREADS_EVALUATION_KEY}' > "$secrets")
           ./node_modules/.bin/wrangler deploy --config ../wrangler.jsonc --secrets-file "$secrets" --message "main ${GITHUB_SHA::12}"
+
+  private:
+    needs: deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout the probe
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .nvmrc
+            wrangler.jsonc
+            tools/probe
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          package-manager-cache: false
+          node-version-file: ".nvmrc"
+
+      # Asked twice at most, half a minute apart, so a version still reaching every location isn't mistaken for a
+      # leak; a real one fails both.
+      - name: Ask every private address as a stranger
+        run: node tools/probe/run.ts || { sleep 30; node tools/probe/run.ts; }
