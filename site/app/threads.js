@@ -1,9 +1,11 @@
 // @ts-check
 // whysosuresh.com/me and /threads: Suresh's threads, one page for all of them (site/threads/index.html, which the
-// Worker hands over at /me, at /threads/ and at every thread's own address). /me is the door everyone signed in
-// enters by, and the side rail is drawn for rooms: its head is the site, then Today, Threads with the five spaces
-// under it, and People. Three views, each at its own address: Today (/me: notes waiting for his OK, threads waiting
-// on him, new ones, and open threads that sat a week untouched), the Threads room (/threads/, or
+// Worker hands over at every room's address and every thread's). /me is the door everyone signed in enters by, and
+// the side rail is drawn for rooms, side by side at the top level: its head is the site, then Today (/me), Threads
+// (/threads/) with the five spaces under it, People (/people) and Meetings (/meetings). On a phone the bar holds
+// Today, Threads, Find, New and More, with People and Meetings under More. The views, each at its own address: Today
+// (/me: the next meeting as a card, then notes waiting for his OK, threads waiting on him, new ones, and open threads
+// that sat a week untouched), the Threads room (/threads/, or
 // /threads/?tab=act&space=company: four tabs by where a thread stands, and the five spaces), and a thread
 // (/threads/42-who-owns-what): its living
 // summary on top, then its main section, then its comments and its history in the order they happened. The main
@@ -49,20 +51,29 @@
 // visitor's note, a comment for anyone, an answer or a reply; the history keeps one line for each answer and
 // discussion, with Show, and a discussion whose words this version no longer has stays in the history whole.
 //
-// Everyone he deals with is a person (people.js holds their words and addresses): People, under the spaces, lists
-// everyone at /threads/people, whoever was last in touch first, those only ever in threads he dropped folded away; a
-// person's page (/threads/people/7-meera) shows every thread they are in and how, what they said, newest first,
+// Everyone he deals with is a person (people.js holds their words and addresses): People lists everyone at /people,
+// whoever was last in touch first, those only ever in threads he dropped folded away; a person's page
+// (/people/7-meera) shows the meetings they are in, every thread they are in and how, what they said, newest first,
 // his own notes on them (only he reads them; Markdown, saved on ⌘↵ or on leaving the box), their name to change (W)
 // and, while they have none, their address to add once. Every name on a thread opens that person for him (who a
 // thread is from, a comment's author, a thread's people), and ⌘K finds people too. Invited people get none of this:
 // at a people address they get their own home, as the Worker refuses them every people call.
 //
+// Any thread can be one meeting (meetings.js holds their words): a day, its time not set, or a moment shown in the
+// reader's own zone, with a length, a where and the people in the room besides him. A meeting's thread opens with
+// it as a strip above the summary, and his B (or the strip's button) opens its editor: the day and a time typed in
+// his own zone, the length and the where, and the people, picked from everyone he deals with or added by name as
+// someone new; clearing it takes its people off, with Undo. A row carries a meeting's date as a chip, solid while it
+// is near. The Meetings room lists them, coming soonest first, then past. Being in one grants nothing: an invited
+// person reads the meeting of a thread they are in, read only, with their own place marked, and gets Your meetings,
+// the ones they are in, and their next one as a card at /me.
+//
 // Signed out at a thread's address, the page shows what a missing address shows ("Nothing here"), so the address
 // alone never says a thread exists; a device that has signed in before also gets a small "Sign in". The link in an
 // invitation carries `?invite`: signed out, it goes straight to the sign-in and back; signed in, the page drops it
 // from the address, so a copied link is the clean one. `?invite` on any number does the same, so it says nothing
-// about a thread. At /me it says "Suresh's private space" with a Sign in button, and at /threads/ itself and at a
-// people address, which says nothing about whether a person exists, "Threads" with one. An invited person's home is
+// about a thread. At /me, /meetings and a people address (which says nothing about whether a person exists) it says
+// "Suresh's private space" with a Sign in button, and at /threads/ itself "Threads" with one. An invited person's home is
 // /me too: the rail lists their threads under "Shared with you, by Suresh". Either sign-in goes through the
 // threads' sign-in call and comes back to the same address. When the sign-in ends mid-use, a line says so and nothing typed
 // is lost. Every element is built with DOM calls and every text is set as text, so nothing anyone wrote becomes
@@ -71,6 +82,7 @@
 import { SPACES } from '../spaces.js';
 import { MEMBER_COMMANDS, MEMBER_SHEET, SHEET, commandFor } from './keys.js';
 import { parse, summaryLines } from './markdown.js';
+import { cardLines, chipWords, isDay, leadWords, lengthWords, momentWords, partsOf, peopleChanges, split, stateOf, whenLine, whenOf, withLine } from './meetings.js';
 import { DRAFT, KEY, discussionFor, placesOf, readPageMessage, stack } from './page-talk.js';
 import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, takenLine } from './people.js';
 import { addressOf, invitation, invitationProblem, isAddress, levelOf, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
@@ -80,6 +92,7 @@ import {
   Missing,
   NotShared,
   SignedOut,
+  attendee,
   comment,
   edit,
   editPerson,
@@ -89,6 +102,7 @@ import {
   listMine,
   listPeople,
   me,
+  meet,
   move,
   pageAddress,
   people,
@@ -119,17 +133,19 @@ import {
  * @typedef {import('./threads-store.js').Someone} Someone
  * @typedef {import('./threads-store.js').PersonShown} PersonShown
  * @typedef {import('./threads-store.js').PersonChange} PersonChange
+ * @typedef {import('./meetings.js').Meeting} Meeting
+ * @typedef {{ number: number, day: string, time: string, minutes: string, where: string, chosen: number[], named: string[], query: string, problem: string, busy: boolean }} MeetingDraft
  * @typedef {import('./page-talk.js').Places<ThreadComment>} Places
  * @typedef {{ quote: string, prefix: string, suffix: string, top: number }} WordsDraft
  * @typedef {{ ready: boolean, questions: Set<string>, anchors: Map<string, number | null>, questionTops: Map<string, number>, answered: number[], sent: string }} Talk
  * @typedef {import('./markdown.js').Inline} Inline
  * @typedef {import('./keys.js').Command} Command
  * @typedef {{ view: 'today' } | { view: 'list', tab: Tab, space: string | null } | { view: 'thread', number: number } | { view: 'people' }
- *   | { view: 'person', number: number }} Route
+ *   | { view: 'person', number: number } | { view: 'meetings' }} Route
  * @typedef {{ to: string, subject: string, body: string }} Draft
  * @typedef {{ title: string, summary: string, body: string }} Editing
  * @typedef {{ title: string, space: string, status: 'received' | 'act' | 'discuss', body: string }} NewDraft
- * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share' | 'discussion'} Overlay
+ * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share' | 'discussion' | 'meeting' | 'more'} Overlay
  * @typedef {{ number: number, people: Person[], count: number, email: string, name: string, problem: string,
  *   invited: { name: string, email: string } | null, busy: boolean }} Sharing
  * @typedef {{ label: string, sub: string, side: string, number: number | null, person: number | null, run: () => void }} FindItem
@@ -210,6 +226,17 @@ const THREAD_PATH = /^\/threads\/([1-9]\d{0,8})(?:-[^/]*)?$/;
 const ME = '/me';
 /** The Threads room, its first tab and every space. */
 const THREADS = '/threads/';
+/** The Meetings room: his meetings, or an invited person's own. */
+const MEETINGS = '/meetings';
+/** The People room. */
+const PEOPLE = '/people';
+/** The reader's own locale and zone, which every meeting is said in. */
+const LOCALE = undefined;
+const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+/** The lengths the meeting editor offers, in minutes; empty is not said. */
+const LENGTHS = [15, 30, 45, 60, 90, 120];
+/** How many people the meeting editor's picker shows for what is typed. */
+const PICKS = 6;
 
 /**
  * @template {Element} T
@@ -494,9 +521,27 @@ function isThreadAddress(address) {
   return THREAD_PATH.test(address);
 }
 
-/** Everyone's address or a person's, which a signed-out page treats as /threads/ itself. @param {string} address */
+/** Everyone's address or a person's, which a signed-out page treats as a room. @param {string} address */
 function isPeopleAddress(address) {
   return PEOPLE_PATH.test(address) || PERSON_PATH.test(address);
+}
+
+/** A day's name inside a sentence: "today", "tomorrow" and "yesterday" lower case, a date as it is. @param {string} words */
+function inSentence(words) {
+  return /^(Today|Tomorrow|Yesterday)\b/.test(words) ? `${words.charAt(0).toLowerCase()}${words.slice(1)}` : words;
+}
+
+/** A meeting as an event's `from` or `to` carries it, or null when it is none. @param {unknown} value @returns {{ when: string, minutes: number | null, where: string | null } | null} */
+function meetingData(value) {
+  if (typeof value !== 'object' || value === null || !('when' in value) || typeof value.when !== 'string') return null;
+  const minutes = 'minutes' in value && typeof value.minutes === 'number' ? value.minutes : null;
+  const where = 'where' in value && typeof value.where === 'string' ? value.where : null;
+  return { when: value.when, minutes, where };
+}
+
+/** Whether a view is his alone: the Threads room and the people. @param {Route} route */
+function isHis(route) {
+  return route.view === 'list' || route.view === 'people' || route.view === 'person';
 }
 
 /** @param {Location} at @returns {Route} */
@@ -507,6 +552,7 @@ function routeOf(at) {
   const person = PERSON_PATH.exec(at.pathname);
   if (person) return { view: 'person', number: Number(person[1]) };
   if (at.pathname === ME) return { view: 'today' };
+  if (at.pathname === MEETINGS) return { view: 'meetings' };
   const query = new URLSearchParams(at.search);
   const tab = query.get('tab') ?? '';
   const space = query.get('space') ?? '';
@@ -516,10 +562,11 @@ function routeOf(at) {
 /** @param {Route} route @param {Map<number, Thread>} threads @param {readonly Someone[]} [people] */
 function pathOf(route, threads, people = []) {
   if (route.view === 'today') return ME;
-  if (route.view === 'people') return '/threads/people';
+  if (route.view === 'meetings') return MEETINGS;
+  if (route.view === 'people') return PEOPLE;
   if (route.view === 'person') {
     const someone = people.find((one) => one.number === route.number);
-    return someone ? personPath(someone) : `/threads/people/${route.number}`;
+    return someone ? personPath(someone) : `${PEOPLE}/${route.number}`;
   }
   if (route.view === 'list') {
     if (route.tab === 'look' && route.space === null) return THREADS;
@@ -721,7 +768,7 @@ class Threads {
 
     /** @type {Route} */
     this.route = routeOf(location);
-    /** Where a thread was opened from, so Esc and the pager go back there. @type {'today' | 'list' | 'person'} */
+    /** Where a thread was opened from, so Esc and the pager go back there. @type {'today' | 'list' | 'person' | 'meetings'} */
     this.from = 'today';
     /** The person whose page a thread was opened from. @type {number | null} */
     this.fromPerson = null;
@@ -803,6 +850,8 @@ class Threads {
     this.overlay = null;
     /** @type {NewDraft | null} */
     this.newDraft = null;
+    /** The meeting being set in its editor. @type {MeetingDraft | null} */
+    this.meetingDraft = null;
     this.newPreview = false;
     /** @type {FindItem[]} */
     this.found = [];
@@ -850,6 +899,7 @@ class Threads {
       this.overlay = null;
       this.sharing = null;
       this.discussionShown = null;
+      this.meetingDraft = null;
       this.dialog.replaceChildren();
       this.main.focus({ preventScroll: true });
     });
@@ -876,7 +926,7 @@ class Threads {
       const who = await me();
       this.caller = who.caller === 'member' ? 'member' : 'owner';
       this.me = who.email ?? '';
-      if (this.caller === 'member' && (route.view === 'list' || route.view === 'people' || route.view === 'person')) this.route = { view: 'today' };
+      if (this.caller === 'member' && isHis(route)) this.route = { view: 'today' };
       const person = this.caller === 'owner' && route.view === 'person' ? this.loadPerson(route.number) : Promise.resolve();
       await Promise.all([this.loadAll(), thread, person]);
     } catch (error) {
@@ -888,7 +938,7 @@ class Threads {
       } else this.fail(error, "The threads didn't load.");
       return;
     }
-    if (inviting || (this.caller === 'member' && (route.view === 'list' || route.view === 'people' || route.view === 'person'))) history.replaceState(null, '', this.route.view === 'thread' ? location.pathname : ME);
+    if (inviting || (this.caller === 'member' && isHis(route))) history.replaceState(null, '', this.route.view === 'thread' ? location.pathname : ME);
     this.applyCaller();
     rememberSignedIn();
     if (this.member && this.missing !== null && (await this.tryPublic(route))) return;
@@ -991,8 +1041,11 @@ class Threads {
    */
   applyCaller() {
     if (!this.member) return;
-    for (const owners of document.querySelectorAll('.t-side-new, .t-tabbar [data-go="list"], .t-tabbar [data-go="people"], .t-tabbar [data-act="new"]')) {
+    for (const owners of document.querySelectorAll('.t-side-new, .t-tabbar [data-go="list"], .t-tabbar [data-act="more"], .t-tabbar [data-act="new"]')) {
       if (owners instanceof HTMLElement) owners.hidden = true;
+    }
+    for (const theirs of document.querySelectorAll('.t-tabbar [data-member]')) {
+      if (theirs instanceof HTMLElement) theirs.hidden = false;
     }
     const today = this.tabbar.querySelector('[data-go="today"]');
     if (today) today.replaceChildren(icon('people'), 'Yours');
@@ -1032,9 +1085,10 @@ class Threads {
     this.app.hidden = true;
     this.lost.hidden = false;
     const here = location.pathname;
-    const index = here === THREADS || isPeopleAddress(here);
-    this.signInLink.href = signInAddress(here === ME || index || isThreadAddress(here) ? here : ME);
-    if (here === ME) {
+    const room = here === ME || here === MEETINGS || isPeopleAddress(here);
+    const index = here === THREADS;
+    this.signInLink.href = signInAddress(room || index || isThreadAddress(here) ? here : ME);
+    if (room) {
       this.lostTitle.textContent = 'whysosuresh.com';
       this.lostText.textContent = "Suresh's private space. Sign in to open it.";
       this.signInLink.className = 't-btn t-btn-primary';
@@ -1077,7 +1131,7 @@ class Threads {
     }
     if (error instanceof SignedOut) {
       const here = location.pathname;
-      const link = el('a', { href: signInAddress(here === ME || here === THREADS || isThreadAddress(here) || isPeopleAddress(here) ? here : ME) }, ['Sign in again']);
+      const link = el('a', { href: signInAddress(here === ME || here === MEETINGS || here === THREADS || isThreadAddress(here) || isPeopleAddress(here) ? here : ME) }, ['Sign in again']);
       this.banner.replaceChildren(icon('lock'), 'Your sign-in ended. Nothing you did was lost. ', link);
     } else {
       this.banner.replaceChildren(`${what} Check your connection and try again.`);
@@ -1096,7 +1150,7 @@ class Threads {
    * @param {boolean} [push]
    */
   async go(route, push = true) {
-    if (this.member && (route.view === 'list' || route.view === 'people' || route.view === 'person')) route = { view: 'today' };
+    if (this.member && isHis(route)) route = { view: 'today' };
     this.closeOverlay();
     this.pageFull = false;
     this.editing = null;
@@ -1108,6 +1162,7 @@ class Threads {
       this.from = 'list';
     }
     if (route.view === 'today') this.from = 'today';
+    if (route.view === 'meetings') this.from = 'meetings';
     this.route = route;
     this.personEdit = null;
     this.personDraft = null;
@@ -1167,6 +1222,7 @@ class Threads {
   back() {
     if (this.route.view === 'person') void this.go({ view: 'people' });
     else if (this.from === 'person' && this.fromPerson !== null) void this.go({ view: 'person', number: this.fromPerson });
+    else if (this.from === 'meetings') void this.go({ view: 'meetings' });
     else void this.go(this.from === 'today' ? { view: 'today' } : { view: 'list', tab: this.tab, space: this.space });
   }
 
@@ -1205,8 +1261,24 @@ class Threads {
     return [...this.threads.values()].sort((a, b) => b.activityAt.localeCompare(a.activityAt) || b.number - a.number);
   }
 
-  /** The threads J and K walk: an invited person's own, Today's, or the list's. */
+  /**
+   * The meetings the reader is in, coming soonest first and past newest first: his own every one, an invited
+   * person's those that mark them as in the room.
+   */
+  meetings() {
+    // A dropped thread's meeting isn't happening, so it is in no list of meetings.
+    const theirs = [...this.threads.values()].filter(
+      (thread) => thread.meeting && thread.status !== 'dropped' && (!this.member || thread.meeting.attendees.some((one) => one.you === true)),
+    );
+    return split(theirs, (thread) => thread.meeting ?? null, Date.now(), ZONE);
+  }
+
+  /** The threads J and K walk: an invited person's own, Today's, the meetings', or the list's. */
   walk() {
+    if (this.from === 'meetings') {
+      const { coming, past } = this.meetings();
+      return [...coming, ...past].map((thread) => thread.number);
+    }
     if (this.member) return this.mine().map((thread) => thread.number);
     if (this.from === 'person' && this.person) return this.person.threads.map((thread) => thread.number);
     if (this.from !== 'today') return this.inTab(this.tab).map((thread) => thread.number);
@@ -1219,13 +1291,14 @@ class Threads {
   /** The thread a key acts on: the open one, or the selected row. */
   target() {
     if (this.route.view === 'thread') return this.shown?.thread ?? null;
-    if (this.route.view === 'people' || this.route.view === 'person') return null;
+    if (this.route.view === 'people' || this.route.view === 'person' || this.route.view === 'meetings') return this.route.view === 'meetings' && this.sel !== null ? (this.threads.get(this.sel) ?? null) : null;
     return this.sel === null ? null : (this.threads.get(this.sel) ?? null);
   }
 
   /** @param {number} by */
   step(by) {
     if (this.route.view === 'people' || this.route.view === 'person') return;
+    if (this.route.view === 'meetings') this.from = 'meetings';
     const list = this.walk();
     if (list.length === 0) return;
     if (this.route.view === 'thread') {
@@ -1272,6 +1345,10 @@ class Threads {
       const someone = this.person?.person;
       document.title = someone ? `${nameOf(someone)} · People · Threads` : 'People · Threads';
       if (someone && location.pathname !== personPath(someone)) history.replaceState(null, '', personPath(someone));
+    } else if (this.route.view === 'meetings') {
+      this.ensureSel();
+      this.main.replaceChildren(this.meetingsView());
+      document.title = this.member ? 'Your meetings · whysosuresh.com' : 'Meetings · whysosuresh.com';
     } else if (this.route.view === 'list') {
       this.ensureSel();
       this.main.replaceChildren(this.listView());
@@ -1309,7 +1386,10 @@ class Threads {
         if (this.route.view === 'thread' && this.route.number === thread.number) link.setAttribute('aria-current', 'page');
         return link;
       });
-      this.nav.replaceChildren(el('div', { class: 't-nav-label' }, ['Shared with you, by Suresh']), item, ...theirs);
+      const { coming } = this.meetings();
+      const meetings = el('a', { class: 't-nav-item', href: MEETINGS, 'data-go': 'meetings' }, [icon('cal'), 'Your meetings', el('span', { class: 't-nav-count' }, [String(coming.length)])]);
+      if (this.route.view === 'meetings') meetings.setAttribute('aria-current', 'page');
+      this.nav.replaceChildren(el('div', { class: 't-nav-label' }, ['Shared with you, by Suresh']), item, ...theirs, meetings);
       return;
     }
     const counts = new Map();
@@ -1318,12 +1398,14 @@ class Threads {
     const today = this.noting().length + this.waiting().length + this.fresh().length + this.sat().length;
     const todayItem = el('a', { class: 't-nav-item', href: ME, 'data-go': 'today' }, [icon('sun'), 'Today', el('span', { class: 't-nav-count' }, [String(today)])]);
     const allItem = el('a', { class: 't-nav-item', href: THREADS, 'data-go': 'list' }, [icon('list'), 'Threads']);
-    const peopleItem = el('a', { class: 't-nav-item', href: '/threads/people', 'data-go': 'people' }, [
+    const peopleItem = el('a', { class: 't-nav-item', href: PEOPLE, 'data-go': 'people' }, [
       icon('person'),
       'People',
       el('span', { class: 't-nav-count' }, [String(folded(this.people).live.length)]),
     ]);
     if (view === 'people' || view === 'person') peopleItem.setAttribute('aria-current', 'page');
+    const meetingsItem = el('a', { class: 't-nav-item', href: MEETINGS, 'data-go': 'meetings' }, [icon('cal'), 'Meetings', el('span', { class: 't-nav-count' }, [String(this.meetings().coming.length)])]);
+    if (view === 'meetings') meetingsItem.setAttribute('aria-current', 'page');
     if (view === 'today') todayItem.setAttribute('aria-current', 'page');
     if (view === 'list' && this.space === null) allItem.setAttribute('aria-current', 'page');
     const spaces = SPACES.map((space) => {
@@ -1336,15 +1418,28 @@ class Threads {
       return item;
     });
     // A space is a filter on the threads, so the five sit under Threads rather than beside the rooms.
-    this.nav.replaceChildren(todayItem, allItem, ...spaces, peopleItem);
+    this.nav.replaceChildren(todayItem, allItem, ...spaces, peopleItem, meetingsItem);
   }
 
   renderTabbar() {
-    for (const button of this.tabbar.querySelectorAll('[data-go]')) {
-      const current = button instanceof HTMLElement && button.dataset.go === (this.route.view === 'person' ? 'people' : this.route.view);
+    const view = this.route.view === 'person' ? 'people' : this.route.view;
+    for (const button of this.tabbar.querySelectorAll('[data-go], [data-act="more"]')) {
+      if (!(button instanceof HTMLElement)) continue;
+      // People and Meetings sit under More on his bar, so More is where he is when he is in either.
+      const current = button.dataset.act === 'more' ? view === 'people' || view === 'meetings' : button.dataset.go === view;
       if (current) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     }
+  }
+
+  /** The rooms that don't fit on his phone's bar, in a sheet: People and Meetings. */
+  openMore() {
+    const picks = [
+      el('a', { class: 't-pick', href: PEOPLE, 'data-go': 'people' }, [icon('person'), 'People']),
+      el('a', { class: 't-pick', href: MEETINGS, 'data-go': 'meetings' }, [icon('cal'), 'Meetings']),
+    ];
+    this.openOverlay('more', 'More rooms', 'narrow', [this.sheetHead('More'), el('div', { class: 't-sheet-body' }, [el('div', { class: 't-pick-list' }, picks)])]);
+    picks[0]?.focus();
   }
 
   /**
@@ -1354,7 +1449,7 @@ class Threads {
    * @param {boolean} [selectable] whether the row may show as selected; a person's page selects none
    */
   row(thread, sub, selectable = true) {
-    const meta = el('span', { class: 't-row-meta' }, [el('span', { class: 't-chip' }, [spaceLabel(thread.space)])]);
+    const meta = el('span', { class: 't-row-meta' }, [...this.meetingChip(thread), el('span', { class: 't-chip' }, [spaceLabel(thread.space)])]);
     if (thread.status !== 'received') meta.append(el('span', {}, [STATUS_NAMES[thread.status]]));
     if ((thread.shared ?? 0) > 0) meta.append(el('span', { class: 't-people-mark', title: `Shared with ${thread.shared}` }, [icon('people'), String(thread.shared)]));
     meta.append(el('span', {}, [ago(thread.activityAt)]));
@@ -1364,6 +1459,70 @@ class Threads {
       meta,
     ]);
     return row;
+  }
+
+  /** A meeting's date on its row, solid while it is near and faint once it is past. @param {Thread} thread */
+  meetingChip(thread) {
+    const meeting = thread.meeting;
+    if (!meeting) return [];
+    return [el('span', { class: 't-chip t-chip-meet', 'data-when': stateOf(meeting, Date.now(), ZONE) }, [icon('cal'), chipWords(meeting, Date.now(), LOCALE, ZONE)])];
+  }
+
+  /**
+   * A meeting as a room's row: its time today or its day where a number goes, the thread's title, then when and who.
+   * @param {Thread} thread
+   */
+  meetingRow(thread) {
+    const meeting = thread.meeting;
+    if (!meeting) return this.row(thread, firstLine(thread));
+    const now = Date.now();
+    return el('a', { class: 't-row t-row-meet', href: threadPath(thread), 'data-thread': String(thread.number), 'data-when': stateOf(meeting, now, ZONE), 'aria-selected': String(this.sel === thread.number) }, [
+      el('span', { class: 't-num t-meet-lead' }, [leadWords(meeting, now, LOCALE, ZONE)]),
+      el('span', { class: 't-row-main' }, [
+        el('span', { class: 't-row-title' }, [...rowMark(thread), titleOf(thread)]),
+        el('span', { class: 't-row-sub' }, [el('span', { class: 't-row-when' }, [whenLine(meeting, now, LOCALE, ZONE)]), ` · ${withLine(meeting.attendees)}`]),
+      ]),
+      el('span', { class: 't-row-meta' }, [el('span', { class: 't-num' }, [`#${thread.number}`])]),
+    ]);
+  }
+
+  /**
+   * The next meeting as a card, which opens its thread; none when nothing is coming.
+   * @param {string} label
+   */
+  nextMeetingCard(label) {
+    const next = this.meetings().coming[0];
+    const meeting = next?.meeting;
+    if (!next || !meeting) return [];
+    const { head, rest } = cardLines(meeting, titleOf(next), Date.now(), LOCALE, ZONE);
+    return [
+      el('a', { class: 't-card', href: threadPath(next), 'data-thread': String(next.number) }, [
+        el('span', { class: 't-card-lbl' }, [label]),
+        el('span', { class: 't-card-big' }, [head]),
+        el('span', { class: 't-card-sm' }, [`${rest} · ${withLine(meeting.attendees)}`]),
+      ]),
+    ];
+  }
+
+  /** The Meetings room: his every meeting, or an invited person's own, coming soonest first, then past. */
+  meetingsView() {
+    const { coming, past } = this.meetings();
+    /** @param {string} title @param {Thread[]} list @param {string} hint @param {string} empty */
+    const section = (title, list, hint, empty) =>
+      el('section', { class: 't-section' }, [
+        el('div', { class: 't-section-head' }, [el('h2', {}, [title]), el('span', { class: 't-n' }, [String(list.length)]), el('span', { class: 't-hint' }, [hint])]),
+        el('div', { class: 't-list' }, list.length > 0 ? list.map((thread) => this.meetingRow(thread)) : [el('div', { class: 't-empty' }, [empty])]),
+      ]);
+    return el('div', { class: 't-wrap' }, [
+      el('div', { class: 't-head' }, [
+        el('div', {}, [
+          el('h1', {}, [this.member ? 'Your meetings' : 'Meetings']),
+          el('p', {}, [this.member ? 'Only the meetings Suresh has with you, in your own time.' : 'What’s coming up, and what each one decided. A meeting opens its thread.']),
+        ]),
+      ]),
+      section('Coming up', coming, 'soonest first', this.member ? 'No meeting with Suresh yet.' : 'Nothing booked. Press B on a thread to make it a meeting.'),
+      ...(past.length > 0 ? [section('Past', past, 'newest first', '')] : []),
+    ]);
   }
 
   /** @param {Thread} thread */
@@ -1400,6 +1559,7 @@ class Threads {
         ]),
         el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'new' }, [icon('plus'), 'New thread ', kbd('N')]),
       ]),
+      ...this.nextMeetingCard('Next meeting'),
       ...(noting.length > 0
         ? [
             section('Notes waiting for your OK', noting, ["a visitor's note shows only once you OK it"], (thread) => {
@@ -1419,6 +1579,7 @@ class Threads {
     const mine = this.mine();
     return el('div', { class: 't-wrap' }, [
       el('div', { class: 't-head' }, [el('div', {}, [el('h1', {}, ['Shared with you']), el('p', {}, ['The threads Suresh shared with you, newest activity first.'])])]),
+      ...this.nextMeetingCard('Your next meeting'),
       el('div', { class: 't-list' }, mine.length > 0 ? mine.map((thread) => this.row(thread, firstLine(thread))) : [el('div', { class: 't-empty' }, ['Nothing is shared with you yet.'])]),
       el('p', { class: 't-note' }, ['Only the threads Suresh invites you to show here.']),
     ]);
@@ -1518,6 +1679,7 @@ class Threads {
       el('h1', { class: 't-title' }, [el('span', { class: 't-tn' }, [`#${thread.number}`]), ' ', titleOf(thread)]),
       el('div', { class: 't-byline' }, [...by, `, ${when(thread.createdAt)} · updated ${ago(thread.activityAt)} ago`]),
       ...(this.member ? [] : [this.moves(thread)]),
+      ...this.meetingStrip(thread),
       summary,
       ...(this.reply ? [this.replyPanel(this.reply)] : []),
       ...text,
@@ -1863,6 +2025,245 @@ class Threads {
     return el('div', { class: 't-moves' }, out);
   }
 
+  /**
+   * A thread's meeting as a strip above its summary: its day as a calendar leaf, the when, length and where, and who is
+   * in the room, each name opening their page for him; his Change (B). A thread with no meeting offers him "Make it a
+   * meeting" and nothing to anyone else.
+   * @param {Thread} thread
+   */
+  meetingStrip(thread) {
+    const meeting = thread.meeting;
+    if (!meeting) {
+      return this.member ? [] : [el('button', { type: 'button', class: 't-btn t-meet-add', 'data-act': 'meeting' }, [icon('cal'), 'Make it a meeting ', kbd('B')])];
+    }
+    const now = Date.now();
+    const leaf = partsOf(meeting.when, ZONE).day;
+    const noon = new Date(`${leaf}T12:00:00Z`);
+    // The reader's own place comes first, as everywhere a meeting says who is in it.
+    const people = [...meeting.attendees.filter((one) => one.you === true), ...meeting.attendees.filter((one) => one.you !== true)];
+    /** @type {(Node | string)[]} */
+    const names = [];
+    people.forEach((one, i) => {
+      if (i > 0) names.push(i === people.length - 1 ? ' and ' : ', ');
+      names.push(one.you ? 'you' : this.nameNode(typeof one.number === 'number' ? one.number : null, one.name?.trim() || 'someone'));
+    });
+    const [day = '', ...rest] = whenLine(meeting, now, LOCALE, ZONE).split(' · ');
+    return [
+      el('section', { class: 't-meet', 'aria-label': 'Meeting', 'data-when': stateOf(meeting, now, ZONE) }, [
+        el('span', { class: 't-meet-cal', 'aria-hidden': 'true' }, [
+          el('small', {}, [noon.toLocaleDateString(LOCALE, { timeZone: 'UTC', month: 'short' })]),
+          el('b', {}, [String(noon.getUTCDate())]),
+        ]),
+        el('span', { class: 't-meet-when' }, [day, ...rest.map((part) => el('span', {}, [` · ${part}`]))]),
+        el('span', { class: 't-meet-with' }, people.length === 0 ? ['No one added yet'] : ['With ', ...names]),
+        ...(this.member ? [] : [el('button', { type: 'button', class: 't-btn t-meet-act', 'data-act': 'meeting' }, ['Change ', kbd('B')])]),
+      ]),
+    ];
+  }
+
+  /** Opens the meeting editor for a thread, filled with its meeting, or tomorrow when it is none. @param {Thread} thread */
+  openMeeting(thread) {
+    if (this.member) return;
+    const meeting = thread.meeting;
+    const tomorrow = new Date(Date.now() + 24 * 3600 * 1000);
+    const parts = meeting ? partsOf(meeting.when, ZONE) : { day: partsOf(tomorrow.toISOString(), ZONE).day, time: '' };
+    this.meetingDraft = {
+      number: thread.number,
+      day: parts.day,
+      time: parts.time,
+      minutes: meeting?.minutes === null || meeting?.minutes === undefined ? '' : String(meeting.minutes),
+      where: meeting?.where ?? '',
+      chosen: (meeting?.attendees ?? []).flatMap((one) => (typeof one.number === 'number' ? [one.number] : [])),
+      named: [],
+      query: '',
+      problem: '',
+      busy: false,
+    };
+    this.renderMeeting();
+    focusIn(this.dialog, '#meet-day');
+  }
+
+  /** The meeting editor, drawn from its draft. */
+  renderMeeting() {
+    const draft = this.meetingDraft;
+    const thread = draft === null ? null : this.threads.get(draft.number);
+    if (draft === null || !thread) return;
+    const zone = new Intl.DateTimeFormat(LOCALE, { timeZoneName: 'long' }).formatToParts(new Date()).find((part) => part.type === 'timeZoneName')?.value ?? ZONE;
+    const words = draft.query.trim().toLowerCase();
+    const found = this.people.filter((one) => !draft.chosen.includes(one.number) && (words === '' || nameOf(one).toLowerCase().includes(words))).slice(0, PICKS);
+    const exact = this.people.some((one) => nameOf(one).toLowerCase() === words) || draft.named.some((name) => name.toLowerCase() === words);
+    const lengths = [['', 'Not said'], ...LENGTHS.map((minutes) => [String(minutes), lengthWords(minutes)])];
+    /** @param {string} name @param {boolean} known @param {string} act @param {string} id */
+    const chosenChip = (name, known, act, id) =>
+      el('span', { class: 't-attendee' }, [
+        el('span', { class: 't-av', 'aria-hidden': 'true' }, [initials(name)]),
+        name,
+        ...(known ? [] : [el('small', {}, ['someone new'])]),
+        el('button', { type: 'button', 'data-act': act, 'data-id': id, 'aria-label': `Take ${name} off` }, [icon('x')]),
+      ]);
+    const chips = [
+      ...draft.chosen.map((number) => {
+        const someone = this.people.find((one) => one.number === number);
+        const named = thread.meeting?.attendees.find((one) => one.number === number)?.name;
+        return chosenChip(someone ? nameOf(someone) : named?.trim() || `Person #${number}`, true, 'meet-unchoose', String(number));
+      }),
+      ...draft.named.map((name, i) => chosenChip(name, false, 'meet-unname', String(i))),
+    ];
+    const day = el('input', { class: 't-field', type: 'date', id: 'meet-day', value: draft.day, required: '' });
+    const time = el('input', { class: 't-field', type: 'time', id: 'meet-time', value: draft.time, step: '300' });
+    const minutes = el(
+      'select',
+      { class: 't-field', id: 'meet-minutes' },
+      lengths.map(([value = '', label = '']) => el('option', { value, ...(value === draft.minutes ? { selected: '' } : {}) }, [label])),
+    );
+    const where = el('input', { class: 't-field', id: 'meet-where', value: draft.where, maxlength: '200', placeholder: 'Google Meet', autocomplete: 'off' });
+    const find = el('input', { class: 't-field', id: 'meet-find', value: draft.query, placeholder: 'Add a person: type a name', autocomplete: 'off', 'aria-label': 'Find a person to add' });
+    const picks = [
+      ...found.map((one, i) =>
+        el('button', { type: 'button', class: 't-picker-item', 'data-act': 'meet-choose', 'data-person': String(one.number), 'aria-selected': String(i === 0 && words !== '') }, [
+          this.personMark(one, false),
+          el('span', {}, [nameOf(one)]),
+          el('small', {}, [`#${one.number}${one.email === null ? ' · no address' : ''}`]),
+        ]),
+      ),
+      ...(words !== '' && !exact
+        ? [el('button', { type: 'button', class: 't-picker-item t-picker-new', 'data-act': 'meet-name' }, [icon('plus'), el('span', {}, [`Add “${draft.query.trim()}” as someone new`]), el('small', {}, ['no address'])])]
+        : []),
+    ];
+    this.openOverlay('meeting', thread.meeting ? `Change the meeting on #${thread.number}` : `Make #${thread.number} a meeting`, 'wide', [
+      this.sheetHead(thread.meeting ? `Change the meeting · #${thread.number}` : `Make it a meeting · #${thread.number}`),
+      el('form', { class: 't-meet-form', 'data-submit': 'meeting' }, [
+        el('div', { class: 't-sheet-body' }, [
+          el('div', { class: 't-meet-time' }, [
+            el('label', { class: 't-fld' }, [el('span', { class: 't-lbl' }, ['Day']), day]),
+            el('label', { class: 't-fld' }, [el('span', { class: 't-lbl' }, ['Time ', el('small', {}, ['empty until it’s agreed'])]), time]),
+            el('label', { class: 't-fld' }, [el('span', { class: 't-lbl' }, ['Length']), minutes]),
+          ]),
+          el('p', { class: 't-meet-zone' }, [draft.time ? `In your time, ${zone}. Everyone in the thread sees it in their own.` : 'A day with no time shows as “time not set” to everyone.']),
+          el('label', { class: 't-fld' }, [el('span', { class: 't-lbl' }, ['Where ', el('small', {}, ['one line: a call, an office'])]), where]),
+          el('div', { class: 't-fld' }, [
+            el('span', { class: 't-lbl' }, ['Who will be there ', el('small', {}, ['besides you; this invites no one'])]),
+            el('div', { class: 't-attendees' }, chips.length > 0 ? chips : [el('span', { class: 't-note' }, ['No one yet.'])]),
+            el('div', { class: 't-picker' }, [find, el('div', { class: 't-picker-list', role: 'listbox', 'aria-label': 'People' }, picks)]),
+          ]),
+          ...(draft.problem ? [el('p', { class: 't-err', role: 'alert' }, [draft.problem])] : []),
+        ]),
+        el('div', { class: 't-sheet-foot' }, [
+          ...(thread.meeting ? [el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'meet-clear' }, ['Clear meeting'])] : []),
+          el('span', { class: 't-grow' }),
+          el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'close' }, ['Cancel ', kbd('Esc')]),
+          el('button', { type: 'submit', class: 't-btn t-btn-primary', ...(draft.busy ? { disabled: '' } : {}) }, ['Save ', kbd('⌘↵')]),
+        ]),
+      ]),
+    ]);
+  }
+
+  /** Reads what the meeting editor holds into its draft. */
+  readMeeting() {
+    const draft = this.meetingDraft;
+    if (draft === null) return;
+    /** @param {string} id */
+    const value = (id) => {
+      const field = this.dialog.querySelector(`#${id}`);
+      return field instanceof HTMLInputElement || field instanceof HTMLSelectElement ? field.value : '';
+    };
+    draft.day = value('meet-day');
+    draft.time = value('meet-time');
+    draft.minutes = value('meet-minutes');
+    draft.where = value('meet-where');
+    draft.query = value('meet-find');
+  }
+
+  /** Redraws the editor keeping the box being typed in and its cursor. @param {string} [focus] */
+  redrawMeeting(focus) {
+    const typing = document.activeElement;
+    const id = focus ?? (typing instanceof HTMLInputElement && this.dialog.contains(typing) ? typing.id : '');
+    const at = typing instanceof HTMLInputElement && typing.type === 'text' ? typing.selectionStart : null;
+    this.renderMeeting();
+    const again = id === '' ? null : this.dialog.querySelector(`#${id}`);
+    if (again instanceof HTMLElement) {
+      again.focus();
+      if (again instanceof HTMLInputElement && again.type === 'text' && at !== null) again.setSelectionRange(at, at);
+    }
+  }
+
+  /**
+   * Saves the meeting editor: the when (the day alone, or the moment with his zone's offset that day), the length and
+   * the where in one call, then each person added, named and taken off, in turn; the thread is read again after.
+   */
+  async saveMeeting() {
+    this.readMeeting();
+    const draft = this.meetingDraft;
+    const thread = draft === null ? null : this.threads.get(draft.number);
+    if (draft === null || !thread || draft.busy) return;
+    const offset = draft.time === '' ? 0 : -new Date(`${draft.day}T${draft.time}`).getTimezoneOffset();
+    const when = whenOf(draft.day, draft.time, offset);
+    if (when === null) {
+      draft.problem = 'Pick a day, and a time if one is agreed.';
+      this.redrawMeeting('meet-day');
+      return;
+    }
+    const before = (thread.meeting?.attendees ?? []).flatMap((one) => (typeof one.number === 'number' ? [one.number] : []));
+    const changes = peopleChanges(before, draft.chosen, draft.named);
+    draft.busy = true;
+    draft.problem = '';
+    this.redrawMeeting();
+    const had = thread.meeting;
+    const asked = { when, minutes: draft.minutes === '' ? null : Number(draft.minutes), where: draft.where.trim() === '' ? null : draft.where.trim() };
+    // The when, length and where go only when one of them changed, so a change of people alone writes no meeting line.
+    // A day compares as itself; a moment by its instant, since the Worker keeps it in UTC and the editor sends an offset.
+    const sameWhen = had !== null && had !== undefined && (isDay(had.when) || isDay(when) ? had.when === when : Date.parse(had.when) === Date.parse(when));
+    const same = sameWhen && had?.minutes === asked.minutes && had?.where === asked.where;
+    try {
+      let saved = same ? thread : await meet(thread.number, asked);
+      for (const number of changes.add) saved = await attendee(thread.number, { add: { person: number } });
+      for (const name of changes.named) saved = await attendee(thread.number, { add: { name } });
+      for (const number of changes.remove) saved = await attendee(thread.number, { remove: number });
+      this.remember(saved, { acted: true });
+    } catch (error) {
+      draft.busy = false;
+      draft.problem = 'That didn’t all save. What did is on the thread; check it and try again.';
+      await this.refreshShown(thread.number);
+      this.redrawMeeting();
+      this.fail(error, 'The meeting didn’t save.');
+      return;
+    }
+    this.closeOverlay();
+    this.clearProblem();
+    // Someone new is a person now, so People and the picker know them.
+    if (changes.named.length > 0) void this.loadPeople();
+    await this.refreshShown(thread.number);
+    this.say(had ? `Changed the meeting on #${thread.number}` : `#${thread.number} is a meeting`, null);
+  }
+
+  /** Clears the meeting, its people with it, with Undo that sets it back and adds the same people by number. */
+  async clearMeeting() {
+    const draft = this.meetingDraft;
+    const thread = draft === null ? null : this.threads.get(draft.number);
+    const had = thread?.meeting;
+    if (!thread || !had) return;
+    this.closeOverlay();
+    try {
+      this.remember(await meet(thread.number, { when: null, minutes: null, where: null }), { acted: true });
+    } catch (error) {
+      this.fail(error, 'The meeting wasn’t cleared.');
+      return;
+    }
+    this.clearProblem();
+    await this.refreshShown(thread.number);
+    this.say(`Cleared the meeting on #${thread.number}`, async () => {
+      try {
+        let back = await meet(thread.number, { when: had.when, minutes: had.minutes, where: had.where });
+        for (const one of had.attendees) if (typeof one.number === 'number') back = await attendee(thread.number, { add: { person: one.number } });
+        this.remember(back, { acted: true });
+        await this.refreshShown(thread.number);
+        this.say('Undone', null);
+      } catch (error) {
+        this.fail(error, "The undo didn't save.");
+      }
+    });
+  }
+
   /** @param {Draft} draft */
   replyPanel(draft) {
     const to = el('input', { class: 't-field', id: 'reply-to', type: 'email', readonly: '', value: draft.to });
@@ -2001,6 +2402,32 @@ class Threads {
         break;
       case 'note-held':
         [name, words] = ['reopen', ['put a note from ', word(data.name ?? 'someone'), ' back to wait']];
+        break;
+      case 'meeting-set': {
+        const from = meetingData(data.from);
+        const to = meetingData(data.to);
+        const now = Date.now();
+        if (to === null) break;
+        if (from === null) [name, words] = ['cal', ['made this a meeting for ', word(inSentence(momentWords(to.when, now, LOCALE, ZONE)))]];
+        else if (from.when !== to.when) {
+          [name, words] = ['cal', ['moved the meeting from ', word(inSentence(momentWords(from.when, now, LOCALE, ZONE))), ' to ', word(inSentence(momentWords(to.when, now, LOCALE, ZONE)))]];
+        }
+        else {
+          const said = [lengthWords(to.minutes), to.where ?? ''].filter((part) => part !== '').join(' · ');
+          [name, words] = ['cal', said === '' ? ['changed the meeting'] : ['changed the meeting: ', word(said)]];
+        }
+        break;
+      }
+      case 'meeting-cleared': {
+        const from = meetingData(data.from);
+        [name, words] = ['cal', ['cleared the meeting', ...(from ? [' for ', word(inSentence(momentWords(from.when, Date.now(), LOCALE, ZONE)))] : [])]];
+        break;
+      }
+      case 'attendee-added':
+        [name, words] = ['people', ['added ', word(data.name ?? 'someone'), ' to the meeting']];
+        break;
+      case 'attendee-removed':
+        [name, words] = ['people', ['took ', word(data.name ?? 'someone'), ' off the meeting']];
         break;
     }
     const line = el('div', { class: 't-ev' }, [
@@ -2365,7 +2792,7 @@ class Threads {
   nameNode(number, name) {
     if (this.member || typeof number !== 'number') return name;
     const known = this.people.find((one) => one.number === number);
-    return el('a', { class: 't-name-link', href: known ? personPath(known) : `/threads/people/${number}`, 'data-person': String(number) }, [name]);
+    return el('a', { class: 't-name-link', href: known ? personPath(known) : `${PEOPLE}/${number}`, 'data-person': String(number) }, [name]);
   }
 
   /** Who a thread is from, as the details column's Started row says it, the name opening their page. @param {Thread} thread */
@@ -2423,7 +2850,7 @@ class Threads {
         el('div', { class: 't-missing' }, [
           el('h1', {}, [this.personMissing !== null ? 'Nothing here' : 'Loading…']),
           el('p', {}, [this.personMissing !== null ? `There's no person #${this.personMissing}.` : '']),
-          el('a', { href: '/threads/people', 'data-go': 'people' }, ['Back to People']),
+          el('a', { href: PEOPLE, 'data-go': 'people' }, ['Back to People']),
         ]),
       ]);
     }
@@ -2431,7 +2858,7 @@ class Threads {
     const name = nameOf(person);
     const first = name.split(/\s+/)[0] ?? name;
     const crumbs = el('div', { class: 't-crumbs' }, [
-      el('a', { href: '/threads/people', 'data-go': 'people' }, ['People']),
+      el('a', { href: PEOPLE, 'data-go': 'people' }, ['People']),
       el('span', {}, ['/']),
       el('span', {}, [`#${person.number}`]),
       ...(person.invited ? [el('span', { class: 't-chip' }, [icon('people'), 'Invited'])] : []),
@@ -2451,6 +2878,13 @@ class Threads {
       ]),
     ]);
     const rows = threads.map((thread) => this.row(thread, roleLine(thread.roles), false));
+    const met = split(
+      threads.filter((thread) => thread.roles.includes('met')),
+      (thread) => thread.meeting ?? null,
+      Date.now(),
+      ZONE,
+    );
+    const meetingRows = [...met.coming, ...met.past].map((thread) => this.meetingRow(thread));
     const said = words.map((word) => {
       const number = word.thread.number;
       const known = this.threads.get(number);
@@ -2481,6 +2915,14 @@ class Threads {
     return el('div', { class: 't-person' }, [
       head,
       el('div', { class: 't-person-main' }, [
+        ...(meetingRows.length > 0
+          ? [
+              el('section', { class: 't-section' }, [
+                el('div', { class: 't-section-head' }, [el('h2', {}, ['Meetings']), el('span', { class: 't-n' }, [String(meetingRows.length)]), el('span', { class: 't-hint' }, ['coming first, soonest first; then past'])]),
+                el('div', { class: 't-list' }, meetingRows),
+              ]),
+            ]
+          : []),
         el('section', { class: 't-section' }, [
           el('div', { class: 't-section-head' }, [el('h2', {}, ['Threads']), el('span', { class: 't-n' }, [String(threads.length)]), el('span', { class: 't-hint' }, ["how they're in each"])]),
           el('div', { class: 't-list' }, rows.length > 0 ? rows : [el('div', { class: 't-empty' }, ['No threads yet.'])]),
@@ -2821,8 +3263,8 @@ class Threads {
         el('div', { class: 't-keys' }, groups),
         el('p', { class: 't-note' }, [
           this.member
-            ? 'Phones have no keys: the bar along the bottom holds your threads and Find.'
-            : 'Phones have no keys: every move is a button on the thread, and the bar along the bottom holds Today, Threads, Find and New.',
+            ? 'Phones have no keys: the bar along the bottom holds your threads, your meetings and Find.'
+            : 'Phones have no keys: every move is a button on the thread, and the bar along the bottom holds Today, Threads, Find, New and More (People, Meetings).',
         ]),
       ]),
     ]);
@@ -2927,12 +3369,14 @@ class Threads {
     const actions = this.member
       ? [
           { label: 'Go to your threads', hay: 'threads home mine yours', key: '', run: () => void this.go({ view: 'today' }) },
+          { label: 'Go to your meetings', hay: 'meetings calendar when', key: '', run: () => void this.go({ view: 'meetings' }) },
           { label: 'Show the keys', hay: 'keys keyboard shortcuts help', key: '?', run: () => this.openKeys() },
         ]
       : [
           { label: 'Go to Today', hay: 'today', key: '', run: () => void this.go({ view: 'today' }) },
           { label: 'Go to Threads', hay: 'threads all list', key: '', run: () => void this.go({ view: 'list', tab: this.tab, space: null }) },
           { label: 'Go to people', hay: 'people person everyone who', key: '', run: () => void this.go({ view: 'people' }) },
+          { label: 'Go to Meetings', hay: 'meetings calendar when', key: '', run: () => void this.go({ view: 'meetings' }) },
           { label: 'New thread', hay: 'new thread start create', key: 'N', run: () => this.openNew({ title: words !== '' && !/^#?\d+$/.test(words) ? words : '' }) },
           { label: 'Show the keys', hay: 'keys keyboard shortcuts help', key: '?', run: () => this.openKeys() },
         ];
@@ -3674,10 +4118,13 @@ class Threads {
         if (this.route.view === 'person' && this.person) {
           this.from = 'person';
           this.fromPerson = this.person.person.number;
-        } else if (link.classList.contains('t-row')) this.from = this.route.view === 'today' ? 'today' : this.route.view === 'list' ? 'list' : this.from;
+        } else if (link.classList.contains('t-row') || link.classList.contains('t-card')) {
+          this.from = this.route.view === 'today' ? 'today' : this.route.view === 'list' ? 'list' : this.route.view === 'meetings' ? 'meetings' : this.from;
+        }
         this.openThread(Number(link.dataset.thread));
       } else if (link.dataset.person !== undefined) void this.go({ view: 'person', number: Number(link.dataset.person) });
       else if (link.dataset.go === 'people') void this.go({ view: 'people' });
+      else if (link.dataset.go === 'meetings') void this.go({ view: 'meetings' });
       else if (link.dataset.go === 'today') void this.go({ view: 'today' });
       else if (link.dataset.go === 'list') void this.go({ view: 'list', tab: this.tab, space: null });
       else if (link.dataset.tab !== undefined && isTab(link.dataset.tab)) {
@@ -3699,9 +4146,10 @@ class Threads {
       return;
     }
     if (!(button instanceof HTMLElement)) return;
-    if (button.dataset.go === 'today' || button.dataset.go === 'list' || button.dataset.go === 'people') {
+    if (button.dataset.go === 'today' || button.dataset.go === 'list' || button.dataset.go === 'people' || button.dataset.go === 'meetings') {
       event.preventDefault();
-      void this.go(button.dataset.go === 'today' ? { view: 'today' } : button.dataset.go === 'people' ? { view: 'people' } : { view: 'list', tab: this.tab, space: this.space });
+      const go = button.dataset.go;
+      void this.go(go === 'today' ? { view: 'today' } : go === 'people' ? { view: 'people' } : go === 'meetings' ? { view: 'meetings' } : { view: 'list', tab: this.tab, space: this.space });
       return;
     }
     const thread = this.target();
@@ -3714,6 +4162,31 @@ class Threads {
         break;
       case 'keys':
         this.openKeys();
+        break;
+      case 'more':
+        this.openMore();
+        break;
+      case 'meeting':
+        if (thread && this.route.view === 'thread') this.openMeeting(thread);
+        break;
+      case 'meet-choose':
+      case 'meet-unchoose':
+      case 'meet-name':
+      case 'meet-unname': {
+        const draft = this.meetingDraft;
+        if (draft === null) break;
+        this.readMeeting();
+        const act = button.dataset.act;
+        if (act === 'meet-choose') draft.chosen.push(Number(button.dataset.person));
+        if (act === 'meet-unchoose') draft.chosen = draft.chosen.filter((number) => number !== Number(button.dataset.id));
+        if (act === 'meet-name' && draft.query.trim() !== '') draft.named.push(draft.query.trim());
+        if (act === 'meet-unname') draft.named = draft.named.filter((_, i) => i !== Number(button.dataset.id));
+        if (act === 'meet-choose' || act === 'meet-name') draft.query = '';
+        this.redrawMeeting('meet-find');
+        break;
+      }
+      case 'meet-clear':
+        void this.clearMeeting();
         break;
       case 'close':
         this.closeOverlay();
@@ -3951,6 +4424,12 @@ class Threads {
       this.readEditor();
       this.main.querySelector('#edit-preview')?.replaceChildren(...this.editorPreview(this.shown.thread, this.editing));
     } else if (target.id.startsWith('new-')) this.readNew();
+    else if (target.id.startsWith('meet-') && this.meetingDraft !== null) {
+      const timed = this.meetingDraft.time !== '';
+      this.readMeeting();
+      // The line under the time says whose zone it is in only once there is a time; the picker follows the name typed.
+      if (target.id === 'meet-find' || (target.id === 'meet-time' && timed !== (this.meetingDraft.time !== ''))) this.redrawMeeting();
+    }
     else if (target.id.startsWith('share-')) this.readShare();
     else if (target.id === 'person-note' && target instanceof HTMLTextAreaElement) this.personDraft = target.value;
     else if (target.id === 'person-email' && target instanceof HTMLInputElement) {
@@ -3990,6 +4469,7 @@ class Threads {
     if (kind === 'reply' && thread) void this.sendReply(thread);
     if (kind === 'edit' && thread) void this.saveEdit(thread);
     if (kind === 'new') void this.saveNew();
+    if (kind === 'meeting') void this.saveMeeting();
     if (kind === 'invite') void this.sendInvite();
     if (kind === 'note') void this.sendNote();
     if (kind === 'person-note') void this.savePersonNote();
@@ -4081,6 +4561,13 @@ class Threads {
    * @param {boolean} typing
    */
   onOverlayKey(event, typing) {
+    if (this.overlay === 'meeting' && event.key === 'Enter' && event.target instanceof HTMLInputElement && event.target.id === 'meet-find') {
+      // Enter in the people box picks the first match, or adds the name typed as someone new.
+      event.preventDefault();
+      const first = this.dialog.querySelector('.t-picker-item');
+      if (first instanceof HTMLElement) first.click();
+      return;
+    }
     if (this.overlay === 'find' && event.target instanceof HTMLInputElement && event.target.id === 'find-words') {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
@@ -4182,6 +4669,9 @@ class Threads {
         break;
       case 'share':
         if (this.route.view === 'thread' && thread) void this.openShare(thread);
+        break;
+      case 'meeting':
+        if (this.route.view === 'thread' && thread) this.openMeeting(thread);
         break;
       case 'keys':
         this.openKeys();

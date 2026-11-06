@@ -82,7 +82,8 @@
 // and the sync set and clear it, and add and remove its people: being in a meeting grants nothing, so an attendee
 // is never invited, can't sign in for it, and may be someone with no address, added by name as someone new
 // (`{"name"}` always makes a new person; a person already known is added by number). Clearing a meeting takes its
-// people off with it. Invited people read the meeting of a thread they are in, its people by name only, and its
+// people off with it. Invited people read the meeting of a thread they are in, its people by name only (their own
+// entry marked `you`), and its
 // history's events with where a meeting moved from; strangers on a public thread never read it (src/public.ts).
 // Refusals: 400 `meeting` or `attendee` for a malformed call; 404 `no-thread`, `no-person`; 409 `not-a-meeting` for
 // a thread with no when, `not-attending` for removing someone who isn't in it.
@@ -162,10 +163,10 @@ const NUMBER_SHAPE = /^[1-9]\d{0,8}$/;
 const MAX_SEARCH = 100;
 /**
  * Where the sign-in may send the owner on: the threads page's own addresses, as src/pages.ts serves them (/me,
- * the list at /threads/, a thread at /threads/<n> with its title after it, everyone at /threads/people and a
- * person at /threads/people/<n> with their name after it), and nowhere else. Anything else goes to /me.
+ * the meetings at /meetings, the list at /threads/, a thread at /threads/<n> with its title after it, everyone at
+ * /people and a person at /people/<n> with their name after it), and nowhere else. Anything else goes to /me.
  */
-const NEXT_SHAPE = /^(?:\/me|\/threads\/(?:[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?|people(?:\/[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?)?)$/;
+const NEXT_SHAPE = /^(?:\/me|\/meetings|\/people(?:\/[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?|\/threads\/(?:[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?)$/;
 /** The largest page: claude.ai holds a page to "16MB or smaller", and 16 MiB is at least that. */
 export const MAX_PAGE_BYTES = 16 * 1024 * 1024;
 /** The only place a link, or a page's source, may point: an address on claude.ai. */
@@ -226,10 +227,11 @@ function thread(row: ThreadRow, reader: Reader): { readonly [key: string]: JsonV
   };
 }
 
-/** A meeting's person as every row carries them. */
+/** A meeting's person as every row carries them; the address is read only to tell an invited reader their own. */
 interface MeetingPerson {
   readonly number: number;
   readonly name: string | null;
+  readonly email: string | null;
 }
 
 /** Names compared ignoring case, someone with no name after everyone named, then by number: one order for every reader. */
@@ -241,7 +243,9 @@ function byName(a: MeetingPerson, b: MeetingPerson): number {
 
 /**
  * A thread's meeting as its reader sees it, or null while it isn't one: its when, length and where, and its people
- * in name order, by number and name to the owner and the sync, by name only to invited people.
+ * in name order, by number and name to the owner and the sync, by name only to invited people, whose own entry says
+ * `you` (matched by the address they signed in with, never by a name two people may share), so their page can list the
+ * meetings they are in. No address is ever shown.
  */
 function meetingView(row: ThreadRow, reader: Reader): JsonValue {
   if (row.meeting_when === null) return null;
@@ -250,7 +254,10 @@ function meetingView(row: ThreadRow, reader: Reader): JsonValue {
     when: row.meeting_when,
     minutes: row.meeting_minutes,
     where: row.meeting_where,
-    attendees: reader.caller === "member" ? people.map((person) => ({ name: person.name })) : people.map((person) => ({ number: person.number, name: person.name })),
+    attendees:
+      reader.caller === "member"
+        ? people.map((person) => (person.email !== null && person.email === reader.email ? { name: person.name, you: true } : { name: person.name }))
+        : people.map((person) => ({ number: person.number, name: person.name })),
   };
 }
 

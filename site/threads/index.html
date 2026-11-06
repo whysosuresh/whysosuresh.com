@@ -1,16 +1,18 @@
 <!DOCTYPE html>
-<!-- whysosuresh.com/me and /threads: Suresh's threads, the page the Worker hands over at /me (the door everyone
-     signed in enters by), at /threads/ and at every thread's own address, /threads/42 (src/pages.ts). Today at /me
-     (notes waiting, threads waiting on him, new ones, and what sat a week), the Threads room at /threads/ (four tabs
-     and the spaces), and a thread: its living summary on top, its main text, then comments and history in order.
+<!-- whysosuresh.com/me and /threads: Suresh's threads, the page the Worker hands over at each room (/me, the door
+     everyone signed in enters by; /threads/; /people; /meetings) and at every thread's own address, /threads/42
+     (src/pages.ts). Today at /me (the next meeting, notes waiting, threads waiting on him, new ones, and what sat a
+     week), the Threads room at /threads/ (four tabs and the spaces), the Meetings room, and a thread: its meeting, its
+     living summary on top, its main text, then comments and history in order.
      /app/threads.js draws all of it from the threads' private calls under /threads/api/, behind Cloudflare Access;
      the page itself holds no data. Until a call answers, nothing shows: a visitor who isn't signed in sees the
      same "Nothing here" a missing thread shows at a thread's address, and a small "Sign in" there only on a device that
      has signed in before; at /me and at /threads/ itself, which name no thread, it always offers "Sign in". A person Suresh
      invited to a thread gets the same page, drawn for them: their threads, and each with a comment box. A thread
      Suresh made public is drawn for anyone who isn't in it in the public view below: the thread, the comments he
-     made public, and a note form whose note waits for his OK. People (/threads/people, and a person's page at
-     /threads/people/7-meera) are his alone: everyone he deals with, and a page for each.
+     made public, and a note form whose note waits for his OK. People (/people, and a person's page at
+     /people/7-meera) are his alone: everyone he deals with, and a page for each. On a phone the bar holds Today,
+     Threads, Find, New and More (People, Meetings); an invited person's holds their threads, their meetings and Find.
      Every link and file is root-absolute; the icons are a template the script copies. -->
 <html lang="en">
 <head>
@@ -37,10 +39,11 @@
     <div class="t-main" data-main tabindex="-1"></div>
     <nav class="t-tabbar" aria-label="Sections" data-tabbar>
       <button type="button" data-go="today"><span data-icon="sun"></span>Today</button>
+      <button type="button" data-go="meetings" data-member hidden><span data-icon="cal"></span>Meetings</button>
       <button type="button" data-go="list"><span data-icon="list"></span>Threads</button>
-      <button type="button" data-go="people"><span data-icon="person"></span>People</button>
       <button type="button" data-act="find"><span data-icon="search"></span>Find</button>
       <button type="button" data-act="new"><span data-icon="plus"></span>New</button>
+      <button type="button" data-act="more" aria-haspopup="dialog"><span data-icon="more"></span>More</button>
     </nav>
   </div>
 
@@ -81,6 +84,8 @@
     <svg class="t-i" data-name="link" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 9.5a3 3 0 0 0 4.2 0l2.3-2.3a3 3 0 0 0-4.2-4.2l-.8.8M9.5 6.5a3 3 0 0 0-4.2 0L3 8.8A3 3 0 0 0 7.2 13l.8-.8"/></svg>
     <svg class="t-i" data-name="doc" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.5h5.5L12.5 4.5V14a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2a.5.5 0 0 1 .5-.5Z"/><path d="M9.5 1.5v3h3M5.5 8h5M5.5 10.5h5"/></svg>
     <svg class="t-i" data-name="x" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
+    <svg class="t-i" data-name="cal" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg>
+    <svg class="t-i" data-name="more" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg>
     <svg class="t-i" data-name="pen" viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 2.5 13.5 5.5 6 13H3v-3Z"/></svg>
     <svg class="t-i" data-name="reply" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4 2.5 7.5 6 11M2.5 7.5H10a3.5 3.5 0 0 1 3.5 3.5v1"/></svg>
     <svg class="t-i" data-name="up" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 10 4-4 4 4"/></svg>

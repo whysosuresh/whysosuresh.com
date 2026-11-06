@@ -741,10 +741,10 @@ describe("a public thread's address", () => {
     expect(description.endsWith("word…")).toBe(true);
   });
 
-  it("never reaches a person's address: everyone's and a person's get the shell byte for byte, reading nothing", async () => {
+  it("never reaches a person's address or the meetings: each gets the shell byte for byte, reading nothing", async () => {
     const n = await published();
     const shell = await (await page("/threads/")).text();
-    for (const path of ["/threads/people", `/threads/people/${n}`, `/threads/people/${n}-someone`]) expect([path, await (await page(path)).text()]).toEqual([path, shell]);
+    for (const path of ["/people", `/people/${n}`, `/people/${n}-someone`, "/meetings"]) expect([path, await (await page(path)).text()]).toEqual([path, shell]);
   });
 
   it("goes back to the plain shell once the thread is taken back", async () => {

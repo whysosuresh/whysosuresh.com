@@ -30,6 +30,8 @@ describe("the keys", () => {
     ["r", "reply"],
     ["n", "new"],
     ["s", "share"],
+    ["b", "meeting"],
+    ["B", "meeting"],
     ["?", "keys"],
   ])("reads %s as %s", (key, command) => {
     expect(commandFor(press(key))).toBe(command);
