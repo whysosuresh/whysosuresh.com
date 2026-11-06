@@ -1,10 +1,16 @@
-// The daily limits: 20 sends a day from one network and 60 a day in all, counted without keeping anyone's
-// address. Each UTC day gets a random salt; a network is counted under the SHA-256 of that salt and the
-// network, and each send deletes earlier days' salts and counts, so yesterday's hashes can't be matched to
-// anyone once the day is over.
+// The daily limits on what visitors write, counted without keeping anyone's address, in two budgets: notes (the note
+// flow's and a public thread's, 20 a day from one network and 60 a day in all) and answers to a public thread's page
+// (60 and 300, because one questionnaire is many answers). Each UTC day gets one random salt, shared by both; a
+// network is counted under the SHA-256 of that salt and the network, and each send deletes earlier days' salts and
+// its own budget's earlier counts, so yesterday's hashes can't be matched to anyone once the day is over.
 
-export const PER_NETWORK = 20;
-export const PER_DAY = 60;
+/** A budget's limits and the table it counts in, a closed set so no table name ever comes from a request. */
+export const BUDGETS = {
+  notes: { table: "talk_senders", perNetwork: 20, perDay: 60 },
+  answers: { table: "answer_senders", perNetwork: 60, perDay: 300 },
+} as const;
+
+export type Budget = keyof typeof BUDGETS;
 
 /**
  * The network an address belongs to: a whole IPv4 address, or an IPv6 address's first 64 bits, because a
@@ -55,15 +61,16 @@ async function senderHash(saltHex: string, network: string): Promise<string> {
 }
 
 /**
- * Counts one send from a network if both limits allow it, and says whether they did. Two round trips: one
- * batch that makes sure today has a salt, drops earlier days and reads the salt; then one statement that
+ * Counts one send from a network against a budget if both its limits allow it, and says whether they did. Two round
+ * trips: one batch that makes sure today has a salt, drops earlier days and reads the salt; then one statement that
  * both checks and counts, so concurrent sends can't slip past a limit between a read and a write.
  */
-export async function takeSend(db: D1Database, network: string, day: string = today()): Promise<boolean> {
+export async function take(db: D1Database, network: string, budget: Budget, day: string = today()): Promise<boolean> {
+  const { table, perNetwork, perDay } = BUDGETS[budget];
   const [, , , salted] = await db.batch<{ salt: string }>([
     db.prepare("INSERT INTO talk_days (day, salt) VALUES (?1, randomblob(32)) ON CONFLICT (day) DO NOTHING").bind(day),
     db.prepare("DELETE FROM talk_days WHERE day < ?1").bind(day),
-    db.prepare("DELETE FROM talk_senders WHERE day < ?1").bind(day),
+    db.prepare(`DELETE FROM ${table} WHERE day < ?1`).bind(day),
     db.prepare("SELECT hex(salt) AS salt FROM talk_days WHERE day = ?1").bind(day),
   ]);
   const saltHex = salted?.results[0]?.salt;
@@ -71,13 +78,13 @@ export async function takeSend(db: D1Database, network: string, day: string = to
   const sender = await senderHash(saltHex, network);
   const counted = await db
     .prepare(
-      `INSERT INTO talk_senders (day, sender, sends)
-         SELECT ?1, ?2, 1 WHERE (SELECT COALESCE(SUM(sends), 0) FROM talk_senders WHERE day = ?1) < ?4
+      `INSERT INTO ${table} (day, sender, sends)
+         SELECT ?1, ?2, 1 WHERE (SELECT COALESCE(SUM(sends), 0) FROM ${table} WHERE day = ?1) < ?4
        ON CONFLICT (day, sender) DO UPDATE SET sends = sends + 1
-         WHERE talk_senders.sends < ?3 AND (SELECT SUM(sends) FROM talk_senders WHERE day = ?1) < ?4
+         WHERE ${table}.sends < ?3 AND (SELECT SUM(sends) FROM ${table} WHERE day = ?1) < ?4
        RETURNING sends`,
     )
-    .bind(day, sender, PER_NETWORK, PER_DAY)
+    .bind(day, sender, perNetwork, perDay)
     .first<{ sends: number }>();
   return counted !== null;
 }

@@ -27,7 +27,7 @@ export async function handleTalk(request: Request, env: Bindings): Promise<Respo
 
   const sender = await checkBot(request, secret, note.token);
   if (sender instanceof Response) return sender;
-  const limited = await takeLimit(env, sender.network);
+  const limited = await takeLimit(env, sender.network, "notes");
   if (limited !== null) return limited;
 
   // A new thread in To look at, its words the visitor's own. The answer is its id alone: a thread's number would

@@ -30,7 +30,12 @@
 // sign-in, through the public calls (src/public.ts), which ask their own queries here (`findPublic`,
 // `historyPublic`, `findPublicPage`, `publicPreview`), each holding the public condition (`PUBLIC`) in its own SQL.
 // A stranger sees only the comments written as Public that are shown. A visitor may send a note on a public thread
-// (`addNote`): it is a comment that waits for his OK (`state` `pending`), and only he shows or drops it (`judgeNote`).
+// (`addNote`), and answer the questions of its page while the page is its main section (`addAnswer`,
+// migrations/0015_visitor_answers.sql): each is a comment for anyone, shown at once, and only he drops it, or shows
+// it again (`judgeNote`). A visitor's answer carries the hash of a key their browser keeps (`visitor_key`): answering
+// again from it is a new answer, and the newest per question and key is the one that shows (a dropped newest hides
+// that key's answer, never bringing back an older one). A stranger reads other people's answers to a question only
+// once their own key has answered it (`historyPublic`), so nobody's answer is shaped by the ones before it.
 //
 // Everyone he deals with is a person (`people`, migrations/0012_people.sql), numbered as threads are: the people he
 // invites, a visitor who wrote from the site or on a public thread with an address, and someone who told him
@@ -157,7 +162,7 @@ export interface CommentRow {
   body: string;
   created_at: string;
   audience: string;
-  /** `shown`, `pending` (a visitor's note waiting for his OK) or `dropped`. */
+  /** `shown` or `dropped`, or `pending` while he has sent a visitor's words back to waiting (`hold`). */
   state: string;
   /**
    * The person who wrote it (an invited person, or a visitor who typed an address) and their number; null for the
@@ -181,6 +186,8 @@ export interface CommentRow {
   page_version: number | null;
   /** The address of the person who wrote it, for the door to tell a reader their own; never shown to anyone. */
   person_email: string | null;
+  /** A visitor's answer only: the hex SHA-256 of the key their browser keeps (migrations/0015_visitor_answers.sql). */
+  visitor_key: string | null;
 }
 
 /**
@@ -193,7 +200,10 @@ export type Anchor =
   | { readonly question: string }
   | { readonly quote: string; readonly prefix: string; readonly suffix: string; readonly version: number };
 
-/** A visitor's note as he rules on it: shown on the thread, dropped, or back to waiting (how the page undoes either). */
+/**
+ * A visitor's note or answer as he rules on it: dropped, or shown again (how the page undoes a drop); `hold` sends one
+ * back to waiting, which the page that showed waiting notes still asks for.
+ */
 export type Judgement = "show" | "drop" | "hold";
 
 /** A person a thread is shared with, as the owner sees them. */
@@ -414,13 +424,13 @@ async function listed(db: D1Database, page: D1PreparedStatement): Promise<Listed
 
 /**
  * What the owner's list says of each row beside the thread: how many people it is shared with now (`shared`),
- * whether the last word on it is an invited person's (`waiting`): their newest comment is later than the owner's
- * newest comment or change, so it waits on him until he comments, moves it or edits it; and how many visitors'
+ * whether the last word on it is someone else's (`waiting`): an invited person's or a visitor's newest comment is later
+ * than the owner's newest comment or change, so it waits on him until he comments, moves it or edits it; and how many visitors'
  * notes on it wait for his OK (`pending`). Derived from the rows already kept, with nothing stored for it; times
  * compare as the ISO strings every writer stamps.
  */
 const LIST_EXTRAS = `(SELECT COUNT(*) FROM members WHERE members.thread_id = threads.id AND members.removed_at IS NULL) AS shared,
-  (COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.thread_id = threads.id AND comments.author = 'member'), '')
+  (COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.thread_id = threads.id AND comments.author IN ('member', 'visitor')), '')
     > MAX(COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.thread_id = threads.id AND comments.author = 'owner'), ''),
           COALESCE((SELECT MAX(at) FROM events WHERE events.thread_id = threads.id AND events.actor = 'owner'), ''))) AS waiting,
   (SELECT COUNT(*) FROM comments WHERE comments.thread_id = threads.id AND comments.state = 'pending') AS pending`;
@@ -451,7 +461,7 @@ export async function listShared(db: D1Database, email: string, limit: number): 
  * which the door reads only to tell a reader which comments are their own.
  */
 const COMMENT_COLUMNS =
-  "comments.id, comments.thread_id, comments.author, comments.body, comments.created_at, comments.audience, comments.state, comments.person_id, CASE WHEN comments.author = 'member' THEN people.name END AS person_name, people.number AS person_number, comments.sender_name, comments.sender_email, comments.parent_id, comments.question, comments.quote, comments.quote_prefix, comments.quote_suffix, comments.page_version, people.email AS person_email";
+  "comments.id, comments.thread_id, comments.author, comments.body, comments.created_at, comments.audience, comments.state, comments.person_id, CASE WHEN comments.author = 'member' THEN people.name END AS person_name, people.number AS person_number, comments.sender_name, comments.sender_email, comments.parent_id, comments.question, comments.quote, comments.quote_prefix, comments.quote_suffix, comments.page_version, people.email AS person_email, comments.visitor_key";
 
 /**
  * Events an invited person never sees: the owner's mail opening, the copy from the old inbox, and a visitor's note
@@ -1147,16 +1157,33 @@ export async function findPublic(db: D1Database, number: number): Promise<Thread
   return db.prepare(`SELECT ${COLUMNS} FROM threads WHERE number = ?1 AND ${PUBLIC}`).bind(number).first<ThreadRow>();
 }
 
-/** A public thread's comments a stranger may read, oldest first, up to `limit`: written as Public, and shown. */
-export async function historyPublic(db: D1Database, threadId: string, limit: number): Promise<CommentRow[]> {
+/**
+ * A visitor's answer a stranger may read, as a condition on `comments`: a visitor's, and the newest that key gave to
+ * that question (so a change shows in place of what it changed, and a dropped newest hides the key's answer rather
+ * than bringing back an older one), to a question the reader's own key (`key`, bound in; null for none) has answered.
+ */
+function answerShown(key: string): string {
+  return `comments.author = 'visitor' AND comments.visitor_key IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM comments AS newer WHERE newer.thread_id = comments.thread_id AND newer.question = comments.question
+      AND newer.visitor_key = comments.visitor_key AND (newer.created_at > comments.created_at OR (newer.created_at = comments.created_at AND newer.id > comments.id)))
+    AND EXISTS (SELECT 1 FROM comments AS own WHERE own.thread_id = comments.thread_id AND own.question = comments.question AND own.visitor_key = ${key})`;
+}
+
+/**
+ * A public thread's comments a stranger may read, oldest first, up to `limit`: written as Public, and shown; an answer
+ * to a page's question only as `answerShown` holds, for the reader whose key hashes to `key` (null for a reader with
+ * none, who reads no answers).
+ */
+export async function historyPublic(db: D1Database, threadId: string, limit: number, key: string | null): Promise<CommentRow[]> {
   return (
     await db
       .prepare(
         `SELECT ${COMMENT_COLUMNS} FROM comments LEFT JOIN people ON people.id = comments.person_id JOIN threads ON threads.id = comments.thread_id
          WHERE comments.thread_id = ?1 AND comments.audience = 'public' AND comments.state = 'shown' AND ${PUBLIC}
+           AND (comments.question IS NULL OR (${answerShown("?2")}))
          ORDER BY comments.created_at, comments.id LIMIT ${limit}`,
       )
-      .bind(threadId)
+      .bind(threadId, key)
       .all<CommentRow>()
   ).results;
 }
@@ -1206,8 +1233,7 @@ export interface VisitorNote {
 }
 
 /**
- * Keeps a visitor's note on a public thread: a comment for anyone that waits for his OK, with the name and email
- * they typed, the person that address is (made when new), and the thread's last activity. It writes no event,
+ * Keeps a visitor's note on a public thread: a comment for anyone, shown at once, with the name and email they typed, the person that address is (made when new), and the thread's last activity. It writes no event,
  * because a comment is its own entry. The insert holds the public condition itself, so a note racing the thread
  * being taken back is refused, not kept: false then, and nobody is made.
  */
@@ -1221,7 +1247,7 @@ export async function addNote(db: D1Database, number: number, note: VisitorNote)
   const insert = statement(
     db,
     `INSERT INTO comments (id, thread_id, author, body, created_at, audience, state, sender_name, sender_email, person_id)
-     SELECT ${p.add(id)}, threads.id, 'visitor', ${p.list([note.body, now])}, 'public', 'pending', ${p.list([note.name, note.email])}, ${person.id}
+     SELECT ${p.add(id)}, threads.id, 'visitor', ${p.list([note.body, now])}, 'public', 'shown', ${p.list([note.name, note.email])}, ${person.id}
      FROM threads WHERE threads.number = ${p.add(number)} AND ${PUBLIC} RETURNING id`,
     p,
   );
@@ -1231,15 +1257,46 @@ export async function addNote(db: D1Database, number: number, note: VisitorNote)
   return (results[person.make === null ? 0 : 1]?.results.length ?? 0) > 0;
 }
 
-/** What each ruling on a note starts from, goes to, and the event it writes. */
+/** A visitor's answer to a question of a public thread's page, as the door checked it, with the hash of their key. */
+export interface VisitorAnswer {
+  readonly question: string;
+  readonly body: string;
+  readonly name: string;
+  readonly key: string;
+}
+
+/**
+ * Keeps a visitor's answer: a comment for anyone, shown at once, on the question it answers, with the name they typed
+ * and their key's hash, and the thread's last activity. Never an email, so it makes no person, and no event, because a
+ * comment is its own entry. The insert holds the public condition and the page being the main section itself, so an
+ * answer racing the thread being taken back, or moving on to a link, is refused, not kept: false then.
+ */
+export async function addAnswer(db: D1Database, number: number, answer: VisitorAnswer): Promise<boolean> {
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID();
+  const p = new Params();
+  const insert = statement(
+    db,
+    `INSERT INTO comments (id, thread_id, author, body, created_at, audience, state, sender_name, question, visitor_key)
+     SELECT ${p.add(id)}, threads.id, 'visitor', ${p.list([answer.body, now])}, 'public', 'shown', ${p.list([answer.name, answer.question, answer.key])}
+     FROM threads WHERE threads.number = ${p.add(number)} AND threads.main = 'page' AND ${PUBLIC} RETURNING id`,
+    p,
+  );
+  const u = new Params();
+  const touch = statement(db, `UPDATE threads SET activity_at = ${u.add(now)} WHERE id = (SELECT thread_id FROM comments WHERE id = ${u.add(id)})`, u);
+  const [added] = await db.batch<{ id: string }>([insert, touch]);
+  return (added?.results.length ?? 0) > 0;
+}
+
+/** What each ruling on a visitor's words starts from, goes to, and the event it writes. */
 const JUDGEMENTS = {
-  show: { from: ["pending"], to: "shown", event: "note-shown" },
-  drop: { from: ["pending"], to: "dropped", event: "note-dropped" },
+  show: { from: ["pending", "dropped"], to: "shown", event: "note-shown" },
+  drop: { from: ["pending", "shown"], to: "dropped", event: "note-dropped" },
   hold: { from: ["shown", "dropped"], to: "pending", event: "note-held" },
 } as const satisfies Record<Judgement, { from: readonly string[]; to: string; event: string }>;
 
 /**
- * His ruling on a visitor's note, the owner's alone: shown on the thread, dropped, or back to waiting. One batch
+ * His ruling on a visitor's note or answer, the owner's alone: dropped, shown again, or back to waiting. One batch
  * with its event, which names the note and the visitor's typed name (never their email), and the thread's last
  * activity. `no-thread` when there is no such thread, `no-note` when it holds no such visitor's note,
  * `not-from-here` when the note isn't where the ruling starts; either way nothing is written.

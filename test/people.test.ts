@@ -213,7 +213,6 @@ describe("who is a person", () => {
     await noteOn(n, "Not Meera", "Meera@example.com");
     const note = (await answer<{ comments: { id: string; name: string; personNumber?: number }[] }>(await call(`/threads/${n}`))).comments[0];
     expect([note?.name, note?.personNumber]).toEqual(["Not Meera", 1]);
-    await answer(await call(`/threads/${n}/comments/${note?.id ?? ""}`, { body: { action: "show" } }));
     const read = await answer<{ comments: { name: string }[] }>(await harness.fetch(`${SITE}/api/threads/${n}`));
     expect(read.comments.map((one) => one.name)).toEqual(["Not Meera"]);
     const theirs = await answer<{ comments: Record<string, unknown>[] }>(await call(`/threads/${n}`, { as: { email: MEERA } }));
@@ -260,7 +259,7 @@ describe("the people calls", () => {
     await answer(await call(`/threads/${shared}/comments`, { as: { email: MEERA }, body: { body: "As invited." } }), 201);
     await new Promise((resolve) => setTimeout(resolve, 5));
     const other = await published();
-    await noteOn(other, "M", MEERA, "Waiting.");
+    await noteOn(other, "M", MEERA, "On the thread.");
     const taken = await thread();
     const { people } = await invite(taken, MEERA, "Meera");
     await answer(await call(`/threads/${taken}/people`, { body: { remove: people[0]?.id } }));
@@ -274,7 +273,7 @@ describe("the people calls", () => {
     expect(roles).toEqual({ [sent]: ["sent"], [shared]: ["invited", "wrote"], [other]: ["wrote"], [taken]: ["removed"], [taken + 1]: ["told"] });
     expect(one.threads[0]).toMatchObject({ number: taken + 1, source: "told", senderNumber: 1, ref: expect.any(String) });
     expect(one.words.map((word) => [word.kind, word.body, word.state])).toEqual([
-      ["public-note", "Waiting.", "pending"],
+      ["public-note", "On the thread.", "shown"],
       ["comment", "As invited.", "shown"],
       ["note", "From the site.", null],
     ]);
