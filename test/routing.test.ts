@@ -4,9 +4,10 @@
 // holds: the two doors (/api/, /threads/api/) answer the Worker's JSON, the public threads' calls under
 // /api/threads/ among them; the pages come from site/; /inbox, the
 // threads' old address, and everything under it, its old calls included, redirect for good to /threads/;
-// a page's .html address redirects to its clean one, and /me/ to /me; /me (the door everyone signed in enters by),
-// /threads/, every thread's address and the people pages
-// (/threads/people, /threads/people/<n>) answer the threads page with the site's headers (its CSP among them) and status 200, whatever the number, with no sign-in, because
+// a page's .html address redirects to its clean one, /me/ to /me and /meetings/ to /meetings; the rooms (/me, the door
+// everyone signed in enters by, /meetings, /threads/ and the people pages, /people and /people/<n>) and every thread's
+// address answer the threads page with the site's headers (its CSP among them) and status 200, whatever the number,
+// with no sign-in; the people pages' old addresses under /threads/, and /people/, redirect to /people for good; because
 // Access guards only the threads' calls, never a thread's page; and any other path under /threads/ is what the
 // site's files make of it.
 
@@ -81,11 +82,11 @@ describe("the site's own files", () => {
     "/threads/42",
     "/threads/42-who-owns-what",
     "/threads/999999999",
-    "/threads/people",
-    "/threads/people/",
-    "/threads/people/7",
-    "/threads/people/7-meera",
-    "/threads/people/999999999",
+    "/meetings",
+    "/people",
+    "/people/7",
+    "/people/7-meera",
+    "/people/999999999",
   ])(
     "answer %s with the threads page and the site's headers, with no sign-in",
     async (path) => {
@@ -103,13 +104,31 @@ describe("the site's own files", () => {
     expect(new URL(response.headers.get("location") ?? "", SITE).pathname).toBe("/me");
   });
 
+  it("redirect /meetings/ to /meetings for good", async () => {
+    const response = await harness.fetch(`${SITE}/meetings/`, { redirect: "manual" });
+    expect(response.status).toBe(301);
+    expect(new URL(response.headers.get("location") ?? "", SITE).pathname).toBe("/meetings");
+  });
+
+  it.each([
+    ["/threads/people", "/people"],
+    ["/threads/people/", "/people"],
+    ["/threads/people/7", "/people/7"],
+    ["/threads/people/7-meera", "/people/7-meera"],
+    ["/people/", "/people"],
+  ])("redirect %s, people's address before the rooms, to %s for good", async (path, to) => {
+    const response = await harness.fetch(`${SITE}${path}`, { redirect: "manual" });
+    expect(response.status).toBe(301);
+    expect(new URL(response.headers.get("location") ?? "", SITE).pathname).toBe(to);
+  });
+
   it("redirect /threads to /threads/", async () => {
     const response = await harness.fetch(`${SITE}/threads`, { redirect: "manual" });
     expect(response.status).toBe(307);
     expect(new URL(response.headers.get("location") ?? "", SITE).pathname).toBe("/threads/");
   });
 
-  it.each(["/threads/042", "/threads/42/comments", "/threads/0", "/threads/nope", "/threads/people/07", "/threads/people/7/threads", "/threads/peoples", "/me/42", "/mex"])("answer %s with the site's 404 page", async (path) => {
+  it.each(["/threads/042", "/threads/42/comments", "/threads/0", "/threads/nope", "/threads/people/07", "/threads/people/7/threads", "/threads/peoples", "/me/42", "/mex", "/people/07", "/people/7/threads", "/peoples", "/meetings/7", "/meetingsx"])("answer %s with the site's 404 page", async (path) => {
     const response = await harness.fetch(`${SITE}${path}`, { redirect: "manual" });
     expect(response.status).toBe(404);
     expect(response.headers.get("content-type")).toContain("text/html");
@@ -117,7 +136,7 @@ describe("the site's own files", () => {
   });
 
   it("serve the threads page's scripts as files", async () => {
-    for (const path of ["/app/threads.js", "/app/threads-store.js", "/app/keys.js", "/app/markdown.js", "/app/people.js"]) {
+    for (const path of ["/app/threads.js", "/app/threads-store.js", "/app/keys.js", "/app/markdown.js", "/app/people.js", "/app/meetings.js"]) {
       const response = await harness.fetch(`${SITE}${path}`);
       expect([path, response.status]).toEqual([path, 200]);
       expect(response.headers.get("content-type")).toContain("javascript");
