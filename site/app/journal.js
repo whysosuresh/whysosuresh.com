@@ -119,10 +119,16 @@ export function entryPath(key) {
   return `${JOURNAL_PATH}/${key}`;
 }
 
-/** A storyline's name as its address says it: lowercase letters and digits, hyphens between. @param {string} name */
+/**
+ * A storyline's name as its address says it: lowercase letters and digits, hyphens between, at most 80 characters and
+ * never ending in a hyphen. A name with no Latin letter or digit (Telugu, say) is spelled by its characters' code
+ * points instead, so each such name has an address of its own. Names that differ only in punctuation share one.
+ * @param {string} name
+ */
 export function storylineSlug(name) {
-  const slug = name.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  return slug === '' ? 'storyline' : slug.slice(0, 80);
+  const latin = name.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const slug = latin !== '' ? latin : `u-${[...name.trim()].map((c) => (c.codePointAt(0) ?? 0).toString(36)).join('-')}`;
+  return slug.slice(0, 80).replace(/-+$/, '');
 }
 
 /** A storyline's address. @param {string} name */

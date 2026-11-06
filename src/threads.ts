@@ -195,7 +195,7 @@ const MAX_SEARCH = 100;
  * the meetings at /meetings, the asks at /asks, the list at /threads/, a thread at /threads/<n> with its title after it, everyone at
  * /people and a person at /people/<n> with their name after it), and nowhere else. Anything else goes to /me.
  */
-const NEXT_SHAPE = /^(?:\/me|\/meetings|\/asks|\/people(?:\/[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?|\/threads\/(?:[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?)$/;
+const NEXT_SHAPE = /^(?:\/me|\/meetings|\/asks|\/journal(?:\/(?:\d{4}-\d{2}-\d{2}|\d{4}-W\d{2}|storylines(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?))?|\/people(?:\/[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?|\/threads\/(?:[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?)$/;
 /** The largest page: claude.ai holds a page to "16MB or smaller", and 16 MiB is at least that. */
 export const MAX_PAGE_BYTES = 16 * 1024 * 1024;
 /** The only place a link, or a page's source, may point: an address on claude.ai. */

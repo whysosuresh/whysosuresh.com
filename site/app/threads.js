@@ -2,8 +2,14 @@
 // whysosuresh.com/me and /threads: Suresh's threads, one page for all of them (site/threads/index.html, which the
 // Worker hands over at every room's address and every thread's). /me is the door everyone signed in enters by, and
 // the side rail is drawn for rooms, side by side at the top level: its head is the site, then Today (/me), Threads
-// (/threads/) with the five spaces under it, People (/people), Meetings (/meetings) and Asks (/asks). On a phone the
-// bar holds Today, Threads, Find, New and More, with People, Meetings and Asks under More. The views, each at its own address: Today
+// (/threads/) with the five spaces under it, People (/people), Meetings (/meetings), Asks (/asks) and Journal
+// (/journal). On a phone the bar holds Today, Threads, Find, New and More, with People, Meetings, Asks and Journal
+// under More. His journal is his alone: the list of days week by week (/journal), a day or a week's chapter
+// (/journal/2026-11-06, /journal/2026-W44) drawn from the page text the sync writes, read by site/app/journal.js,
+// with Edit for the whole text, saved on the version it was opened at (a save the sync overtook keeps his words in
+// the box and says so); the storylines' trail (/journal/storylines) and one storyline (/journal/storylines/the-demo);
+// and on Today the latest day's card, its countdowns from today in his own zone, and its question with a box to
+// answer it, kept with Undo. The views, each at its own address: Today
 // (/me: the next meeting as a card, then threads waiting on him, new ones, and open threads
 // that sat a week untouched), the Threads room (/threads/, or
 // /threads/?tab=act&space=company: four tabs by where a thread stands, and the five spaces), and a thread
@@ -101,7 +107,22 @@
 import { SPACES } from '../spaces.js';
 import { MEMBER_COMMANDS, MEMBER_SHEET, SHEET, commandFor } from './keys.js';
 import { parse, summaryLines } from './markdown.js';
-import { cardLines, chipWords, isDay, leadWords, lengthWords, momentWords, partsOf, peopleChanges, split, stateOf, whenLine, whenOf, withLine } from './meetings.js';
+import { cardLines, chipWords, dayWords, isDay, leadWords, lengthWords, momentWords, partsOf, peopleChanges, split, stateOf, todayKey, whenLine, whenOf, withLine } from './meetings.js';
+import {
+  JOURNAL_PATH,
+  STORYLINES_PATH,
+  addDays as addJournalDays,
+  countdownOn,
+  countdownTarget,
+  daysBetween,
+  entryPath,
+  kindOf,
+  parse as parsePage,
+  storylinePath,
+  storylineSlug,
+  weekDays,
+  weekOf,
+} from './journal.js';
 import { ASKS_PATH, ASK_PATH, CLOSED_LINE, DRAFTS_HINT, agoWords, FIRST_ANSWERERS, answeredHead, answererName, answerersShown, askEventWords, askLink, askShown, countLine, foldWaiting, foldedTitle, foldedWho, markReadLabel, markedWords, nobodyLine, savedLine, stateWords, summaryNoteFor, talkLinkFor, topicLine, visitorHint } from './asks.js';
 import { DRAFT, KEY, discussionFor, helloFor, placesOf, readPageMessage, stack, takesAnswers } from './page-talk.js';
 import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, saidOn, takenLine } from './people.js';
@@ -119,8 +140,12 @@ import {
   edit,
   editPerson,
   invite,
+  answerJournal,
+  journalPhoto,
+  journalStorylines,
   judge,
   listAll,
+  listJournal,
   listAsks,
   listMine,
   listPeople,
@@ -130,6 +155,8 @@ import {
   move,
   pageAddress,
   people,
+  readJournal,
+  saveJournal,
   publicPageAddress,
   search,
   show,
@@ -162,6 +189,13 @@ import {
  * @typedef {import('./threads-store.js').AskShown} AskShown
  * @typedef {import('./threads-store.js').Answerer} Answerer
  * @typedef {import('./meetings.js').Meeting} Meeting
+ * @typedef {import('./threads-store.js').JournalEntry} JournalEntry
+ * @typedef {import('./threads-store.js').JournalRead} JournalRead
+ * @typedef {import('./threads-store.js').JournalTrail} JournalTrail
+ * @typedef {import('./journal.js').Entry} JournalPage
+ * @typedef {import('./journal.js').Inline} JournalInline
+ * @typedef {import('./journal.js').Block} JournalBlock
+ * @typedef {{ key: string, base: number, text: string, stale: boolean, busy: boolean, problem: string }} JournalEdit
  * @typedef {{ number: number, day: string, time: string, minutes: string, where: string, chosen: number[], named: string[], query: string, problem: string, busy: boolean }} MeetingDraft
  * @typedef {import('./page-talk.js').Places<ThreadComment>} Places
  * @typedef {{ quote: string, prefix: string, suffix: string, top: number }} WordsDraft
@@ -170,7 +204,8 @@ import {
  * @typedef {import('./markdown.js').Inline} Inline
  * @typedef {import('./keys.js').Command} Command
  * @typedef {{ view: 'today' } | { view: 'list', tab: Tab, space: string | null } | { view: 'thread', number: number } | { view: 'people' }
- *   | { view: 'person', number: number } | { view: 'meetings' } | { view: 'asks' } | { view: 'ask', slug: string }} Route
+ *   | { view: 'person', number: number } | { view: 'meetings' } | { view: 'asks' } | { view: 'ask', slug: string }
+ *   | { view: 'journal' } | { view: 'entry', key: string } | { view: 'storylines' } | { view: 'storyline', slug: string }} Route
  * @typedef {{ to: string, subject: string, body: string }} Draft
  * @typedef {{ title: string, summary: string, body: string }} Editing
  * @typedef {{ title: string, space: string, status: 'received' | 'act' | 'discuss', body: string }} NewDraft
@@ -270,6 +305,14 @@ const MEETINGS = '/meetings';
 const PEOPLE = '/people';
 /** The Asks room: his links that ask a few questions, each answer a thread of its own. */
 const ASKS = ASKS_PATH;
+/** A journal entry's address: a day or a week by its key's shape (an impossible day says "Nothing here" itself). */
+const ENTRY_PATH = /^\/journal\/(\d{4}-\d{2}-\d{2}|\d{4}-W\d{2})$/;
+/** One storyline's address, by its name's slug. */
+const STORYLINE_PATH = /^\/journal\/storylines\/([a-z0-9]+(?:-[a-z0-9]+)*)$/;
+/** How many days the storylines' trail shows, ending on the newest day any storyline moved. */
+const TRAIL_DAYS = 14;
+/** A storyline with no news for longer than this many days is drawn quiet. */
+const QUIET_DAYS = 5;
 /** The reader's own locale and zone, which every meeting is said in. */
 const LOCALE = undefined;
 const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -599,9 +642,67 @@ function meetingData(value) {
   return { when: value.when, minutes, where };
 }
 
-/** Whether a view is his alone: the Threads room, the people and the asks. @param {Route} route */
+/** Whether a view is his alone: the Threads room, the people, the asks and the journal. @param {Route} route */
 function isHis(route) {
-  return route.view === 'list' || route.view === 'people' || route.view === 'person' || route.view === 'asks';
+  const view = route.view;
+  return view === 'list' || view === 'people' || view === 'person' || view === 'asks' || view === 'journal' || view === 'entry' || view === 'storylines' || view === 'storyline';
+}
+
+/** The journal's view an address names, or null when it names none. @param {string} path @returns {Route | null} */
+function journalRoute(path) {
+  if (path === JOURNAL_PATH) return { view: 'journal' };
+  if (path === STORYLINES_PATH) return { view: 'storylines' };
+  const storyline = STORYLINE_PATH.exec(path);
+  if (storyline) return { view: 'storyline', slug: storyline[1] ?? '' };
+  const entry = ENTRY_PATH.exec(path);
+  return entry ? { view: 'entry', key: entry[1] ?? '' } : null;
+}
+
+/** Whether an address is one of the journal's. @param {string} address */
+function isJournalAddress(address) {
+  return journalRoute(address) !== null;
+}
+
+/** A day's date said for a key, in the reader's locale, the same for every zone. @param {string} key @param {Intl.DateTimeFormatOptions} parts */
+function keyWords(key, parts) {
+  return new Intl.DateTimeFormat(LOCALE, { timeZone: 'UTC', ...parts }).format(new Date(`${key}T12:00:00Z`));
+}
+
+/** "Thursday". @param {string} key */
+function weekdayWords(key) {
+  return keyWords(key, { weekday: 'long' });
+}
+
+/** "Thu". @param {string} key */
+function shortWeekday(key) {
+  return keyWords(key, { weekday: 'short' });
+}
+
+/** "T". @param {string} key */
+function narrowWeekday(key) {
+  return keyWords(key, { weekday: 'narrow' });
+}
+
+/** "6 November". @param {string} key */
+function longDay(key) {
+  return keyWords(key, { day: 'numeric', month: 'long' });
+}
+
+/** "Week 44". @param {string} week */
+function weekName(week) {
+  return `Week ${Number(week.slice(6))}`;
+}
+
+/** "Mon 26 Oct – Sun 1 Nov". @param {string} week */
+function weekSpan(week) {
+  const days = weekDays(week);
+  return `${dayWords(days[0] ?? week, LOCALE)} – ${dayWords(days[6] ?? week, LOCALE)}`;
+}
+
+/** A countdown said short: "today", "1 day", "6 days". @param {number} left */
+function shortLeft(left) {
+  if (left === 0) return 'today';
+  return `${left} ${left === 1 ? 'day' : 'days'}`;
 }
 
 /** @param {Location} at @returns {Route} */
@@ -614,6 +715,8 @@ function routeOf(at) {
   if (at.pathname === ME) return { view: 'today' };
   if (at.pathname === MEETINGS) return { view: 'meetings' };
   if (at.pathname === ASKS) return { view: 'asks' };
+  const journal = journalRoute(at.pathname);
+  if (journal) return journal;
   const ask = ASK_PATH.exec(at.pathname);
   if (ask) return { view: 'ask', slug: ask[1] ?? '' };
   const query = new URLSearchParams(at.search);
@@ -628,6 +731,10 @@ function pathOf(route, threads, people = []) {
   if (route.view === 'meetings') return MEETINGS;
   if (route.view === 'asks') return ASKS;
   if (route.view === 'ask') return `/ask/${route.slug}`;
+  if (route.view === 'journal') return JOURNAL_PATH;
+  if (route.view === 'entry') return entryPath(route.key);
+  if (route.view === 'storylines') return STORYLINES_PATH;
+  if (route.view === 'storyline') return `${STORYLINES_PATH}/${route.slug}`;
   if (route.view === 'people') return PEOPLE;
   if (route.view === 'person') {
     const someone = people.find((one) => one.number === route.number);
@@ -878,6 +985,22 @@ class Threads {
     this.asks = [];
     this.asksLoaded = false;
     this.asksFailed = false;
+    /** His journal: every entry's newest version, newest first, and every storyline's trail; whether they loaded or failed. @type {JournalEntry[]} */
+    this.journal = [];
+    /** @type {JournalTrail[]} */
+    this.trails = [];
+    this.journalLoaded = false;
+    this.journalFailed = false;
+    /** Entries read whole (their text, versions and answers), by key. @type {Map<string, JournalRead>} */
+    this.entries = new Map();
+    /** The keys no entry has, as the page last found. @type {Set<string>} */
+    this.entryMissing = new Set();
+    /** His hand edits, one per entry, each kept while he goes elsewhere and comes back; only Cancel or a save ends one. @type {Map<string, JournalEdit>} */
+    this.journalEdits = new Map();
+    /** Answers to a day's question as typed so far, by day, kept across a redraw. @type {Map<string, string>} */
+    this.answerDrafts = new Map();
+    /** Days whose answer box is open again over a kept answer (Change). @type {Set<string>} */
+    this.answerOpen = new Set();
     /** The ask a visitor answers at /ask/<slug>, as its public call answered it; null until it did. @type {AskShown | null} */
     this.askShown = null;
     /** The email a visitor gives an ask, kept for this visit only; their name is kept with their key. */
@@ -1026,6 +1149,7 @@ class Threads {
     if (inviting || (this.caller === 'member' && isHis(route))) history.replaceState(null, '', this.route.view === 'thread' ? location.pathname : ME);
     this.applyCaller();
     rememberSignedIn();
+    if (this.route.view === 'entry') void this.openEntry(this.route.key);
     if (this.member && this.missing !== null && (await this.tryPublic(route))) return;
     this.render();
   }
@@ -1054,8 +1178,9 @@ class Threads {
       const [pages, people] = await Promise.all([Promise.all(TABS.map((tab) => listAll(tab))), listPeople()]);
       this.threads = new Map(pages.flatMap((page) => page.threads).map((thread) => [thread.number, thread]));
       this.people = people;
-      // The asks load on their own, so a failed asks call leaves everything else working; Asks says it failed.
+      // The asks and the journal load on their own, so a failed call leaves everything else working; each room says it failed.
       void this.loadAsks();
+      void this.loadJournal();
     }
     this.loaded = true;
   }
@@ -1191,7 +1316,7 @@ class Threads {
     this.app.hidden = true;
     this.lost.hidden = false;
     const here = location.pathname;
-    const room = here === ME || here === MEETINGS || here === ASKS || isPeopleAddress(here);
+    const room = here === ME || here === MEETINGS || here === ASKS || isPeopleAddress(here) || isJournalAddress(here);
     const index = here === THREADS;
     this.signInLink.href = signInAddress(room || index || isThreadAddress(here) ? here : ME);
     if (room) {
@@ -1237,7 +1362,7 @@ class Threads {
     }
     if (error instanceof SignedOut) {
       const here = location.pathname;
-      const link = el('a', { href: signInAddress(here === ME || here === MEETINGS || here === ASKS || here === THREADS || isThreadAddress(here) || isPeopleAddress(here) ? here : ME) }, ['Sign in again']);
+      const link = el('a', { href: signInAddress(here === ME || here === MEETINGS || here === ASKS || here === THREADS || isThreadAddress(here) || isPeopleAddress(here) || isJournalAddress(here) ? here : ME) }, ['Sign in again']);
       this.banner.replaceChildren(icon('lock'), 'Your sign-in ended. Nothing you did was lost. ', link);
     } else {
       this.banner.replaceChildren(`${what} Check your connection and try again.`);
@@ -1299,6 +1424,15 @@ class Threads {
     }
     if (route.view === 'people') void this.loadPeople();
     if (route.view === 'asks') void this.loadAsks();
+    if (route.view === 'journal' || route.view === 'storylines' || route.view === 'storyline') void this.loadJournal();
+    if (route.view === 'entry') {
+      this.shown = null;
+      this.missing = null;
+      this.render();
+      this.main.scrollTop = 0;
+      await this.openEntry(route.key);
+      return;
+    }
     if (route.view !== 'thread') {
       this.shown = null;
       this.missing = null;
@@ -1329,8 +1463,25 @@ class Threads {
     void this.go({ view: 'thread', number });
   }
 
+  /** Reads an entry for its page, and draws it again while it is still the one shown. @param {string} key */
+  async openEntry(key) {
+    if (kindOf(key) === null) return;
+    try {
+      await this.loadEntry(key);
+    } catch (error) {
+      this.fail(error, "The page didn't load.");
+      return;
+    }
+    if (this.route.view === 'entry' && this.route.key === key) {
+      this.keepScroll = true;
+      this.render();
+    }
+  }
+
   back() {
-    if (this.route.view === 'person') void this.go({ view: 'people' });
+    if (this.route.view === 'entry' || this.route.view === 'storylines') void this.go({ view: 'journal' });
+    else if (this.route.view === 'storyline') void this.go({ view: 'storylines' });
+    else if (this.route.view === 'person') void this.go({ view: 'people' });
     else if (this.from === 'person' && this.fromPerson !== null) void this.go({ view: 'person', number: this.fromPerson });
     else if (this.from === 'meetings') void this.go({ view: 'meetings' });
     else if (this.from === 'asks') void this.go({ view: 'asks' });
@@ -1404,6 +1555,7 @@ class Threads {
   /** The thread a key acts on: the open one, or the selected row. */
   target() {
     if (this.route.view === 'thread') return this.shown?.thread ?? null;
+    if (this.inJournal()) return null;
     if (this.route.view === 'people' || this.route.view === 'person' || this.route.view === 'meetings' || this.route.view === 'asks') return this.route.view === 'meetings' && this.sel !== null ? (this.threads.get(this.sel) ?? null) : null;
     // A folded row is several people's answers, so the moves have nothing to act on; Enter opens the ask.
     if (this.route.view === 'today' && this.sel !== null && this.folded().some((entry) => entry.kind === 'fold' && entry.number === this.sel)) return null;
@@ -1412,7 +1564,7 @@ class Threads {
 
   /** @param {number} by */
   step(by) {
-    if (this.route.view === 'people' || this.route.view === 'person' || this.route.view === 'asks') return;
+    if (this.route.view === 'people' || this.route.view === 'person' || this.route.view === 'asks' || this.inJournal()) return;
     if (this.route.view === 'meetings') this.from = 'meetings';
     const list = this.walk();
     if (list.length === 0) return;
@@ -1463,6 +1615,23 @@ class Threads {
     } else if (this.route.view === 'asks') {
       this.main.replaceChildren(this.asksView());
       document.title = 'Asks · whysosuresh.com';
+    } else if (this.route.view === 'journal') {
+      this.main.replaceChildren(this.journalView());
+      document.title = 'Journal · whysosuresh.com';
+    } else if (this.route.view === 'entry') {
+      this.main.replaceChildren(this.entryView());
+      const title = this.entries.get(this.route.key)?.text.match(/^## (.+)$/m)?.[1];
+      document.title = `${title ?? 'Journal'} · Journal`;
+    } else if (this.route.view === 'storylines') {
+      this.main.replaceChildren(this.storylinesView());
+      // On a narrow screen the trail scrolls sideways; it opens on its newest days, where the news is.
+      const box = this.main.querySelector('.j-trail-box');
+      if (box instanceof HTMLElement) box.scrollLeft = box.scrollWidth;
+      document.title = 'Storylines · Journal';
+    } else if (this.route.view === 'storyline') {
+      this.main.replaceChildren(this.storylineView());
+      const slug = this.route.slug;
+      document.title = `${this.trails.find((trail) => storylineSlug(trail.name) === slug)?.name ?? 'Storylines'} · Journal`;
     } else if (this.route.view === 'meetings') {
       this.ensureSel();
       this.main.replaceChildren(this.meetingsView());
@@ -1527,6 +1696,8 @@ class Threads {
     const open = this.asks.filter((ask) => ask.state !== 'closed').length;
     const asksItem = el('a', { class: 't-nav-item', href: ASKS, 'data-go': 'asks' }, [icon('ask'), 'Asks', el('span', { class: 't-nav-count' }, [String(open)])]);
     if (view === 'asks') asksItem.setAttribute('aria-current', 'page');
+    const journalItem = el('a', { class: 't-nav-item', href: JOURNAL_PATH, 'data-go': 'journal' }, [icon('book'), 'Journal']);
+    if (this.inJournal()) journalItem.setAttribute('aria-current', 'page');
     if (view === 'today') todayItem.setAttribute('aria-current', 'page');
     if (view === 'list' && this.space === null) allItem.setAttribute('aria-current', 'page');
     const spaces = SPACES.map((space) => {
@@ -1539,26 +1710,27 @@ class Threads {
       return item;
     });
     // A space is a filter on the threads, so the five sit under Threads rather than beside the rooms.
-    this.nav.replaceChildren(todayItem, allItem, ...spaces, peopleItem, meetingsItem, asksItem);
+    this.nav.replaceChildren(todayItem, allItem, ...spaces, peopleItem, meetingsItem, asksItem, journalItem);
   }
 
   renderTabbar() {
-    const view = this.route.view === 'person' ? 'people' : this.route.view;
+    const view = this.route.view === 'person' ? 'people' : this.inJournal() ? 'journal' : this.route.view;
     for (const button of this.tabbar.querySelectorAll('[data-go], [data-act="more"]')) {
       if (!(button instanceof HTMLElement)) continue;
-      // People, Meetings and Asks sit under More on his bar, so More is where he is when he is in any of them.
-      const current = button.dataset.act === 'more' ? view === 'people' || view === 'meetings' || view === 'asks' : button.dataset.go === view;
+      // People, Meetings, Asks and Journal sit under More on his bar, so More is where he is when he is in any of them.
+      const current = button.dataset.act === 'more' ? view === 'people' || view === 'meetings' || view === 'asks' || view === 'journal' : button.dataset.go === view;
       if (current) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     }
   }
 
-  /** The rooms that don't fit on his phone's bar, in a sheet: People, Meetings and Asks. */
+  /** The rooms that don't fit on his phone's bar, in a sheet: People, Meetings, Asks and Journal. */
   openMore() {
     const picks = [
       el('a', { class: 't-pick', href: PEOPLE, 'data-go': 'people' }, [icon('person'), 'People']),
       el('a', { class: 't-pick', href: MEETINGS, 'data-go': 'meetings' }, [icon('cal'), 'Meetings']),
       el('a', { class: 't-pick', href: ASKS, 'data-go': 'asks' }, [icon('ask'), 'Asks']),
+      el('a', { class: 't-pick', href: JOURNAL_PATH, 'data-go': 'journal' }, [icon('book'), 'Journal']),
     ];
     this.openOverlay('more', 'More rooms', 'narrow', [this.sheetHead('More'), el('div', { class: 't-sheet-body' }, [el('div', { class: 't-pick-list' }, picks)])]);
     picks[0]?.focus();
@@ -1862,6 +2034,7 @@ class Threads {
         el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'new' }, [icon('plus'), 'New thread ', kbd('N')]),
       ]),
       ...this.nextMeetingCard('Next meeting'),
+      ...this.journalCard(),
       ...(waitingRows.length > 0
         ? [
             el('section', { class: 't-section' }, [
@@ -1877,6 +2050,589 @@ class Threads {
       section('New', fresh, [el('span', { class: 't-keys-hint' }, [kbd('A'), ' act · ', kbd('T'), ' talk · ', kbd('D'), ' drop'])], (thread) => this.rowLine(thread), 'All sorted.'),
       section('Sat a week', sat, ['still open, untouched for 7 days'], (thread) => `${ago(thread.activityAt)} in ${STATUS_NAMES[thread.status]}. Move it, or drop it.`, 'Nothing has sat a week.'),
     ]);
+  }
+
+  /** Whether the view is one of the journal's: the list, a day or a week, the storylines, or one storyline. */
+  inJournal() {
+    const view = this.route.view;
+    return view === 'journal' || view === 'entry' || view === 'storylines' || view === 'storyline';
+  }
+
+  /**
+   * The journal's index and every storyline's trail, and the latest day read whole for Today's card (its answers). A
+   * failure is the journal's own to say; an ended sign-in says so as everywhere.
+   */
+  async loadJournal() {
+    try {
+      const [entries, trails] = await Promise.all([listJournal(), journalStorylines()]);
+      this.journal = entries;
+      this.trails = trails;
+      const latest = this.latestDay();
+      if (latest !== null && this.entries.get(latest.key)?.newest !== latest.version) await this.loadEntry(latest.key);
+      this.journalFailed = false;
+    } catch (error) {
+      this.journalFailed = true;
+      if (error instanceof SignedOut || error instanceof NotShared) this.fail(error, '');
+    }
+    this.journalLoaded = true;
+    if (this.inJournal() || this.route.view === 'today') {
+      this.keepScroll = true;
+      this.render();
+    }
+  }
+
+  /** One entry read whole: its newest text, its versions and a day's answers; a key never written is remembered as missing. @param {string} key */
+  async loadEntry(key) {
+    try {
+      this.entries.set(key, await readJournal(key));
+      this.entryMissing.delete(key);
+    } catch (error) {
+      if (!(error instanceof Missing)) throw error;
+      this.entries.delete(key);
+      this.entryMissing.add(key);
+    }
+  }
+
+  /** The newest day in the journal, or null before the first. */
+  latestDay() {
+    return this.journal.find((entry) => entry.kind === 'day') ?? null;
+  }
+
+  /** Today in the reader's own zone, which every countdown counts from. */
+  today() {
+    return todayKey(Date.now(), ZONE);
+  }
+
+  /** The storylines still counting down today, soonest first. @returns {{ name: string, left: number }[]} */
+  countdowns() {
+    const today = this.today();
+    return this.trails
+      .flatMap((trail) => {
+        const count = countdownOn(trail.days, today);
+        return count === null ? [] : [{ name: trail.name, left: count.left }];
+      })
+      .sort((a, b) => a.left - b.left);
+  }
+
+  /** A journal page's inline runs as nodes: the site's own links open in place, any other in a new tab. @param {JournalInline[]} runs */
+  journalInline(runs) {
+    return runs.map((run) => {
+      if (run.type === 'strong') return el('strong', {}, [run.text]);
+      if (run.type === 'em') return el('em', {}, [run.text]);
+      if (run.type === 'link') return el('a', { href: run.href, target: '_blank', rel: 'noopener', class: 'j-out' }, [run.text]);
+      if (run.type === 'site') {
+        const thread = THREAD_PATH.exec(run.path);
+        if (thread) return el('a', { href: run.path, 'data-thread': thread[1] ?? '' }, [run.text]);
+        if (journalRoute(run.path) !== null) return el('a', { href: run.path, 'data-journal': run.path }, [run.text]);
+        return el('a', { href: run.path }, [run.text]);
+      }
+      return run.text;
+    });
+  }
+
+  /** A story's blocks, drawn: paragraphs, its quote, a list, and photos the sync uploaded (any other is its caption). @param {JournalBlock[]} blocks */
+  journalBlocks(blocks) {
+    return blocks.map((block) => {
+      if (block.type === 'quote') return el('blockquote', { class: 'j-quote' }, this.journalInline(block.inline));
+      if (block.type === 'list') return el('ul', { class: 'j-list' }, block.items.map((item) => el('li', {}, this.journalInline(item))));
+      if (block.type === 'photo') {
+        const caption = this.journalInline(block.caption);
+        if (block.id === null) return el('p', { class: 'j-caption' }, caption);
+        const words = block.caption.map((run) => run.text).join('');
+        return el('figure', { class: 'j-photo' }, [el('img', { src: journalPhoto(block.id), alt: words, loading: 'lazy' }), ...(words === '' ? [] : [el('figcaption', {}, caption)])]);
+      }
+      return el('p', {}, this.journalInline(block.inline));
+    });
+  }
+
+  /**
+   * A day's question with his typed answer: the answer kept, with Change, or a box to answer in, its words kept across
+   * a redraw. The newest answer is the answer, and an empty one took it back.
+   * @param {string} key @param {string} question @param {string} label
+   */
+  questionBox(key, question, label) {
+    const read = this.entries.get(key);
+    const last = read?.answers[read.answers.length - 1];
+    const answer = last !== undefined && last.body !== '' ? last : null;
+    const open = read !== undefined && (answer === null || this.answerOpen.has(key));
+    /** @type {Node[]} */
+    const parts = [el('div', { class: 'j-label' }, [label]), el('p', { class: 'j-q' }, [question])];
+    if (answer !== null && !open) {
+      parts.push(
+        el('div', { class: 'j-answered' }, [
+          el('p', {}, [answer.body]),
+          el('div', { class: 'j-answer-bar' }, [
+            el('span', { class: 't-hint' }, [`Your answer, ${ago(answer.createdAt)}. The next sync reads it.`]),
+            el('button', { type: 'button', class: 't-text-btn', 'data-act': 'journal-change', 'data-key': key }, ['Change']),
+          ]),
+        ]),
+      );
+    }
+    if (open) {
+      const box = el('textarea', { id: 'journal-answer', class: 'j-answer-box', 'data-key': key, rows: '3', 'aria-label': 'Your answer', placeholder: "If the recorder isn't to hand, answer here." });
+      if (box instanceof HTMLTextAreaElement) box.value = this.answerDrafts.get(key) ?? '';
+      parts.push(
+        el('form', { class: 'j-answer-form', 'data-submit': 'journal-answer', 'data-key': key }, [
+          box,
+          el('div', { class: 'j-answer-bar' }, [
+            el('span', { class: 't-hint' }, [kbd('⌘'), kbd('↵'), ' keeps it; the next sync reads it']),
+            el('span', { class: 'j-acts' }, [
+              ...(answer !== null ? [el('button', { type: 'button', class: 't-btn', 'data-act': 'journal-keep', 'data-key': key }, ['Cancel'])] : []),
+              el('button', { type: 'submit', class: 't-btn t-btn-primary' }, ['Keep the answer']),
+            ]),
+          ]),
+        ]),
+      );
+    }
+    return el('div', { class: 'j-question' }, parts);
+  }
+
+  /** Today's Journal card: the latest day's title and line, the countdowns, and its question with a box to answer it. */
+  journalCard() {
+    const latest = this.latestDay();
+    if (!this.journalLoaded || this.journalFailed || latest === null) return [];
+    const today = this.today();
+    const gap = daysBetween(latest.key, today);
+    const label = gap <= 0 ? "Today's page" : gap <= 6 ? `${weekdayWords(latest.key)}'s page` : `The page of ${longDay(latest.key)}`;
+    const counts = this.countdowns();
+    return [
+      el('div', { class: 'j-card', role: 'region', 'aria-label': 'Journal' }, [
+        el('div', { class: 'j-card-head' }, [
+          el('span', { class: 'j-label' }, [`Journal · ${label}`]),
+          el('a', { class: 'j-more', href: JOURNAL_PATH, 'data-go': 'journal' }, ['Every day']),
+        ]),
+        el('a', { class: 'j-card-title', href: entryPath(latest.key), 'data-journal': entryPath(latest.key) }, [latest.title]),
+        ...(latest.oneLine === null ? [] : [el('p', { class: 'j-card-line' }, [latest.oneLine])]),
+        ...(counts.length === 0
+          ? []
+          : [el('div', { class: 'j-counts' }, counts.map((count) => el('a', { class: 'j-pill', href: storylinePath(count.name), 'data-journal': storylinePath(count.name) }, [`${count.name} · ${shortLeft(count.left)}`])))]),
+        ...(latest.question === null ? [] : [this.questionBox(latest.key, latest.question, "Tonight's question")]),
+      ]),
+    ];
+  }
+
+  /**
+   * The journal's head: the list's, with the way to the storylines, or the storylines', with the way back.
+   * @param {'journal' | 'storylines'} room @param {string} line
+   */
+  journalHead(room, line) {
+    const other = room === 'journal' ? STORYLINES_PATH : JOURNAL_PATH;
+    return el('div', { class: 't-head' }, [
+      el('div', {}, [el('h1', { class: 'j-display' }, [room === 'journal' ? 'Journal' : 'Storylines']), el('p', {}, [line])]),
+      el('a', { class: 't-btn', href: other, 'data-journal': other }, [room === 'journal' ? 'Storylines' : 'Every day']),
+    ]);
+  }
+
+  /** Why the journal shows nothing: loading, failed, or empty. @returns {Node | null} */
+  journalState() {
+    if (!this.journalLoaded) return el('div', { class: 't-empty' }, ['Loading the journal…']);
+    if (this.journalFailed) return el('div', { class: 't-empty' }, ["The journal didn't load. Check your connection and try again."]);
+    if (this.journal.length === 0) return el('div', { class: 't-empty' }, ['Nothing yet. The recorder sync writes each day here.']);
+    return null;
+  }
+
+  /** The journal: every day as its title and line, week by week, newest first, a finished week's chapter opening its group. */
+  journalView() {
+    const empty = this.journalState();
+    const head = this.journalHead('journal', 'Every day, as the recorder told it. Only you can read it.');
+    if (empty !== null) return el('div', { class: 't-wrap j-wrap' }, [head, empty]);
+    /** @type {Map<string, { chapter: JournalEntry | null, days: JournalEntry[] }>} */
+    const weeks = new Map();
+    for (const entry of this.journal) {
+      const week = entry.kind === 'week' ? entry.key : weekOf(entry.key);
+      const group = weeks.get(week) ?? { chapter: null, days: [] };
+      if (entry.kind === 'week') group.chapter = entry;
+      else group.days.push(entry);
+      weeks.set(week, group);
+    }
+    const groups = [...weeks.entries()].map(([week, group]) =>
+      el('section', { class: 'j-week' }, [
+        el('div', { class: 'j-week-head' }, [el('h2', {}, [weekName(week)]), el('span', { class: 't-hint' }, [weekSpan(week)])]),
+        ...(group.chapter === null
+          ? []
+          : [
+              el('a', { class: 'j-chapter', href: entryPath(group.chapter.key), 'data-journal': entryPath(group.chapter.key) }, [
+                el('span', { class: 'j-label' }, ['The week']),
+                el('span', { class: 'j-chapter-title' }, [group.chapter.title.replace(/^Week \d+\s*·\s*/, '')]),
+              ]),
+            ]),
+        el('div', { class: 'j-days' }, group.days.map((day) => this.dayRow(day))),
+      ]),
+    );
+    return el('div', { class: 't-wrap j-wrap' }, [head, ...groups]);
+  }
+
+  /** One day in the list: its date, its title, its line, and how many stories and photos. @param {JournalEntry} day */
+  dayRow(day) {
+    const meta = [`${day.stories} ${day.stories === 1 ? 'story' : 'stories'}`, ...(day.photos > 0 ? [`${day.photos} ${day.photos === 1 ? 'photo' : 'photos'}`] : [])].join(' · ');
+    return el('a', { class: 'j-day-row', href: entryPath(day.key), 'data-journal': entryPath(day.key) }, [
+      el('span', { class: 'j-day-date' }, [shortWeekday(day.key), el('b', {}, [String(Number(day.key.slice(8)))])]),
+      el('span', { class: 'j-day-main' }, [el('span', { class: 'j-day-title' }, [day.title]), ...(day.oneLine === null ? [] : [el('span', { class: 'j-day-line' }, [day.oneLine])])]),
+      el('span', { class: 'j-day-meta' }, [meta]),
+    ]);
+  }
+
+  /** "Nothing here", for a key no entry has, or a storyline no day names. @param {string} back @param {string} label */
+  journalMissing(back, label) {
+    return el('div', { class: 't-wrap j-wrap' }, [
+      el('div', { class: 't-head' }, [el('div', {}, [el('h1', {}, ['Nothing here']), el('p', {}, ['The journal has no page at this address.'])])]),
+      el('a', { class: 't-btn', href: back, 'data-journal': back }, [label]),
+    ]);
+  }
+
+  /** A day or a week, read: the card, the stories and the close, or the chapter and its days; Edit opens the whole text. */
+  entryView() {
+    if (this.route.view !== 'entry') return el('div');
+    const key = this.route.key;
+    const read = this.entries.get(key);
+    if (kindOf(key) === null || (this.entryMissing.has(key) && read === undefined)) return this.journalMissing(JOURNAL_PATH, 'Back to the journal');
+    if (read === undefined) return el('div', { class: 't-wrap j-wrap' }, [el('div', { class: 't-empty' }, ['Loading…'])]);
+    const editing = this.journalEdits.get(key);
+    if (editing !== undefined) return this.journalEditor(read, editing);
+    const page = parsePage(read.text);
+    const week = read.kind === 'week';
+    const crumbs = el('div', { class: 'j-crumbs' }, [
+      el('span', {}, [
+        el('a', { href: JOURNAL_PATH, 'data-journal': JOURNAL_PATH }, ['Journal']),
+        ...(week ? [] : [' · ', el('a', { href: this.journal.some((entry) => entry.key === weekOf(key)) ? entryPath(weekOf(key)) : JOURNAL_PATH, 'data-journal': this.journal.some((entry) => entry.key === weekOf(key)) ? entryPath(weekOf(key)) : JOURNAL_PATH }, [weekName(weekOf(key))])]),
+      ]),
+      el('span', { class: 'j-crumbs-right' }, [
+        el('span', {}, [`Version ${read.version} · ${read.actor === 'owner' ? 'yours' : 'the sync'}, ${ago(read.savedAt)}`]),
+        el('button', { type: 'button', class: 't-text-btn', 'data-act': 'journal-edit' }, [icon('pen'), 'Edit']),
+      ]),
+    ]);
+    if (page === null) return el('div', { class: 't-wrap j-wrap' }, [el('article', { class: 'j-page' }, [crumbs, el('pre', { class: 'j-raw' }, [read.text])])]);
+    /** @type {Node[]} */
+    const card = [el('h1', { class: 'j-title' }, [page.title])];
+    if (page.subtitle !== null) card.push(el('p', { class: 'j-sub' }, [page.subtitle]));
+    if (page.oneLine !== null) card.push(el('p', { class: 'j-one' }, [page.oneLine]));
+    if (page.contents.length > 0 && page.stories.length > 1) {
+      card.push(
+        el(
+          'ol',
+          { class: 'j-toc' },
+          page.contents.map((line, i) =>
+            el('li', {}, [
+              el('button', { type: 'button', class: 'j-toc-item', 'data-act': 'journal-jump', 'data-story': String(i) }, [
+                el('span', { class: 'j-toc-when' }, [line.when ?? '']),
+                el('span', { class: 'j-toc-what' }, [line.title]),
+              ]),
+            ]),
+          ),
+        ),
+      );
+    }
+    const margin = this.marginRows(page);
+    if (margin.length > 0) card.push(el('div', { class: 'j-margin' }, margin));
+    /** @type {Node[]} */
+    const body = [];
+    if (week) body.push(el('div', { class: 'j-story' }, this.journalBlocks(page.body)));
+    page.stories.forEach((story, i) => {
+      body.push(el('div', { class: 'j-sep', 'aria-hidden': 'true' }, ['· · ·']));
+      body.push(
+        el('section', { class: 'j-story', 'data-story': String(i) }, [
+          ...(story.title === null ? [] : [el('h2', {}, [story.title])]),
+          ...(story.when === null ? [] : [el('p', { class: 'j-when' }, [story.when])]),
+          ...this.journalBlocks(story.blocks),
+        ]),
+      );
+    });
+    const close = this.closeOf(key, page, week);
+    if (close.length > 0) body.push(el('div', { class: 'j-sep', 'aria-hidden': 'true' }, ['· · ·']), el('div', { class: 'j-close' }, close));
+    if (week) {
+      const days = this.journal.filter((entry) => entry.kind === 'day' && weekOf(entry.key) === key);
+      if (days.length > 0) body.push(el('section', { class: 'j-week' }, [el('div', { class: 'j-week-head' }, [el('h2', {}, ['The days'])]), el('div', { class: 'j-days' }, days.map((day) => this.dayRow(day)))]));
+    }
+    return el('div', { class: 't-wrap j-wrap' }, [el('article', { class: 'j-page' }, [crumbs, ...card, ...body, this.pager(key)])]);
+  }
+
+  /** The margin: people (each opens their page when the name is one person's), wins, storylines, and a week's own lines. @param {JournalPage} page */
+  marginRows(page) {
+    /** @param {string} label @param {(Node | string)[]} value */
+    const row = (label, value) => el('div', { class: 'j-margin-row' }, [el('span', { class: 'j-label' }, [label]), el('span', { class: 'j-margin-value' }, value)]);
+    /** @type {Node[]} */
+    const rows = [];
+    if (page.people.length > 0) {
+      rows.push(
+        row('People', [
+          el(
+            'span',
+            { class: 'j-chips' },
+            page.people.map((name) => {
+              const matches = this.people.filter((one) => (one.name ?? '').trim().toLowerCase() === name.trim().toLowerCase());
+              const one = matches.length === 1 ? matches[0] : undefined;
+              return one === undefined ? el('span', { class: 'j-chip' }, [name]) : el('a', { class: 'j-chip', href: personPath(one), 'data-person': String(one.number) }, [name]);
+            }),
+          ),
+        ]),
+      );
+    }
+    if (page.wins.length > 0) rows.push(row('Wins', [page.wins.join(' · ')]));
+    if (page.storylines.length > 0) {
+      const today = this.today();
+      rows.push(
+        row('Storylines', [
+          el(
+            'span',
+            { class: 'j-lines' },
+            page.storylines.map((line) => {
+              const trail = this.trails.find((one) => one.name === line.name);
+              const count = trail === undefined ? null : countdownOn(trail.days, today);
+              return el('a', { class: 'j-line', href: storylinePath(line.name), 'data-journal': storylinePath(line.name), ...(line.mark === null ? {} : { 'data-mark': line.mark }) }, [
+                el('b', {}, [line.name, ...(line.mark === null ? [] : [el('small', {}, [` ${line.mark}`])])]),
+                el('span', { class: 'j-line-state' }, [line.state]),
+                ...(count === null ? [] : [el('span', { class: 'j-pill' }, [shortLeft(count.left)])]),
+              ]);
+            }),
+          ),
+        ]),
+      );
+    }
+    if (page.quiet !== null) rows.push(row('Quiet', [page.quiet]));
+    for (const note of page.notes) rows.push(row(note.label, [note.text]));
+    return rows;
+  }
+
+  /** A day's close (sitting with, still asking, the question with its answer, what came of it, the note), or a week's ahead. @param {string} key @param {JournalPage} page @param {boolean} week */
+  closeOf(key, page, week) {
+    /** @type {Node[]} */
+    const close = [];
+    /** @param {string} label @param {string} words */
+    const said = (label, words) => el('div', {}, [el('div', { class: 'j-label' }, [label]), el('p', { class: 'j-said' }, [words])]);
+    if (page.sittingWith !== null) close.push(said('Sitting with', page.sittingWith));
+    if (page.stillAsking !== null) close.push(said('Still asking', page.stillAsking));
+    if (page.question !== null && !week) close.push(this.questionBox(key, page.question, "Tomorrow's question"));
+    if (page.weekAhead !== null) close.push(said('The week ahead', page.weekAhead));
+    if (page.arrows.length > 0) close.push(el('div', {}, [el('div', { class: 'j-label' }, ['What came of it']), el('ul', { class: 'j-made' }, page.arrows.map((runs) => el('li', {}, this.journalInline(runs))))]));
+    if (page.note !== null) close.push(el('p', { class: 'j-note' }, [page.note]));
+    return close;
+  }
+
+  /** The previous and next entry of the same kind. @param {string} key */
+  pager(key) {
+    const kind = kindOf(key);
+    const same = this.journal.filter((entry) => entry.kind === kind);
+    const at = same.findIndex((entry) => entry.key === key);
+    const newer = at > 0 ? same[at - 1] : undefined;
+    const older = at >= 0 ? same[at + 1] : undefined;
+    /** @param {JournalEntry | undefined} entry @param {string} label */
+    const link = (entry, label) =>
+      entry === undefined ? el('span') : el('a', { href: entryPath(entry.key), 'data-journal': entryPath(entry.key) }, [label, el('b', {}, [entry.title])]);
+    return el('nav', { class: 'j-pager', 'aria-label': 'Days' }, [link(older, '← Earlier'), link(newer, 'Later →')]);
+  }
+
+  /** His hand edit: the entry's whole text in one box, saved on the version it was opened at. @param {JournalRead} read @param {JournalEdit} editing */
+  journalEditor(read, editing) {
+    const box = el('textarea', { id: 'journal-edit', class: 'j-edit-box', spellcheck: 'true', 'aria-label': 'The page' });
+    if (box instanceof HTMLTextAreaElement) box.value = editing.text;
+    return el('div', { class: 't-wrap j-wrap' }, [
+      el('form', { class: 'j-page', 'data-submit': 'journal-edit' }, [
+        el('div', { class: 'j-crumbs' }, [
+          el('span', {}, [el('a', { href: JOURNAL_PATH, 'data-journal': JOURNAL_PATH, title: 'Your words stay here until you save or cancel' }, ['← Journal'])]),
+          el('span', {}, [`Opened at version ${editing.base}`]),
+        ]),
+        el('h1', { class: 'j-edit-title' }, [`Editing ${parsePage(read.text)?.title ?? read.key}`]),
+        ...(editing.stale
+          ? [
+              el('div', { class: 'j-stale', role: 'alert' }, [
+                'The sync changed this day since you opened it. Copy your change, reload, and paste it in. ',
+                el('button', { type: 'button', class: 't-text-btn', 'data-act': 'journal-reload' }, ['Reload']),
+              ]),
+            ]
+          : []),
+        ...(editing.problem === '' ? [] : [el('div', { class: 'j-stale', role: 'alert' }, [editing.problem])]),
+        box,
+        el('div', { class: 'j-edit-bar' }, [
+          el('span', { class: 't-hint' }, [kbd('⌘'), kbd('↵'), ' saves · your words stay until you save or cancel']),
+          el('span', { class: 'j-acts' }, [
+            el('button', { type: 'button', class: 't-btn', 'data-act': 'journal-cancel' }, ['Cancel']),
+            el('button', { type: 'submit', class: 't-btn t-btn-primary', ...(editing.busy ? { disabled: '' } : {}) }, [editing.busy ? 'Saving…' : 'Save']),
+          ]),
+        ]),
+        el('dl', { class: 'j-grammar' }, [
+          ...[
+            ['## Title', 'the day, with its italic line under it'],
+            ['### Story', 'a story, with its own italic when'],
+            ['· · ·', 'between the card, each story and the close'],
+            ['> words', 'the quote of a story'],
+            ['**Label:** …', 'a margin line: People, Wins, Storyline · name, Sitting with'],
+            ['![caption](photo:…)', 'a photo the sync uploaded'],
+          ].flatMap(([form, means]) => [el('dt', {}, [el('code', {}, [form ?? ''])]), el('dd', {}, [means ?? ''])]),
+        ]),
+      ]),
+    ]);
+  }
+
+  /** The storylines: every trail across the last two weeks of days, quiet ones greyed after five days with no news. */
+  storylinesView() {
+    const empty = this.journalState();
+    const head = this.journalHead('storylines', 'Every storyline, and the days it moved.');
+    if (empty !== null) return el('div', { class: 't-wrap j-wrap' }, [head, empty]);
+    if (this.trails.length === 0) return el('div', { class: 't-wrap j-wrap' }, [head, el('div', { class: 't-empty' }, ['No storyline yet. A day names one in its margin.'])]);
+    const today = this.today();
+    const last = this.trails.reduce((latest, trail) => (trail.last > latest ? trail.last : latest), '');
+    const days = Array.from({ length: TRAIL_DAYS }, (_, i) => addJournalDays(last, i - TRAIL_DAYS + 1));
+    const rows = this.trails.map((trail) => {
+      const touched = new Map(trail.days.map((touch) => [touch.key, touch]));
+      const count = countdownOn(trail.days, today);
+      const quiet = trail.mark === 'closed' || daysBetween(trail.last, today) > QUIET_DAYS;
+      return el('tr', quiet ? { 'data-quiet': '' } : {}, [
+        el('th', { scope: 'row', class: 'j-trail-name' }, [el('a', { href: storylinePath(trail.name), 'data-journal': storylinePath(trail.name) }, [trail.name])]),
+        ...days.map((day) => {
+          const touch = touched.get(day);
+          return el('td', { class: 'j-trail-cell' }, [touch === undefined ? el('span', { class: 'j-none' }) : el('span', { class: 'j-dot', title: touch.state, ...(touch.mark === null ? {} : { 'data-mark': touch.mark }) })]);
+        }),
+        el('td', { class: 'j-trail-state' }, [trail.state, ...(count === null ? [] : [' ', el('span', { class: 'j-pill' }, [shortLeft(count.left)])])]),
+      ]);
+    });
+    return el('div', { class: 't-wrap j-wrap' }, [
+      head,
+      el('div', { class: 'j-trail-box' }, [
+        el('table', { class: 'j-trail' }, [
+          el('thead', {}, [el('tr', {}, [el('th', { scope: 'col' }, ['Storyline']), ...days.map((day) => el('th', { scope: 'col' }, [narrowWeekday(day), el('br'), String(Number(day.slice(8)))])), el('th', { scope: 'col' }, ['Where it stands'])])]),
+          el('tbody', {}, rows),
+        ]),
+      ]),
+      el('p', { class: 'j-legend' }, [el('span', { class: 'j-dot' }), ' moved that day · ', el('span', { class: 'j-dot', 'data-mark': 'new' }), ' new · ', el('span', { class: 'j-dot', 'data-mark': 'closed' }), ` closed · grey: no news for ${QUIET_DAYS} days`]),
+    ]);
+  }
+
+  /** One storyline: its countdown, then every day it touched, oldest first, with what each day said. */
+  storylineView() {
+    if (this.route.view !== 'storyline') return el('div');
+    const empty = this.journalState();
+    if (empty !== null) return el('div', { class: 't-wrap j-wrap' }, [this.journalHead('storylines', ''), empty]);
+    const slug = this.route.slug;
+    const trail = this.trails.find((one) => storylineSlug(one.name) === slug);
+    if (trail === undefined) return this.journalMissing(STORYLINES_PATH, 'Every storyline');
+    const count = countdownOn(trail.days, this.today());
+    return el('div', { class: 't-wrap j-wrap' }, [
+      el('article', { class: 'j-page' }, [
+        el('div', { class: 'j-crumbs' }, [el('span', {}, [el('a', { href: STORYLINES_PATH, 'data-journal': STORYLINES_PATH }, ['Storylines'])])]),
+        el('h1', { class: 'j-title' }, [trail.name]),
+        el('p', { class: 'j-sub' }, [`${trail.days.length} ${trail.days.length === 1 ? 'day' : 'days'}, from ${longDay(trail.first)}${trail.mark === 'closed' ? `, closed on ${longDay(trail.last)}` : ''}`]),
+        ...(count === null ? [] : [el('p', { class: 'j-big' }, [shortLeft(count.left), el('small', {}, [` to ${longDay(count.target)}`])])]),
+        el(
+          'ol',
+          { class: 'j-touches' },
+          trail.days.map((touch) => {
+            const target = countdownTarget(touch.state, touch.key);
+            return el('li', touch.mark === null ? {} : { 'data-mark': touch.mark }, [
+              el('div', { class: 'j-touch-day' }, [el('a', { href: entryPath(touch.key), 'data-journal': entryPath(touch.key) }, [longDay(touch.key)]), ...(touch.mark === null ? [] : [' · ', touch.mark])]),
+              el('div', { class: 'j-touch-state' }, [touch.state]),
+              ...(target === null ? [] : [el('div', { class: 't-hint' }, [`counts down to ${longDay(target)}`])]),
+            ]);
+          }),
+        ),
+      ]),
+    ]);
+  }
+
+  /** Opens his hand edit of the entry shown, from its newest text, or the words he was writing when he left it. */
+  startJournalEdit() {
+    if (this.route.view !== 'entry') return;
+    const read = this.entries.get(this.route.key);
+    if (read === undefined) return;
+    if (!this.journalEdits.has(read.key)) this.journalEdits.set(read.key, { key: read.key, base: read.newest, text: read.text, stale: false, busy: false, problem: '' });
+    this.render();
+    const box = this.main.querySelector('#journal-edit');
+    if (box instanceof HTMLTextAreaElement) box.focus();
+  }
+
+  /** Saves his hand edit on the version it was opened at; a save the sync overtook keeps his words in the box. */
+  async saveJournalEdit() {
+    const editing = this.route.view === 'entry' ? this.journalEdits.get(this.route.key) : undefined;
+    if (editing === undefined || editing.busy) return;
+    editing.busy = true;
+    editing.stale = false;
+    editing.problem = '';
+    this.keepScroll = true;
+    this.render();
+    /** @type {number} */
+    let version;
+    try {
+      version = await saveJournal(editing.key, editing.text, editing.base);
+    } catch (error) {
+      editing.busy = false;
+      if (error instanceof Failed && error.message === 'stale') editing.stale = true;
+      else if (error instanceof Failed && error.message === 'journal') editing.problem = 'This page needs a "## " title on its first line, and must be under 64,000 characters.';
+      else if (error instanceof Failed && error.message === 'photo') editing.problem = "A photo on this page isn't one the sync uploaded. Keep each photo line as it was.";
+      else this.fail(error, "The page wasn't saved. Your words are still in the box.");
+      this.keepScroll = true;
+      this.render();
+      return;
+    }
+    // Saved: the draft ends here, whatever the read after it does.
+    this.journalEdits.delete(editing.key);
+    this.say(`Saved as version ${version}`, null);
+    try {
+      await this.loadEntry(editing.key);
+    } catch (error) {
+      this.fail(error, `Saved as version ${version}, but the page didn't load again.`);
+    }
+    void this.loadJournal();
+    this.keepScroll = true;
+    this.render();
+  }
+
+  /** After a refused save: the day as the sync left it, opened again in the box, once he has copied his change. */
+  async reloadJournalEdit() {
+    const editing = this.route.view === 'entry' ? this.journalEdits.get(this.route.key) : undefined;
+    if (editing === undefined) return;
+    try {
+      await this.loadEntry(editing.key);
+    } catch (error) {
+      this.fail(error, "The day didn't load.");
+      return;
+    }
+    const read = this.entries.get(editing.key);
+    if (read === undefined) this.journalEdits.delete(editing.key);
+    else this.journalEdits.set(read.key, { key: read.key, base: read.newest, text: read.text, stale: false, busy: false, problem: '' });
+    this.keepScroll = true;
+    this.render();
+  }
+
+  /**
+   * Keeps his typed answer to a day's question: shown at once, with Undo, which brings back the answer before it (or
+   * none), since every answer is kept and the newest is the answer.
+   * @param {string} key
+   */
+  async saveJournalAnswer(key) {
+    const body = (this.answerDrafts.get(key) ?? '').trim();
+    const read = this.entries.get(key);
+    if (body === '' || read === undefined) return;
+    const before = read.answers[read.answers.length - 1]?.body ?? '';
+    this.entries.set(key, { ...read, answers: [...read.answers, { id: 0, body, createdAt: new Date().toISOString() }] });
+    this.answerDrafts.delete(key);
+    this.answerOpen.delete(key);
+    this.keepScroll = true;
+    this.render();
+    try {
+      await answerJournal(key, body);
+      await this.loadEntry(key);
+    } catch (error) {
+      this.entries.set(key, read);
+      this.answerDrafts.set(key, body);
+      this.answerOpen.add(key);
+      this.keepScroll = true;
+      this.render();
+      this.fail(error, "Your answer wasn't kept.");
+      return;
+    }
+    this.keepScroll = true;
+    this.render();
+    this.say('Answer kept', async () => {
+      try {
+        await answerJournal(key, before);
+        await this.loadEntry(key);
+      } catch (error) {
+        this.fail(error, "The answer wasn't put back.");
+        return;
+      }
+      this.keepScroll = true;
+      this.render();
+      this.say('Undone', null);
+    });
   }
 
   /** An invited person's home: the threads shared with them, most recently active first. */
@@ -3821,6 +4577,8 @@ class Threads {
           { label: 'Go to people', hay: 'people person everyone who', key: '', run: () => void this.go({ view: 'people' }) },
           { label: 'Go to Meetings', hay: 'meetings calendar when', key: '', run: () => void this.go({ view: 'meetings' }) },
           { label: 'Go to Asks', hay: 'asks forms questions links answers', key: '', run: () => void this.go({ view: 'asks' }) },
+          { label: 'Go to Journal', hay: 'journal days diary story stories today page', key: '', run: () => void this.go({ view: 'journal' }) },
+          { label: 'Go to Storylines', hay: 'storylines journal countdown trail', key: '', run: () => void this.go({ view: 'storylines' }) },
           { label: 'New thread', hay: 'new thread start create', key: 'N', run: () => this.openNew({ title: words !== '' && !/^#?\d+$/.test(words) ? words : '' }) },
           { label: 'Show the keys', hay: 'keys keyboard shortcuts help', key: '?', run: () => this.openKeys() },
         ];
@@ -4858,7 +5616,7 @@ class Threads {
       this.onPublicClick(target);
       return;
     }
-    const link = target.closest('a[data-thread], a[data-go], a[data-space], a[data-tab], a[data-person]');
+    const link = target.closest('a[data-thread], a[data-go], a[data-space], a[data-tab], a[data-person], a[data-journal]');
     if (link instanceof HTMLAnchorElement && !wantsNewTab(event)) {
       event.preventDefault();
       if (link.dataset.thread !== undefined) {
@@ -4870,6 +5628,10 @@ class Threads {
         }
         this.openThread(Number(link.dataset.thread));
       } else if (link.dataset.person !== undefined) void this.go({ view: 'person', number: Number(link.dataset.person) });
+      else if (link.dataset.journal !== undefined) {
+        const route = journalRoute(link.dataset.journal);
+        if (route !== null) void this.go(route);
+      } else if (link.dataset.go === 'journal') void this.go({ view: 'journal' });
       else if (link.dataset.go === 'people') void this.go({ view: 'people' });
       else if (link.dataset.go === 'meetings') void this.go({ view: 'meetings' });
       else if (link.dataset.go === 'asks') void this.go({ view: 'asks' });
@@ -4894,10 +5656,10 @@ class Threads {
       return;
     }
     if (!(button instanceof HTMLElement)) return;
-    if (button.dataset.go === 'today' || button.dataset.go === 'list' || button.dataset.go === 'people' || button.dataset.go === 'meetings' || button.dataset.go === 'asks') {
+    if (button.dataset.go === 'today' || button.dataset.go === 'list' || button.dataset.go === 'people' || button.dataset.go === 'meetings' || button.dataset.go === 'asks' || button.dataset.go === 'journal') {
       event.preventDefault();
       const go = button.dataset.go;
-      void this.go(go === 'today' ? { view: 'today' } : go === 'people' ? { view: 'people' } : go === 'meetings' ? { view: 'meetings' } : go === 'asks' ? { view: 'asks' } : { view: 'list', tab: this.tab, space: this.space });
+      void this.go(go === 'today' ? { view: 'today' } : go === 'people' ? { view: 'people' } : go === 'meetings' ? { view: 'meetings' } : go === 'asks' ? { view: 'asks' } : go === 'journal' ? { view: 'journal' } : { view: 'list', tab: this.tab, space: this.space });
       return;
     }
     const thread = this.target();
@@ -4905,6 +5667,38 @@ class Threads {
       case 'find':
         this.openFind();
         break;
+      case 'journal-edit':
+        this.startJournalEdit();
+        break;
+      case 'journal-cancel':
+        if (this.route.view === 'entry') this.journalEdits.delete(this.route.key);
+        this.render();
+        break;
+      case 'journal-reload':
+        void this.reloadJournalEdit();
+        break;
+      case 'journal-jump':
+        this.main.querySelector(`.j-story[data-story="${button.dataset.story ?? ''}"]`)?.scrollIntoView({ block: 'start' });
+        break;
+      case 'journal-change': {
+        const key = button.dataset.key ?? '';
+        const read = this.entries.get(key);
+        this.answerOpen.add(key);
+        if (!this.answerDrafts.has(key)) this.answerDrafts.set(key, read?.answers[read.answers.length - 1]?.body ?? '');
+        this.keepScroll = true;
+        this.render();
+        const box = this.main.querySelector('#journal-answer');
+        if (box instanceof HTMLTextAreaElement) box.focus();
+        break;
+      }
+      case 'journal-keep': {
+        const key = button.dataset.key ?? '';
+        this.answerOpen.delete(key);
+        this.answerDrafts.delete(key);
+        this.keepScroll = true;
+        this.render();
+        break;
+      }
       case 'new':
         this.openNew();
         break;
@@ -5231,6 +6025,11 @@ class Threads {
     }
     else if (target.id.startsWith('share-')) this.readShare();
     else if (target.id === 'person-note' && target instanceof HTMLTextAreaElement) this.personDraft = target.value;
+    else if (target.id === 'journal-edit' && target instanceof HTMLTextAreaElement && this.route.view === 'entry') {
+      const editing = this.journalEdits.get(this.route.key);
+      if (editing !== undefined) editing.text = target.value;
+    }
+    else if (target.id === 'journal-answer' && target instanceof HTMLTextAreaElement) this.answerDrafts.set(target.dataset.key ?? '', target.value);
     else if (target.id === 'person-email' && target instanceof HTMLInputElement) {
       this.personAddress = target.value;
       this.personProblem = null;
@@ -5274,6 +6073,11 @@ class Threads {
     if (kind === 'person-note') void this.savePersonNote();
     if (kind === 'person-name') void this.savePersonName();
     if (kind === 'person-email') void this.savePersonEmail();
+    if (kind === 'journal-edit') void this.saveJournalEdit();
+    if (kind === 'journal-answer') {
+      const box = this.main.querySelector('#journal-answer');
+      if (box instanceof HTMLTextAreaElement) void this.saveJournalAnswer(box.dataset.key ?? '');
+    }
   }
 
   /** @param {KeyboardEvent} event */
@@ -5349,7 +6153,8 @@ class Threads {
         this.keepScroll = true;
         this.render();
       } else if (typing && target instanceof HTMLElement) target.blur();
-      else if (this.route.view === 'thread' || this.route.view === 'person') {
+      // From an edit, Esc goes back to the journal and keeps the words: the edit opens again where he left it.
+      else if (this.route.view === 'thread' || this.route.view === 'person' || this.route.view === 'entry' || this.route.view === 'storyline' || this.route.view === 'storylines') {
         event.preventDefault();
         this.back();
       }
@@ -5413,10 +6218,10 @@ class Threads {
         this.step(-1);
         break;
       case 'open':
-        if (this.route.view !== 'thread' && this.sel !== null) this.openThread(this.sel);
+        if (this.route.view !== 'thread' && !this.inJournal() && this.sel !== null) this.openThread(this.sel);
         break;
       case 'back':
-        if (this.route.view === 'thread' || this.route.view === 'person') this.back();
+        if (this.route.view === 'thread' || this.route.view === 'person' || this.route.view === 'entry' || this.route.view === 'storyline' || this.route.view === 'storylines') this.back();
         break;
       case 'tab-look':
       case 'tab-act':
@@ -5466,6 +6271,7 @@ class Threads {
       case 'edit':
         if (this.route.view === 'thread' && thread) this.startEdit(thread);
         if (this.route.view === 'person') this.startPersonEdit('name');
+        if (this.route.view === 'entry') this.startJournalEdit();
         break;
       case 'reply':
         if (this.route.view === 'thread' && thread && canReply(thread)) this.startReply(thread);

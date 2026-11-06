@@ -4,7 +4,8 @@
 // people pages, /people and /people/<n> with the person's name after it or not (/people/7-meera), which read nothing:
 // the asks, /asks, which reads nothing either; an ask's own address, /ask/<slug>, which anyone opens to answer it;
 // a person's address gets the plain shell whatever the number, so it never says whether that person exists; and a
-// thread, /threads/<n>, with its title after the number or not (/threads/42-who-owns-what). People lived under
+// thread, /threads/<n>, with its title after the number or not (/threads/42-who-owns-what); and Suresh's journal, /journal with a day, a week or the storylines under it,
+// which reads nothing either. People lived under
 // /threads/ before the rooms were peers: /threads/people and every person's address there redirect to /people for
 // good, and /people/ to /people, as /me/ does to /me. Each gets the one page, site/threads/index.html,
 // handed over from the site's own files through the assets binding, so it carries site/_headers (the CSP among
@@ -36,9 +37,11 @@ import { findAsk, publicPreview, type PreviewRow } from "./store.ts";
 
 /**
  * /me, the meetings, the asks, everyone and a person by their number, the list, a thread by its number with any title
- * after it, and an ask by its slug.
+ * after it, an ask by its slug, and the journal's (his alone, drawn only once the calls say he is the owner): the list,
+ * a day or a week by its key, the storylines and one storyline by its name's slug. A key is matched by its shape, so an
+ * impossible day gets the shell like any other and says "Nothing here" itself.
  */
-const PAGE = /^(?:\/me|\/meetings|\/asks|\/people(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?)?|\/ask\/([^/]+))$/;
+const PAGE = /^(?:\/me|\/meetings|\/asks|\/journal(?:\/(?:\d{4}-\d{2}-\d{2}|\d{4}-W\d{2}|storylines(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?))?|\/people(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?)?|\/ask\/([^/]+))$/;
 
 /** What an ask's preview says beside its title, the same for every ask. */
 export const ASK_DESCRIPTION = "A few questions from Suresh";
@@ -47,6 +50,8 @@ const UNTITLED_ASK = "Questions from Suresh";
 
 /** People's addresses from before the rooms, everyone and a person with anything after the number, and /people/. */
 const OLD_PEOPLE = /^\/threads\/people(?:\/((?:[1-9]\d{0,8}(?:-[^/]*)?)?))?$|^\/people\/$/;
+/** The journal's address with a slash after it, which the Worker sends to /journal as /people/ goes to /people. */
+const JOURNAL_SLASH = "/journal/";
 
 /** The page's own address among the site's files. */
 const SHELL = "/threads/";
@@ -139,6 +144,9 @@ export async function handlePage(request: Request, env: Bindings): Promise<Respo
   if (moved !== null && (request.method === "GET" || request.method === "HEAD")) {
     const person = moved[1] === undefined || moved[1] === "" ? "" : `/${moved[1]}`;
     return new Response(null, { status: 301, headers: { Location: `/people${person}${url.search}` } });
+  }
+  if (url.pathname === JOURNAL_SLASH && (request.method === "GET" || request.method === "HEAD")) {
+    return new Response(null, { status: 301, headers: { Location: `/journal${url.search}` } });
   }
   const page = PAGE.exec(url.pathname);
   if (page === null || (request.method !== "GET" && request.method !== "HEAD")) return env.ASSETS.fetch(request);

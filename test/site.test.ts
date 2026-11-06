@@ -547,8 +547,8 @@ describe("wrangler.jsonc", () => {
     expect(text).not.toContain("custom_domain");
   });
 
-  it("runs the code only under /api/ and /threads/ and at the rooms (/me, /meetings, /people, /asks) and an ask's address, and every other page comes straight from site/", () => {
-    expect(text).toContain('"run_worker_first": ["/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*"]');
+  it("runs the code only under /api/ and /threads/ and at the rooms (/me, /meetings, /people, /asks, /journal) and an ask's address, and every other page comes straight from site/", () => {
+    expect(text).toContain('"run_worker_first": ["/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"]');
     expect(text.match(/"run_worker_first"/g)).toHaveLength(1);
   });
 

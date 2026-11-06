@@ -262,7 +262,10 @@ describe("keys", () => {
     expect(storylinePath("The demo")).toBe("/journal/storylines/the-demo");
     expect(storylineSlug("whysosuresh.com")).toBe("whysosuresh-com");
     expect(storylineSlug("Café 100")).toBe("cafe-100");
-    expect(storylineSlug("తెలుగు")).toBe("storyline");
+    expect(storylineSlug("తెలుగు")).toMatch(/^u-[a-z0-9]+(?:-[a-z0-9]+)*$/);
+    expect(storylineSlug("తెలుగు")).not.toBe(storylineSlug("హిందీ"));
+    expect(storylineSlug(`${"a".repeat(79)} b`)).toBe("a".repeat(79));
+    for (const name of ["తెలుగు", "x".repeat(200), `${"a".repeat(79)} b`, "!!"]) expect(storylineSlug(name)).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
   });
 });
 

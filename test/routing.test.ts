@@ -6,7 +6,7 @@
 // threads' old address, and everything under it, its old calls included, redirect for good to /threads/;
 // a page's .html address redirects to its clean one, /me/ to /me, /meetings/ to /meetings and /asks/ to /asks; the
 // rooms (/me, the door everyone signed in enters by, /meetings, /asks, /threads/ and the people pages, /people and
-// /people/<n>), every thread's address and every ask's (/ask/<slug>) answer the threads page with the site's headers (its CSP among them) and status 200, whatever the number,
+// /people/<n>, and the journal's /journal, a day, a week, the storylines and a storyline), every thread's address and every ask's (/ask/<slug>) answer the threads page with the site's headers (its CSP among them) and status 200, whatever the number,
 // with no sign-in; the people pages' old addresses under /threads/, and /people/, redirect to /people for good; because
 // Access guards only the threads' calls, never a thread's page; and any other path under /threads/ is what the
 // site's files make of it.
@@ -92,6 +92,11 @@ describe("the site's own files", () => {
     "/asks",
     "/ask/stigmer",
     "/ask/demo-nov-10",
+    "/journal",
+    "/journal/2026-11-06",
+    "/journal/2026-W44",
+    "/journal/storylines",
+    "/journal/storylines/the-demo",
   ])(
     "answer %s with the threads page and the site's headers, with no sign-in",
     async (path) => {
@@ -133,13 +138,19 @@ describe("the site's own files", () => {
     expect(new URL(response.headers.get("location") ?? "", SITE).pathname).toBe(to);
   });
 
+  it("redirect /journal/ to /journal for good", async () => {
+    const response = await harness.fetch(`${SITE}/journal/?x=1`, { redirect: "manual" });
+    expect(response.status).toBe(301);
+    expect(response.headers.get("location")).toBe("/journal?x=1");
+  });
+
   it("redirect /threads to /threads/", async () => {
     const response = await harness.fetch(`${SITE}/threads`, { redirect: "manual" });
     expect(response.status).toBe(307);
     expect(new URL(response.headers.get("location") ?? "", SITE).pathname).toBe("/threads/");
   });
 
-  it.each(["/threads/042", "/threads/42/comments", "/threads/0", "/threads/nope", "/threads/people/07", "/threads/people/7/threads", "/threads/peoples", "/me/42", "/mex", "/people/07", "/people/7/threads", "/peoples", "/meetings/7", "/meetingsx", "/ask", "/ask/", "/askx", "/asksx", "/asks/7", "/ask/Upper", "/ask/-lead", "/ask/demo/7"])("answer %s with the site's 404 page", async (path) => {
+  it.each(["/threads/042", "/threads/42/comments", "/threads/0", "/threads/nope", "/threads/people/07", "/threads/people/7/threads", "/threads/peoples", "/me/42", "/mex", "/people/07", "/people/7/threads", "/peoples", "/meetings/7", "/meetingsx", "/ask", "/ask/", "/askx", "/asksx", "/asks/7", "/ask/Upper", "/ask/-lead", "/ask/demo/7", "/journalx", "/journal/today", "/journal/2026-11-6", "/journal/2026-w44", "/journal/2026-11-06/edit", "/journal/storylines/", "/journal/storylines/The-Demo", "/journal/storylines/a/b"])("answer %s with the site's 404 page", async (path) => {
     const response = await harness.fetch(`${SITE}${path}`, { redirect: "manual" });
     expect(response.status).toBe(404);
     expect(response.headers.get("content-type")).toContain("text/html");
