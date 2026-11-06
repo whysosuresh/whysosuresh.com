@@ -3,7 +3,7 @@
 // player and the scripts' allowed resources, that the headers match the pages and the scripts, that the
 // stylesheet carries no dead rules, that the "Send a note" doors open the note flow, that the topic list
 // the Worker shares is plain data and reads page addresses right, that the spaces the Worker shares are plain
-// data and hold every topic, that the threads page is never indexed or shared and reaches only its own calls,
+// data and hold every topic, that the journal's reader the Worker shares is plain data that reads no clock, that the threads page is never indexed or shared and reaches only its own calls,
 // that /inbox, the threads' old address, redirects to /threads/ and nothing else is redirected, that no file names
 // the owner's email address, and that the Worker's config routes the one domain to the code only under /api/ and
 // /threads/ (test/routing.test.ts sends the requests). `wrangler deploy --dry-run` does not read
@@ -24,6 +24,7 @@ const SERVED = [
   "_headers",
   "_redirects",
   "app/asks.js",
+  "app/journal.js",
   "app/keys.js",
   "app/markdown.js",
   "app/page-talk.js",
@@ -234,7 +235,8 @@ describe.each(scripts)("%s", (script) => {
 
   it("names no address on another origin but the allowlisted resources and links", () => {
     const named = [...read(script).matchAll(/\b(?:https?:)?\/\/[^\s'"`)]+/g)].map((m) => m[0]);
-    expect(named.filter((url) => !SCRIPT_RESOURCES.includes(url) && !SCRIPT_LINKS.includes(url))).toEqual([]);
+    // The site's own origin is not another one: the journal's reader names it to open the site's own links in place.
+    expect(named.filter((url) => url !== ORIGIN && !SCRIPT_RESOURCES.includes(url) && !SCRIPT_LINKS.includes(url))).toEqual([]);
   });
 
   it("imports only served files, and links only to clean root-absolute addresses", () => {
@@ -562,5 +564,17 @@ describe("wrangler.jsonc", () => {
 
   it("keeps Cloudflare's automatic request records off", () => {
     expect(text).toContain('"observability": { "enabled": true, "logs": { "invocation_logs": false } }');
+  });
+});
+
+describe("app/journal.js, which the Worker imports too", () => {
+  it("is plain data and pure functions: it imports nothing, touches no page, reads no clock, and only declares exports", () => {
+    const code = read("app/journal.js").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code).not.toMatch(/^import /m);
+    expect(code).not.toMatch(/\b(document|window|location|navigator|globalThis|fetch|localStorage|sessionStorage|addEventListener|setTimeout|performance)\b/);
+    // Today is always given: the page makes it in the reader's zone, so the Worker never reckons a day by its own clock.
+    expect(code).not.toMatch(/Date\.now|new Date\(\s*\)|Intl\./);
+    const topLevel = code.split("\n").filter((line) => /^\S/.test(line));
+    expect(topLevel.filter((line) => !/^(export |\}|\]\);)/.test(line))).toEqual([]);
   });
 });

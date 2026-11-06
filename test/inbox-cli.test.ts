@@ -5,14 +5,16 @@
 // in the thread, or with --only-me for the owner alone) and an edit taking their words from stdin as they are; a page sent from a file as HTML, refused here past 16 MiB; a link set
 // and cleared; a meeting set by a day or a moment and cleared, and its people changed one call per flag, stopping at
 // the first refusal; every ask listed, a draft made from a thread under a slug, and an ask closed, with no verb that
-// opens one; the Worker's refusals and the edge's passed through with a
+// opens one; the journal read, written on the version it was built on (a stale save printing the newest version and
+// exiting non-zero), a photo uploaded by its file's type and read back to a file byte for byte, a day's answers and the
+// storylines; the Worker's refusals and the edge's passed through with a
 // non-zero exit; usage errors; and the secret in no line it prints. One run of the real entry point as a child
 // process proves Node runs the TypeScript as it is.
 
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { MAX_PAGE_BYTES, ORIGIN, SECRET_VARIABLE, USAGE, readClientId, run, type Io } from "../tools/inbox/run.ts";
+import { MAX_PAGE_BYTES, MAX_PHOTO_BYTES, ORIGIN, SECRET_VARIABLE, USAGE, readClientId, run, type Io } from "../tools/inbox/run.ts";
 import { INBOX_SYNC_CLIENT_ID } from "./harness.ts";
 
 const SECRET = "played-secret-0123456789abcdef";
@@ -32,6 +34,7 @@ type Reply = { status: number; body?: unknown; type?: string; text?: string };
 /** A client whose fetch answers each request in turn with the replies given, and records what was sent. */
 function client(replies: Reply[], options: { env?: Record<string, string>; stdin?: string; files?: Record<string, Uint8Array> } = {}) {
   const sent: Sent[] = [];
+  const written: Record<string, Uint8Array> = {};
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -58,11 +61,15 @@ function client(replies: Reply[], options: { env?: Record<string, string>; stdin
       if (file === undefined) throw new Error("no such file");
       return file;
     },
+    writeFile: (path, bytes) => {
+      if (path.startsWith("/nowhere/")) throw new Error("can't write");
+      written[path] = bytes;
+    },
     out: (line) => out.push(line),
     err: (line) => err.push(line),
     clientId: INBOX_SYNC_CLIENT_ID,
   };
-  return { io, sent, out, err };
+  return { io, sent, out, err, written };
 }
 
 const THREAD = { number: 42, id: "00000000-0000-4000-8000-000000000001", status: "discuss" };
@@ -556,5 +563,107 @@ describe("the command line", () => {
     const entry = fileURLToPath(new URL("../tools/inbox/inbox.ts", import.meta.url));
     const help = execFileSync(process.execPath, [entry, "--help"], { encoding: "utf8", env: { PATH: process.env.PATH ?? "" } });
     expect(help).toContain(USAGE.split("\n")[0]);
+  });
+});
+
+describe("journal", () => {
+  const JOURNAL = `${ORIGIN}/threads/api/journal`;
+  const ENTRY = { key: "2026-03-03", kind: "day", version: 2, title: "A quiet start" };
+
+  it("lists every entry, one line each, and reads one, an earlier version too", async () => {
+    const { io, sent, out } = client([
+      { status: 200, body: { entries: [ENTRY, { key: "2026-W10" }] } },
+      { status: 200, body: { key: "2026-03-03", version: 1, text: "## A quiet start\n" } },
+    ]);
+    expect(await run(["journal", "list"], io)).toBe(0);
+    expect(await run(["journal", "read", "2026-03-03", "--version", "1"], io)).toBe(0);
+    expect(sent.map((one) => [one.method, one.url])).toEqual([
+      ["GET", JOURNAL],
+      ["GET", `${JOURNAL}/2026-03-03?version=1`],
+    ]);
+    expect(out.map((line) => JSON.parse(line))).toEqual([ENTRY, { key: "2026-W10" }, { key: "2026-03-03", version: 1, text: "## A quiet start\n" }]);
+  });
+
+  it("writes the page from stdin as it is, on the version it names", async () => {
+    const text = "## A quiet start\n*Tuesday*\n\nIt \"rained\".\n";
+    const { io, sent, out } = client([{ status: 201, body: { key: "2026-W10", version: 3 } }], { stdin: text });
+    expect(await run(["journal", "write", "2026-W10", "--base", "2"], io)).toBe(0);
+    expect(sent[0]?.url).toBe(`${JOURNAL}/2026-W10`);
+    expect(sent[0]?.method).toBe("POST");
+    expect(JSON.parse(sent[0]?.body ?? "")).toEqual({ text, base: 2 });
+    expect(out.map((line) => JSON.parse(line))).toEqual([{ key: "2026-W10", version: 3 }]);
+  });
+
+  it("prints the newest version and exits 1 when the save was built on an older one", async () => {
+    const { io, out, err } = client([{ status: 409, body: { reason: "stale", version: 4 } }], { stdin: "## T\n" });
+    expect(await run(["journal", "write", "2026-03-03", "--base", "3"], io)).toBe(1);
+    expect(out.map((line) => JSON.parse(line))).toEqual([{ reason: "stale", version: 4 }]);
+    expect(err.join("\n")).toContain("409 stale");
+  });
+
+  it("uploads a photo by its file's type, refusing one too large here, and reads one back to a file byte for byte", async () => {
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 1]);
+    const { io, sent, out, err, written } = client(
+      [
+        { status: 201, body: { id: "0b6f2c8e-1d1a-4c55-9a0e-6f0f8a1b2c3d", type: "image/jpeg", bytes: 4 } },
+        { status: 200, text: "JPEGBYTES", type: "image/jpeg" },
+        { status: 404, body: { reason: "no-photo" } },
+      ],
+      { files: { "a.JPG": jpeg, "b.png": new Uint8Array(MAX_PHOTO_BYTES + 1) } },
+    );
+    expect(await run(["journal", "photo", "a.JPG"], io)).toBe(0);
+    expect(sent[0]?.headers["Content-Type"]).toBe("image/jpeg");
+    expect(sent[0]?.bytes).toEqual(jpeg);
+    expect(await run(["journal", "photo", "b.png"], io)).toBe(1);
+    expect(err.join("\n")).toContain("the most is");
+    expect(await run(["journal", "photo-read", "0b6f2c8e-1d1a-4c55-9a0e-6f0f8a1b2c3d", "out.jpg"], io)).toBe(0);
+    expect(new TextDecoder().decode(written["out.jpg"])).toBe("JPEGBYTES");
+    expect(await run(["journal", "photo-read", "0b6f2c8e-1d1a-4c55-9a0e-6f0f8a1b2c3d", "out2.jpg"], io)).toBe(1);
+    expect(err.join("\n")).toContain("404 no-photo");
+    expect(sent.map((one) => [one.method, one.url, one.headers["CF-Access-Client-Secret"] === SECRET])).toEqual([
+      ["POST", `${JOURNAL}/photos`, true],
+      ["GET", `${JOURNAL}/photos/0b6f2c8e-1d1a-4c55-9a0e-6f0f8a1b2c3d`, true],
+      ["GET", `${JOURNAL}/photos/0b6f2c8e-1d1a-4c55-9a0e-6f0f8a1b2c3d`, true],
+    ]);
+    expect(out.concat(err).join("\n")).not.toContain(SECRET);
+  });
+
+  it("prints a day's answers and every storyline", async () => {
+    const answers = [{ id: 1, body: "It did.", createdAt: "2026-03-04T07:00:00.000Z" }];
+    const trail = { name: "The talk", first: "2026-03-03", last: "2026-03-03", state: "12 days to go.", mark: null, days: [] };
+    const { io, sent, out } = client([
+      { status: 200, body: { key: "2026-03-03", text: "## T\n", answers } },
+      { status: 200, body: { storylines: [trail] } },
+    ]);
+    expect(await run(["journal", "answers", "2026-03-03"], io)).toBe(0);
+    expect(await run(["journal", "storylines"], io)).toBe(0);
+    expect(sent.map((one) => one.url)).toEqual([`${JOURNAL}/2026-03-03`, `${JOURNAL}/storylines`]);
+    expect(out.map((line) => JSON.parse(line))).toEqual([{ key: "2026-03-03", answers }, trail]);
+  });
+
+  it.each([
+    [["journal"]],
+    [["journal", "nothing"]],
+    [["journal", "list", "extra"]],
+    [["journal", "read", "today"]],
+    [["journal", "read", "2026-03-03", "--version"]],
+    [["journal", "read", "2026-03-03", "--version", "0"]],
+    [["journal", "read", "2026-03-03", "--version", "007"]],
+    [["journal", "write", "2026-03-03", "--base", "01"]],
+    [["journal", "write", "2026-03-03"]],
+    [["journal", "write", "2026-03-03", "--base", "-1"]],
+    [["journal", "photo", "a.gif"]],
+    [["journal", "photo-read", "nope", "out.jpg"]],
+    [["journal", "answers", "2026-W10"]],
+  ])("refuses %j as a usage error", async (argv) => {
+    const { io, sent } = client([]);
+    expect(await run(argv, io)).toBe(2);
+    expect(sent).toEqual([]);
+  });
+
+  it("refuses a write with nothing on stdin before sending it", async () => {
+    const { io, sent } = client([], { stdin: "  \n" });
+    expect(await run(["journal", "write", "2026-03-03", "--base", "0"], io)).toBe(2);
+    expect(sent).toEqual([]);
   });
 });
