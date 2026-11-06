@@ -75,6 +75,8 @@
 // are its ask's (`COALESCE(ask_thread_id, id)` wherever pages are read), and it is never given a page or a link of its
 // own. Its answers carry its person, so a person's page shows them (`wordsOfPerson`).
 
+import { LISTS, isList, type List } from "../site/app/standing.js";
+
 /** Where a thread came from: the site's note flow, something told to him in person, or his own. */
 export type Source = "talk" | "told" | "self";
 /** Who made a change through a private door. */
@@ -90,18 +92,14 @@ export type Audience = "thread" | "owner" | "public";
 export type Actor = Author | "visitor" | "import";
 export type Status = "received" | "act" | "discuss" | "done" | "dropped" | "filed";
 
-/** A tab, and the statuses it shows. */
-export const TABS = {
-  look: ["received"],
-  act: ["act"],
-  discuss: ["discuss"],
-  done: ["done", "dropped", "filed"],
-} as const satisfies Record<string, readonly Status[]>;
-export type Tab = keyof typeof TABS;
-
-export function isTab(value: string): value is Tab {
-  return Object.hasOwn(TABS, value);
-}
+/**
+ * A list the threads' calls answer, and the statuses it holds: every open thread (pending), each open status alone,
+ * and every closed one. The map is the page's and the command line's too (site/app/standing.js); typed here against
+ * this file's own statuses, so a status one side lacks fails the Worker's type check.
+ */
+export const TABS: Readonly<Record<List, readonly Status[]>> = LISTS;
+export type Tab = List;
+export const isTab = isList;
 
 // The last activity reads the arrival time when it was never set: a thread the code before 0008 created between
 // that migration and its deploy. A plain expression, so it is safe in RETURNING.
@@ -464,7 +462,7 @@ export interface Listed {
 async function listed(db: D1Database, page: D1PreparedStatement): Promise<Listed> {
   const [rows, counts] = await db.batch<ThreadRow | { status: string; n: number }>([page, countStatement(db)]);
   const byStatus = new Map(((counts?.results ?? []) as { status: string; n: number }[]).map((row) => [row.status, row.n]));
-  const tally: Record<Tab, number> = { look: 0, act: 0, discuss: 0, done: 0 };
+  const tally = Object.fromEntries(Object.keys(TABS).map((name) => [name, 0])) as Record<Tab, number>;
   for (const name of Object.keys(TABS) as Tab[]) {
     for (const status of TABS[name]) tally[name] += byStatus.get(status) ?? 0;
   }

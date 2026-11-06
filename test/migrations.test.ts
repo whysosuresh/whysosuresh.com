@@ -137,7 +137,7 @@ describe("0006, every inbox row a thread", () => {
     harness = await stage(ROWS);
     // The code that runs now reads what later migrations add, so they are applied too; they move no copied row.
     await harness.migrate();
-    const tabs: Record<string, string[]> = { look: ["received"], act: ["act"], discuss: ["discuss"], done: ["done", "dropped", "filed"] };
+    const tabs: Record<string, string[]> = { pending: ["received", "act", "discuss"], look: ["received"], act: ["act"], discuss: ["discuss"], done: ["done", "dropped", "filed"] };
     const counts = Object.fromEntries(Object.entries(tabs).map(([tab, statuses]) => [tab, ROWS.filter((row) => statuses.includes(row.status)).length]));
     for (const [tab, statuses] of Object.entries(tabs)) {
       const expected = ROWS.filter((row) => statuses.includes(row.status))

@@ -1,14 +1,14 @@
 // @ts-check
 // The threads page's keys, as one map: it names what each key does for the page's key handler
 // (site/app/threads.js) and draws the keyboard sheet (`?`), so the two never disagree. The one-key moves are the
-// inbox's, kept as they were, plus M (comment), W (edit), N (new), S (share), B (the meeting: book it, move it,
-// change who is in it) and ⌘K (find). A person the owner
-// invited reads and comments, so their page answers only the keys on their own sheet (`MEMBER_SHEET`,
-// `MEMBER_COMMANDS`). A key pressed while typing in a field, or inside a page shown in a thread, never reaches
-// here. Plain data and pure functions, so a test can read them without a page.
+// inbox's, kept as they were, plus 1 and 2 for the list's two tabs (Pending, Done), M (comment), W (edit), N (new),
+// S (share), B (the meeting: book it, move it, change who is in it) and ⌘K (find). A person the owner invited
+// reads and comments, so their page answers only the keys on their own sheet (`MEMBER_SHEET`, `MEMBER_COMMANDS`).
+// A key pressed while typing in a field, or inside a page shown in a thread, never reaches here. Plain data and
+// pure functions, so a test can read them without a page.
 
 /**
- * @typedef {'next' | 'prev' | 'open' | 'back' | 'tab-look' | 'tab-act' | 'tab-discuss' | 'tab-done' | 'find' | 'act'
+ * @typedef {'next' | 'prev' | 'open' | 'back' | 'tab-pending' | 'tab-done' | 'find' | 'act'
  *   | 'discuss' | 'drop' | 'done' | 'reopen' | 'space' | 'undo' | 'comment' | 'edit' | 'reply' | 'new' | 'share' | 'meeting' | 'keys'} Command
  * @typedef {{ keys: string, label: string }} KeyRow
  */
@@ -23,7 +23,7 @@ export const SHEET = Object.freeze([
       { keys: 'K', label: 'Previous thread' },
       { keys: '↵', label: 'Open the thread' },
       { keys: 'Esc', label: 'Back to the list' },
-      { keys: '1 – 4', label: 'To look at, To act on, To discuss, Done' },
+      { keys: '1 – 2', label: 'Pending, Done' },
       { keys: '⌘K', label: 'Find a thread, or do anything' },
     ],
   },
@@ -62,10 +62,8 @@ const PLAIN = Object.freeze({
   arrowup: 'prev',
   enter: 'open',
   escape: 'back',
-  1: 'tab-look',
-  2: 'tab-act',
-  3: 'tab-discuss',
-  4: 'tab-done',
+  1: 'tab-pending',
+  2: 'tab-done',
   a: 'act',
   t: 'discuss',
   d: 'drop',
