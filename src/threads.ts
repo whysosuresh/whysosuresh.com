@@ -24,6 +24,11 @@
 //   POST /threads/api/threads/<n>/people      {"add": {"email", "name"}} | {"remove": <person id>}   owner
 //   POST /threads/api/threads/<n>/meeting     {"when", "minutes", "where"}     owner and sync
 //   POST /threads/api/threads/<n>/attendees   {"add": {"person": <n>}} | {"add": {"name"}} | {"remove": <n>}   owner and sync
+//   POST /threads/api/threads/<n>/ask         {"slug": ...}                    owner and sync: a draft
+//                                             {"action": "open"}               owner
+//                                             {"action": "close"}              owner and sync
+//                                             {"action": "read"}               owner: its answers marked read
+//   GET  /threads/api/asks                                                    owner and sync
 //   GET  /threads/api/search?q=<words or a number>                            everyone
 //   GET  /threads/api/sign-in?next=<a threads page>                           everyone
 //   GET  /threads/api/people[/<n>], POST /threads/api/people/<n>               owner and sync read; owner writes (src/people.ts)
@@ -86,14 +91,33 @@
 // history's events with where a meeting moved from; strangers on a public thread never read it (src/public.ts).
 // Refusals: 400 `meeting` or `attendee` for a malformed call; 404 `no-thread`, `no-person`; 409 `not-a-meeting` for
 // a thread with no when, `not-attending` for removing someone who isn't in it.
+//
+// One of his own threads whose main section is a page may be an ask, a questions page anyone answers by one link,
+// /ask/<slug> (src/asks.ts), each browser that answers getting a thread of its own. The owner and the sync make one a
+// draft under a slug (`ask`, 400 `ask` for a malformed call; 409 `slug-taken`, `not-his-words`, `no-page`, `public`,
+// `an-ask` for one already an ask); opening it puts it before strangers, so it is his alone, from his own page, as
+// `publish` is (403 `owner-only` to the sync); either may close it (409 `not-an-ask`, `not-from-here`). Mark read is
+// his alone too, from his own page: one `ask-read` event of his on each response thread that waits on him now, so it
+// stops waiting, answered with how many were marked (`{"marked": n}`; 409 `not-an-ask` on any thread that isn't an
+// ask's own), with no undoing it, because events are never deleted. Every thread
+// says whether it is one (`ask`: `{slug, state}` on an ask's own thread, `{number, slug, title}` of the ask a response
+// thread answers, the number for the owner and the sync alone; null otherwise), and an ask's own thread answers who
+// answered it (`answeredBy`, by thread number, name, when, and whether it waits on him) to the owner and the sync. An ask's thread is never
+// published (409 `an-ask`) or given a link (409 `an-ask`), so its page stays its main section; a response thread is
+// never given a page or a link of its own (409 `asked`), because its page is its ask's, which it shows to everyone
+// in it. The asks' list answers every ask with how many answered, when last, and the Send a note topic that opens
+// it, if any (site/talk-topics.js). Invited people are refused every ask call with 403 `owner-only`.
 
 import { identify, type Caller, type Refusal } from "./access.ts";
 import type { Bindings } from "./bindings.ts";
 import { json, type JsonValue } from "./json.ts";
 import { servePage, withSkeleton } from "./page.ts";
 import { handlePeople, personView } from "./people.ts";
+import { SLUG_SHAPE } from "./asks.ts";
+import { TOPICS } from "../site/talk-topics.js";
 import { sameOrigin } from "./request.ts";
 import {
+  answeredBy,
   attend,
   comment,
   create,
@@ -105,8 +129,10 @@ import {
   isInvited,
   isTab,
   findPage,
+  listAsks,
   listByNumber,
   listShared,
+  makeAsk,
   makeMove,
   onlyFor,
   pagesOf,
@@ -114,6 +140,8 @@ import {
   savePage,
   search,
   searchPeople,
+  markAskRead,
+  setAskState,
   setLink,
   setMeeting,
   unattend,
@@ -162,10 +190,10 @@ const NUMBER_SHAPE = /^[1-9]\d{0,8}$/;
 const MAX_SEARCH = 100;
 /**
  * Where the sign-in may send the owner on: the threads page's own addresses, as src/pages.ts serves them (/me,
- * the meetings at /meetings, the list at /threads/, a thread at /threads/<n> with its title after it, everyone at
+ * the meetings at /meetings, the asks at /asks, the list at /threads/, a thread at /threads/<n> with its title after it, everyone at
  * /people and a person at /people/<n> with their name after it), and nowhere else. Anything else goes to /me.
  */
-const NEXT_SHAPE = /^(?:\/me|\/meetings|\/people(?:\/[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?|\/threads\/(?:[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?)$/;
+const NEXT_SHAPE = /^(?:\/me|\/meetings|\/asks|\/people(?:\/[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?|\/threads\/(?:[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?)$/;
 /** The largest page: claude.ai holds a page to "16MB or smaller", and 16 MiB is at least that. */
 export const MAX_PAGE_BYTES = 16 * 1024 * 1024;
 /** The only place a link, or a page's source, may point: an address on claude.ai. */
@@ -213,6 +241,7 @@ function thread(row: ThreadRow, reader: Reader): { readonly [key: string]: JsonV
     link: row.link_url === null ? null : { url: row.link_url, title: row.link_title },
     publicAt: row.public_at,
     meeting: meetingView(row, reader),
+    ask: askView(row, reader),
   };
   if (reader.caller === "member") return said;
   return {
@@ -224,6 +253,18 @@ function thread(row: ThreadRow, reader: Reader): { readonly [key: string]: JsonV
     ref: row.origin_ref,
     filedLink: row.filed_link,
   };
+}
+
+/**
+ * Whether a thread is an ask, as its reader sees it: on an ask's own thread its slug and state; on a response thread
+ * the ask it answers, by slug and title, and to the owner and the sync by number too, because an invited respondent
+ * can't read the ask's own thread; null on every other.
+ */
+function askView(row: ThreadRow, reader: Reader): JsonValue {
+  if (row.ask_slug !== null) return { slug: row.ask_slug, state: row.ask_state };
+  if (row.ask_thread_id === null) return null;
+  const said = { slug: row.ask_of_slug, title: row.ask_of_title };
+  return reader.caller === "member" ? said : { number: row.ask_of_number, ...said };
 }
 
 /** A meeting's person as every row carries them; the address is read only to tell an invited reader their own. */
@@ -381,10 +422,12 @@ async function add(request: Request, env: Bindings, caller: Writer): Promise<Res
 async function show(number: number, env: Bindings, caller: Caller): Promise<Response> {
   const row = await find(env.DB, { number }, caller);
   if (row === null) return refuse(404, "no-thread");
-  const [{ comments, events }, pages, people] = await Promise.all([
+  const answering = row.ask_slug !== null && caller.caller !== "member";
+  const [{ comments, events }, pages, people, answered] = await Promise.all([
     history(env.DB, row.id, HISTORY + 1, caller),
     pagesOf(env.DB, row.id),
     peopleOf(env.DB, row.id),
+    answering ? answeredBy(env.DB, row.id) : Promise.resolve([]),
   ]);
   return json(200, {
     thread: thread(row, caller),
@@ -393,6 +436,8 @@ async function show(number: number, env: Bindings, caller: Caller): Promise<Resp
     comments: comments.slice(0, HISTORY).map((row) => commentView(row, caller)),
     events: events.slice(0, HISTORY).map((event) => eventView(event, caller)),
     truncated: comments.length > HISTORY || events.length > HISTORY,
+    // Who answered an ask, for the owner and the sync: each response thread by its number.
+    ...(answering ? { answeredBy: answered.map((one) => ({ number: one.number, name: one.name, at: one.at, waiting: one.waiting === 1 })) } : {}),
   });
 }
 
@@ -407,7 +452,7 @@ async function move(request: Request, number: number, env: Bindings, caller: Wri
   const moved = await makeMove(env.DB, { number }, change, caller.caller);
   if (moved === "no-thread") return refuse(404, "no-thread");
   if (moved === "not-from-here") return refuse(409, "not-from-here");
-  if (moved === "not-his-words") return refuse(409, "not-his-words");
+  if (moved === "not-his-words" || moved === "an-ask") return refuse(409, moved);
   return json(200, { thread: thread(moved, caller) });
 }
 
@@ -534,9 +579,9 @@ async function addPage(request: Request, url: URL, number: number, env: Bindings
     await env.PAGES.delete(objectKey);
     return refuse(409, "busy");
   }
-  if (saved === null) {
+  if (saved === "no-thread" || saved === "asked") {
     await env.PAGES.delete(objectKey);
-    return refuse(404, "no-thread");
+    return saved === "asked" ? refuse(409, "asked") : refuse(404, "no-thread");
   }
   return json(201, { version: saved.version, thread: thread(saved.row, caller) });
 }
@@ -560,7 +605,8 @@ async function replaceLink(request: Request, number: number, env: Bindings, call
   const title = fields.title.trim() === "" ? null : line(fields.title, MAX_LINK_TITLE);
   if ((!clearing && url === null) || (fields.title.trim() !== "" && title === null)) return refuse(400, "link");
   const row = await setLink(env.DB, number, url, clearing ? null : title, caller.caller);
-  if (row === null) return refuse(404, "no-thread");
+  if (row === "no-thread") return refuse(404, row);
+  if (row === "an-ask" || row === "asked") return refuse(409, row);
   return json(200, { thread: thread(row, caller) });
 }
 
@@ -629,6 +675,56 @@ async function changeAttendees(request: Request, number: number, env: Bindings, 
   return json(200, { thread: thread(changed, caller) });
 }
 
+/**
+ * Makes a thread an ask, a draft under a slug, opens or closes one, or marks its answers read. Opening puts it before
+ * strangers, and marking read is his reading, so each is the owner's alone, refused to the sync before anything is
+ * read; the owner's call comes from his own page, as every write of his does. Answers the thread, or for Mark read how
+ * many response threads it marked.
+ */
+async function changeAsk(request: Request, number: number, env: Bindings, caller: Writer): Promise<Response> {
+  const length = lengthRefusal(request, MAX_CHANGE_BYTES);
+  if (length !== null) return length;
+  const given = await readJson(request);
+  const drafting = exactly(given, ["slug"]);
+  const changing = exactly(given, ["action"]);
+  if (drafting !== null) {
+    if (typeof drafting.slug !== "string" || !SLUG_SHAPE.test(drafting.slug)) return refuse(400, "ask");
+    const made = await makeAsk(env.DB, number, drafting.slug, caller.caller);
+    if (made === "no-thread") return refuse(404, made);
+    if (typeof made === "string") return refuse(409, made);
+    return json(200, { thread: thread(made, caller) });
+  }
+  const action = changing?.action;
+  if (action !== "open" && action !== "close" && action !== "read") return refuse(400, "ask");
+  if (action !== "close" && caller.caller !== "owner") return refuse(403, "owner-only");
+  if (action === "read") {
+    const read = await markAskRead(env.DB, number);
+    if (read === "no-thread") return refuse(404, read);
+    if (read === "not-an-ask") return refuse(409, read);
+    return json(200, { marked: read.marked });
+  }
+  const changed = await setAskState(env.DB, number, action, caller.caller);
+  if (changed === "no-thread") return refuse(404, changed);
+  if (typeof changed === "string") return refuse(409, changed);
+  return json(200, { thread: thread(changed, caller) });
+}
+
+/** Every ask, for Asks: drafts first, with how many answered, when last, and the Send a note topic that opens it. */
+async function asks(env: Bindings): Promise<Response> {
+  const rows = await listAsks(env.DB);
+  return json(200, {
+    asks: rows.map((row) => ({
+      number: row.number,
+      title: row.title,
+      slug: row.slug,
+      state: row.state,
+      answered: row.answered,
+      lastAnsweredAt: row.last_answered_at,
+      topic: TOPICS.find((topic) => topic.ask === row.slug)?.slug ?? null,
+    })),
+  });
+}
+
 /** A thread's people, for the owner's Share. */
 async function readPeople(number: number, env: Bindings, caller: Caller): Promise<Response> {
   const row = await find(env.DB, { number }, caller);
@@ -681,6 +777,10 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
     if (url.pathname === "/threads/api/me") return me(who);
     return url.pathname === "/threads/api/search" ? lookUp(url, env, who) : signedIn(url);
   }
+  if (url.pathname === "/threads/api/asks") {
+    if (request.method !== "GET") return json(405, { reason: "method" }, { Allow: "GET" });
+    return who.caller === "member" ? refuse(403, "owner-only") : asks(env);
+  }
   if (url.pathname === "/threads/api/threads") {
     if (request.method !== "GET" && request.method !== "POST") return json(405, { reason: "method" }, { Allow: "GET, POST" });
     // An invited person's list is the one with no query: their own threads. Every tab, and every add, is the owner's.
@@ -702,7 +802,7 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
     const [, number = "", noteId = ""] = ruling;
     return NUMBER_SHAPE.test(number) ? judge(request, Number(number), noteId, env, who) : refuse(404, "no-thread");
   }
-  const route = /^\/threads\/api\/threads\/([^/]+)(?:\/(comments|text|pages|link|people|meeting|attendees))?$/.exec(url.pathname);
+  const route = /^\/threads\/api\/threads\/([^/]+)(?:\/(comments|text|pages|link|people|meeting|attendees|ask))?$/.exec(url.pathname);
   if (route === null) return json(404, { reason: "not-found" });
   const [, given = "", part] = route;
   const readable = part === undefined || part === "people";
@@ -729,5 +829,6 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
   if (part === "link") return replaceLink(request, number, env, who);
   if (part === "meeting") return replaceMeeting(request, number, env, who);
   if (part === "attendees") return changeAttendees(request, number, env, who);
+  if (part === "ask") return changeAsk(request, number, env, who);
   return move(request, number, env, who);
 }

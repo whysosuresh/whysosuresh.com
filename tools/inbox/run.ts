@@ -8,7 +8,9 @@
 // stdin, so quotes and line breaks need no escaping. A page (a Claude artifact's own HTML) comes from a file,
 // because pages are large, and is refused here past the Worker's 16 MiB before it is sent; a link is an address on
 // claude.ai. A meeting is set on a thread by its when (a day, or a moment always with its zone), and its people are
-// added by their person number, or by name as someone new. This module is the logic, with fetch, the environment and
+// added by their person number, or by name as someone new. An ask (a questions page anyone answers by one link) is
+// made a draft from a thread whose page holds its questions, and closed; it has no verb that opens one, because
+// putting it before strangers is Suresh's own act, from his page. This module is the logic, with fetch, the environment and
 // the streams handed in, so the tests drive it with a played fetch; tools/inbox/inbox.ts is the entry point
 // that hands it the real ones.
 
@@ -31,6 +33,8 @@ const NUMBER_SHAPE = /^[1-9]\d{0,8}$/;
 const THREADS = "/threads/api/threads";
 /** Where the people calls live. */
 const PEOPLE = "/threads/api/people";
+/** Where the asks' list lives. */
+const ASKS = "/threads/api/asks";
 
 export const USAGE = `Usage: inbox <verb> [arguments]
 
@@ -67,6 +71,11 @@ export const USAGE = `Usage: inbox <verb> [arguments]
                                   their counts include the meetings they are in (met)
   person <number>                 one person (by their number) with their threads and what they said, as
                                   one JSON line; a thread they are in a meeting on has the role met
+  asks                            every ask, drafts first, one JSON line each: its thread's number, title,
+                                  slug, state, how many answered and when last
+  ask <number> --slug <slug>      the thread (his own, its page the questions) made an ask, a draft at
+                                  whysosuresh.com/ask/<slug>; he opens it himself, in Asks
+  ask <number> --close            the ask closed: it takes no more answers
 
 The service token's secret is read from ${SECRET_VARIABLE}; the client id from wrangler.jsonc.
 Exit status: 0 when every request was answered as asked, 1 on any refusal, 2 on a usage error.
@@ -358,6 +367,29 @@ async function person(io: Io, secret: string, args: readonly string[]): Promise<
   return report(io, "person", await call(io, secret, `${PEOPLE}/${given}`, { method: "GET" }), null);
 }
 
+/** Every ask, one line each, as the Worker answers them. */
+async function asks(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  if (args.length > 0) throw new Usage("asks takes nothing more");
+  const answer = await call(io, secret, ASKS, { method: "GET" });
+  if (answer.status !== 200) {
+    io.err(`inbox: asks refused (${answer.status} ${reasonOf(answer)})`);
+    return 1;
+  }
+  for (const one of Array.isArray(answer.body.asks) ? (answer.body.asks as unknown[]) : []) io.out(JSON.stringify(one));
+  return 0;
+}
+
+/** A thread made an ask, a draft under a slug, or an ask closed; there is no verb that opens one. */
+async function ask(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const [given, ...rest] = args;
+  const number = numberOf("ask", given);
+  let change: { slug: string } | { action: "close" };
+  if (rest.length === 2 && rest[0] === "--slug" && rest[1] !== undefined) change = { slug: rest[1] };
+  else if (rest.length === 1 && rest[0] === "--close") change = { action: "close" };
+  else throw new Usage("ask takes a thread's number and --slug <slug>, or --close");
+  return report(io, "ask", await call(io, secret, `${THREADS}/${number}/ask`, { method: "POST", body: JSON.stringify(change) }), "thread");
+}
+
 /** Runs one command line; answers the exit status. */
 export async function run(argv: readonly string[], io: Io): Promise<number> {
   const [verb, ...args] = argv;
@@ -383,6 +415,8 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     if (verb === "attendees") return await attendees(io, secret, args);
     if (verb === "people") return await people(io, secret, args);
     if (verb === "person") return await person(io, secret, args);
+    if (verb === "asks") return await asks(io, secret, args);
+    if (verb === "ask") return await ask(io, secret, args);
     throw new Usage(`unknown verb: ${verb}`);
   } catch (error) {
     if (error instanceof Usage) {

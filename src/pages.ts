@@ -2,6 +2,7 @@
 // rooms, each at the top level beside the others: /me (the door everyone signed in enters by: Today for the owner,
 // their threads for an invited person), /meetings, /threads/ (the list, with its tab and space in the query), and the
 // people pages, /people and /people/<n> with the person's name after it or not (/people/7-meera), which read nothing:
+// the asks, /asks, which reads nothing either; an ask's own address, /ask/<slug>, which anyone opens to answer it;
 // a person's address gets the plain shell whatever the number, so it never says whether that person exists; and a
 // thread, /threads/<n>, with its title after the number or not (/threads/42-who-owns-what). People lived under
 // /threads/ before the rooms were peers: /threads/people and every person's address there redirect to /people for
@@ -22,13 +23,27 @@
 // public thread is kept out of search results, and found by its link. Any other path under /threads/ is answered by
 // the site's files as it would be without the Worker: the 404 page, or a clean-address redirect. The page's
 // scripts live under /app/, outside the Worker's paths, so they cost no Worker request.
+//
+// An ask's address gets its preview the same way, read by its slug with one indexed query whatever the slug
+// (`findAsk`), while the ask is open or closed: its title, which is written for strangers, and a fixed line, "A few
+// questions from Suresh", never the thread's living summary, which is his private label, nor its number. A draft and a
+// slug no thread has get the shell byte for byte.
 
 import { parse, type Inline } from "../site/app/markdown.js";
 import type { Bindings } from "./bindings.ts";
-import { publicPreview, type PreviewRow } from "./store.ts";
+import { SLUG_SHAPE } from "./asks.ts";
+import { findAsk, publicPreview, type PreviewRow } from "./store.ts";
 
-/** /me, the meetings, everyone and a person by their number, the list, and a thread by its number with any title after it. */
-const PAGE = /^(?:\/me|\/meetings|\/people(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?)?)$/;
+/**
+ * /me, the meetings, the asks, everyone and a person by their number, the list, a thread by its number with any title
+ * after it, and an ask by its slug.
+ */
+const PAGE = /^(?:\/me|\/meetings|\/asks|\/people(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?)?|\/ask\/([^/]+))$/;
+
+/** What an ask's preview says beside its title, the same for every ask. */
+export const ASK_DESCRIPTION = "A few questions from Suresh";
+/** An ask's title when its thread has none. */
+const UNTITLED_ASK = "Questions from Suresh";
 
 /** People's addresses from before the rooms, everyone and a person with anything after the number, and /people/. */
 const OLD_PEOPLE = /^\/threads\/people(?:\/((?:[1-9]\d{0,8}(?:-[^/]*)?)?))?$|^\/people\/$/;
@@ -82,14 +97,26 @@ export function titleOf(row: Pick<PreviewRow, "number" | "title">): string {
   return `#${row.number}${row.title === null ? "" : ` ${row.title}`} · whysosuresh.com`;
 }
 
-/** The shell with a public thread's title and preview tags. */
-function rewritten(shell: Response, row: PreviewRow, origin: string): Response {
-  const title = titleOf(row);
-  const said = description(row);
+/** What a preview says: the page's title, its type, its address and a description (none when empty). */
+interface Preview {
+  readonly title: string;
+  readonly type: string;
+  readonly url: string;
+  readonly description: string;
+}
+
+/** A public thread's preview. */
+function threadPreview(row: PreviewRow, origin: string): Preview {
+  return { title: titleOf(row), type: "article", url: `${origin}/threads/${row.number}`, description: description(row) };
+}
+
+/** The shell with a preview's title and tags. */
+function rewritten(shell: Response, preview: Preview): Response {
+  const { title, description: said } = preview;
   const tags = [
     ["property", "og:title", title],
-    ["property", "og:type", "article"],
-    ["property", "og:url", `${origin}/threads/${row.number}`],
+    ["property", "og:type", preview.type],
+    ["property", "og:url", preview.url],
     ...(said === "" ? [] : [["property", "og:description", said]]),
     ["name", "twitter:card", "summary"],
   ]
@@ -115,19 +142,31 @@ export async function handlePage(request: Request, env: Bindings): Promise<Respo
   }
   const page = PAGE.exec(url.pathname);
   if (page === null || (request.method !== "GET" && request.method !== "HEAD")) return env.ASSETS.fetch(request);
+  const [, number, slug] = page;
+  if (slug !== undefined && !SLUG_SHAPE.test(slug)) return env.ASSETS.fetch(request);
   const shell = new URL(SHELL, url.origin);
-  const number = page[1];
-  let preview: PreviewRow | null = null;
-  if (number !== undefined) {
-    try {
-      preview = await publicPreview(env.DB, Number(number));
-    } catch {
-      preview = null;
-    }
+  let preview: Preview | null = null;
+  try {
+    preview = number !== undefined ? await threadOf(env, Number(number), url.origin) : slug !== undefined ? await askOf(env, slug, url.origin) : null;
+  } catch {
+    preview = null;
   }
-  if (preview === null || preview.public !== 1) return env.ASSETS.fetch(new Request(shell, { method: request.method, headers: request.headers }));
+  if (preview === null) return env.ASSETS.fetch(new Request(shell, { method: request.method, headers: request.headers }));
   const headers = new Headers(request.headers);
   for (const name of CONDITIONAL) headers.delete(name);
   const plain = await env.ASSETS.fetch(new Request(shell, { method: request.method, headers }));
-  return plain.status === 200 ? rewritten(plain, preview, url.origin) : plain;
+  return plain.status === 200 ? rewritten(plain, preview) : plain;
+}
+
+/** A thread's preview when it is public, else null. */
+async function threadOf(env: Bindings, number: number, origin: string): Promise<Preview | null> {
+  const row = await publicPreview(env.DB, number);
+  return row === null || row.public !== 1 ? null : threadPreview(row, origin);
+}
+
+/** An ask's preview while it is open or closed, else null: its title and the fixed line, never its summary. */
+async function askOf(env: Bindings, slug: string, origin: string): Promise<Preview | null> {
+  const ask = await findAsk(env.DB, slug);
+  if (ask === null || ask.state === "draft") return null;
+  return { title: `${ask.title ?? UNTITLED_ASK} · whysosuresh.com`, type: "website", url: `${origin}/ask/${slug}`, description: ASK_DESCRIPTION };
 }

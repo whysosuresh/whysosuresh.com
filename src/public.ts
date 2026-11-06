@@ -72,13 +72,13 @@ function publicThread(row: ThreadRow): { readonly [key: string]: JsonValue } {
 }
 
 /** The hex SHA-256 of a visitor's key, as the store keeps it. */
-async function keyHash(key: string): Promise<string> {
+export async function keyHash(key: string): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key)));
   return [...digest].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** The reader's key's hash, from `X-Visitor-Key`, or null when they sent none, or something that isn't a key. */
-async function readerKey(request: Request): Promise<string | null> {
+export async function readerKey(request: Request): Promise<string | null> {
   const given = request.headers.get("X-Visitor-Key") ?? "";
   return VISITOR_KEY_SHAPE.test(given) ? keyHash(given) : null;
 }
@@ -150,7 +150,7 @@ async function sendAnswer(request: Request, number: number, env: Bindings): Prom
 }
 
 /** A refusal the shared checks made, with the public calls' header added. */
-function withNoindex(response: Response): Response {
+export function withNoindex(response: Response): Response {
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(NOINDEX)) headers.set(name, value);
   return new Response(response.body, { status: response.status, headers });

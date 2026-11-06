@@ -323,7 +323,7 @@ describe("what an invited person sees", () => {
     const n = await shared();
     const seen = await answer<Shown>(await call(`/threads/${n}`, { as: { email: MEERA } }));
     expect(Object.keys(seen.thread).sort()).toEqual(
-      ["activityAt", "body", "createdAt", "id", "kind", "link", "main", "meeting", "movedAt", "number", "publicAt", "senderName", "source", "space", "status", "summary", "title"].sort(),
+      ["activityAt", "ask", "body", "createdAt", "id", "kind", "link", "main", "meeting", "movedAt", "number", "publicAt", "senderName", "source", "space", "status", "summary", "title"].sort(),
     );
     expect(seen.thread).toMatchObject({ senderName: "Asha", summary: "Decided: yes.", body: "My own words." });
     expect(JSON.stringify(seen)).not.toMatch(/asha@example\.com|meera@|dev@|Junk|Private first draft/);

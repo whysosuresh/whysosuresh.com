@@ -4,7 +4,8 @@
 // person passed through an add; a thread shown with each comment's place passed through whole; a list followed through every page; an add answered line by line; a comment (for everyone
 // in the thread, or with --only-me for the owner alone) and an edit taking their words from stdin as they are; a page sent from a file as HTML, refused here past 16 MiB; a link set
 // and cleared; a meeting set by a day or a moment and cleared, and its people changed one call per flag, stopping at
-// the first refusal; the Worker's refusals and the edge's passed through with a
+// the first refusal; every ask listed, a draft made from a thread under a slug, and an ask closed, with no verb that
+// opens one; the Worker's refusals and the edge's passed through with a
 // non-zero exit; usage errors; and the secret in no line it prints. One run of the real entry point as a child
 // process proves Node runs the TypeScript as it is.
 
@@ -472,6 +473,43 @@ describe("add, naming a told thread's person", () => {
       { line: 1, status: 201, thread: { number: 43, senderNumber: 7 } },
       { line: 2, status: 404, reason: "no-person" },
     ]);
+  });
+});
+
+describe("asks", () => {
+  it("prints every ask, one line each, as the Worker answers them", async () => {
+    const asks = [{ number: 7, slug: "demo", state: "draft" }, { number: 5, slug: "stigmer", state: "open" }];
+    const { io, sent, out } = client([{ status: 200, body: { asks } }]);
+    expect(await run(["asks"], io)).toBe(0);
+    expect(sent.map((one) => [one.method, one.url])).toEqual([["GET", `${ORIGIN}/threads/api/asks`]]);
+    expect(out.map((line) => JSON.parse(line))).toEqual(asks);
+  });
+
+  it("makes a draft under a slug, and closes one, printing the thread", async () => {
+    const thread = { ...THREAD, ask: { slug: "demo-nov-10", state: "draft" } };
+    const { io, sent, out } = client([{ status: 200, body: { thread } }, { status: 200, body: { thread } }]);
+    expect(await run(["ask", "42", "--slug", "demo-nov-10"], io)).toBe(0);
+    expect(await run(["ask", "42", "--close"], io)).toBe(0);
+    expect(sent.map((one) => [one.method, one.url, one.body])).toEqual([
+      ["POST", `${THREADS}/42/ask`, JSON.stringify({ slug: "demo-nov-10" })],
+      ["POST", `${THREADS}/42/ask`, JSON.stringify({ action: "close" })],
+    ]);
+    expect(out.map((line) => JSON.parse(line))).toEqual([thread, thread]);
+  });
+
+  it("passes a taken slug through with exit 1", async () => {
+    const { io, err } = client([{ status: 409, body: { reason: "slug-taken" } }]);
+    expect(await run(["ask", "42", "--slug", "demo"], io)).toBe(1);
+    expect(err).toEqual(["inbox: ask refused (409 slug-taken)"]);
+  });
+
+  it("has no verb that opens an ask, and refuses anything else as a usage error, sending nothing", async () => {
+    for (const argv of [["ask", "42", "--open"], ["ask", "42"], ["ask", "42", "--slug"], ["ask", "x", "--close"], ["ask", "42", "--close", "--slug", "a"], ["asks", "more"]]) {
+      const { io, sent } = client([]);
+      expect([argv, await run(argv, io)]).toEqual([argv, 2]);
+      expect(sent).toEqual([]);
+    }
+    expect(USAGE).not.toMatch(/--open/);
   });
 });
 

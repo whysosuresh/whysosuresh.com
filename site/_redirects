@@ -5,6 +5,7 @@
 /inbox/* /threads/ 301
 
 # /me is the door everyone signed in enters by, served by the Worker; its address ends without a slash, as the
-# meetings' does. /people/ is the Worker's, which sends it to /people itself.
+# meetings' and the asks' do. /people/ is the Worker's, which sends it to /people itself.
 /me/ /me 301
 /meetings/ /meetings 301
+/asks/ /asks 301

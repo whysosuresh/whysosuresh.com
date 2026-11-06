@@ -276,6 +276,7 @@ interface Topic {
   label: string;
   hint: string;
   questions: unknown[];
+  ask?: unknown;
 }
 interface TopicsModule {
   TOPICS: Topic[];
@@ -314,6 +315,15 @@ describe("talk-topics.js, which the Worker imports too", () => {
       expect(topic.questions.length).toBeLessThanOrEqual(3);
       for (const question of topic.questions) expect(typeof question === "string" && question !== "").toBe(true);
     }
+  });
+
+  it("names, for a topic that opens an ask, a slug an ask can have", async () => {
+    const { TOPICS } = await loading;
+    for (const topic of TOPICS) {
+      if (topic.ask === undefined) continue;
+      expect([topic.slug, topic.ask]).toEqual([topic.slug, expect.stringMatching(/^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/)]);
+    }
+    expect(read("talk-topics.js")).toMatch(/^ \*   ask\?: string,$/m);
   });
 
   it.each([
@@ -441,7 +451,7 @@ describe("style.css", () => {
 });
 
 describe("_redirects", () => {
-  it("sends /inbox and everything under it to /threads/ for good, /me/ and /meetings/ to their rooms, and nothing else", () => {
+  it("sends /inbox and everything under it to /threads/ for good, /me/, /meetings/ and /asks/ to their rooms, and nothing else", () => {
     const rules = read("_redirects")
       .split("\n")
       .filter((line) => line.trim() !== "" && !line.trimStart().startsWith("#"))
@@ -452,6 +462,7 @@ describe("_redirects", () => {
       ["/inbox/*", "/threads/", "301"],
       ["/me/", "/me", "301"],
       ["/meetings/", "/meetings", "301"],
+      ["/asks/", "/asks", "301"],
     ]);
   });
 });
@@ -517,8 +528,8 @@ describe("wrangler.jsonc", () => {
     expect(text).not.toContain("custom_domain");
   });
 
-  it("runs the code only under /api/ and /threads/ and at the rooms (/me, /meetings, /people), and every other page comes straight from site/", () => {
-    expect(text).toContain('"run_worker_first": ["/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*"]');
+  it("runs the code only under /api/ and /threads/ and at the rooms (/me, /meetings, /people, /asks) and an ask's address, and every other page comes straight from site/", () => {
+    expect(text).toContain('"run_worker_first": ["/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*"]');
     expect(text.match(/"run_worker_first"/g)).toHaveLength(1);
   });
 
