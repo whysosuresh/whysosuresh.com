@@ -102,8 +102,8 @@ import { SPACES } from '../spaces.js';
 import { MEMBER_COMMANDS, MEMBER_SHEET, SHEET, commandFor } from './keys.js';
 import { parse, summaryLines } from './markdown.js';
 import { cardLines, chipWords, isDay, leadWords, lengthWords, momentWords, partsOf, peopleChanges, split, stateOf, whenLine, whenOf, withLine } from './meetings.js';
-import { ASKS_PATH, ASK_PATH, CLOSED_LINE, agoWords, FIRST_ANSWERERS, answeredHead, answererName, answerersShown, askEventWords, askLink, askShown, countLine, foldedTitle, foldedWho, markedWords, nobodyLine, savedLine, stateWords, talkLinkFor, topicLine, visitorHint } from './asks.js';
-import { DRAFT, KEY, discussionFor, helloFor, placesOf, readPageMessage, stack } from './page-talk.js';
+import { ASKS_PATH, ASK_PATH, CLOSED_LINE, DRAFTS_HINT, agoWords, FIRST_ANSWERERS, answeredHead, answererName, answerersShown, askEventWords, askLink, askShown, countLine, foldWaiting, foldedTitle, foldedWho, markReadLabel, markedWords, nobodyLine, savedLine, stateWords, summaryNoteFor, talkLinkFor, topicLine, visitorHint } from './asks.js';
+import { DRAFT, KEY, discussionFor, helloFor, placesOf, readPageMessage, stack, takesAnswers } from './page-talk.js';
 import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, saidOn, takenLine } from './people.js';
 import { addressOf, invitation, invitationProblem, isAddress, levelOf, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
 import { prepare as prepareBotCheck, sendTo } from '../talk-send.js';
@@ -165,7 +165,8 @@ import {
  * @typedef {{ number: number, day: string, time: string, minutes: string, where: string, chosen: number[], named: string[], query: string, problem: string, busy: boolean }} MeetingDraft
  * @typedef {import('./page-talk.js').Places<ThreadComment>} Places
  * @typedef {{ quote: string, prefix: string, suffix: string, top: number }} WordsDraft
- * @typedef {{ ready: boolean, questions: Set<string>, anchors: Map<string, number | null>, questionTops: Map<string, number>, answered: number[], sent: string }} Talk
+ * @typedef {{ ready: boolean, questions: Set<string>, anchors: Map<string, number | null>, questionTops: Map<string, number>, answered: number[], sent: string,
+ *   hello: 'member' | 'visitor' | 'private' | 'read' | null }} Talk
  * @typedef {import('./markdown.js').Inline} Inline
  * @typedef {import('./keys.js').Command} Command
  * @typedef {{ view: 'today' } | { view: 'list', tab: Tab, space: string | null } | { view: 'thread', number: number } | { view: 'people' }
@@ -248,7 +249,7 @@ const CARD_GAP = 8;
 
 /** What a new page's frame has said: nothing yet. @returns {Talk} */
 function freshTalk() {
-  return { ready: false, questions: new Set(), anchors: new Map(), questionTops: new Map(), answered: [], sent: '' };
+  return { ready: false, questions: new Set(), anchors: new Map(), questionTops: new Map(), answered: [], sent: '', hello: null };
 }
 
 /** Whether a comment can have replies: shown, not a reply, an answer or words' discussion's reply, not a visitor's or for anyone. @param {ThreadComment} said */
@@ -873,8 +874,10 @@ class Threads {
     this.note = { name: '', email: '', body: '', sent: false, busy: false, problem: '' };
     /** Who answers a public page from this browser. @type {Visitor} */
     this.visitor = readVisitor();
-    /** Every ask, as Asks lists them. @type {Ask[]} */
+    /** Every ask, as Asks lists them; whether the asks call has answered, and whether it failed. @type {Ask[]} */
     this.asks = [];
+    this.asksLoaded = false;
+    this.asksFailed = false;
     /** The ask a visitor answers at /ask/<slug>, as its public call answered it; null until it did. @type {AskShown | null} */
     this.askShown = null;
     /** The email a visitor gives an ask, kept for this visit only; their name is kept with their key. */
@@ -1048,26 +1051,33 @@ class Threads {
       const mine = await listMine();
       this.threads = new Map(mine.map((thread) => [thread.number, thread]));
     } else {
-      const [pages, people, asks] = await Promise.all([Promise.all(TABS.map((tab) => listAll(tab))), listPeople(), listAsks()]);
+      const [pages, people] = await Promise.all([Promise.all(TABS.map((tab) => listAll(tab))), listPeople()]);
       this.threads = new Map(pages.flatMap((page) => page.threads).map((thread) => [thread.number, thread]));
       this.people = people;
-      this.asks = asks;
+      // The asks load on their own, so a failed asks call leaves everything else working; Asks says it failed.
+      void this.loadAsks();
     }
     this.loaded = true;
   }
 
-  /** Every ask again, as the asks call answers now, drawn when Asks is still shown. */
+  /**
+   * Every ask again, as the asks call answers now: the rail's count follows, and Asks is drawn again when it is shown.
+   * A failure is Asks' own to say; an ended sign-in says so as everywhere.
+   */
   async loadAsks() {
     try {
       this.asks = await listAsks();
+      this.asksFailed = false;
     } catch (error) {
-      this.fail(error, "The asks didn't load.");
-      return;
+      this.asksFailed = true;
+      if (error instanceof SignedOut) this.fail(error, "The asks didn't load.");
     }
+    this.asksLoaded = true;
+    if (!this.loaded) return;
     if (this.route.view === 'asks') {
       this.keepScroll = true;
       this.render();
-    }
+    } else this.renderNav();
   }
 
   /** Everyone again, as the people call answers now, drawn when People is still shown. */
@@ -1385,15 +1395,18 @@ class Threads {
     if (this.from === 'person' && this.person) return this.person.threads.map((thread) => thread.number);
     if (this.from !== 'today') return this.inTab(this.tab).map((thread) => thread.number);
     const seen = new Set();
-    return [...this.waiting(), ...this.fresh(), ...this.sat()]
-      .map((thread) => thread.number)
-      .filter((number) => (seen.has(number) ? false : (seen.add(number), true)));
+    // Today's rows as drawn: a folded group of new answers is its ask, so the walk never lands on a thread with no row.
+    return [...this.folded().map((entry) => entry.number), ...this.fresh().map((thread) => thread.number), ...this.sat().map((thread) => thread.number)].filter((number) =>
+      seen.has(number) ? false : (seen.add(number), true),
+    );
   }
 
   /** The thread a key acts on: the open one, or the selected row. */
   target() {
     if (this.route.view === 'thread') return this.shown?.thread ?? null;
     if (this.route.view === 'people' || this.route.view === 'person' || this.route.view === 'meetings' || this.route.view === 'asks') return this.route.view === 'meetings' && this.sel !== null ? (this.threads.get(this.sel) ?? null) : null;
+    // A folded row is several people's answers, so the moves have nothing to act on; Enter opens the ask.
+    if (this.route.view === 'today' && this.sel !== null && this.folded().some((entry) => entry.kind === 'fold' && entry.number === this.sel)) return null;
     return this.sel === null ? null : (this.threads.get(this.sel) ?? null);
   }
 
@@ -1500,7 +1513,7 @@ class Threads {
     const counts = new Map();
     for (const thread of this.threads.values()) if (isOpen(thread) && thread.space !== null) counts.set(thread.space, (counts.get(thread.space) ?? 0) + 1);
     const view = this.route.view;
-    const today = this.waiting().length + this.fresh().length + this.sat().length;
+    const today = this.folded().length + this.fresh().length + this.sat().length;
     const todayItem = el('a', { class: 't-nav-item', href: ME, 'data-go': 'today' }, [icon('sun'), 'Today', el('span', { class: 't-nav-count' }, [String(today)])]);
     const allItem = el('a', { class: 't-nav-item', href: THREADS, 'data-go': 'list' }, [icon('list'), 'Threads']);
     const peopleItem = el('a', { class: 't-nav-item', href: PEOPLE, 'data-go': 'people' }, [
@@ -1631,8 +1644,14 @@ class Threads {
       el('div', { class: 't-head' }, [
         el('div', {}, [el('h1', {}, ['Asks']), el('p', {}, ['One link you hand to many people. Each person who answers becomes a thread of their own, and nobody sees anyone else’s answers.'])]),
       ]),
-      ...(drafts.length > 0 ? [section('Ready for you to open', drafts, 'only you put one before strangers', '')] : []),
-      section('Links', links, 'open first, then closed', 'No asks yet. Ask Claude to make one: “make a form for today’s demo”.'),
+      ...(this.asksFailed
+        ? [el('div', { class: 't-list' }, [el('div', { class: 't-empty', role: 'status' }, ["The asks didn't load. Check your connection, then open Asks again."])])]
+        : !this.asksLoaded
+          ? [el('div', { class: 't-list' }, [el('div', { class: 't-empty' }, ['Loading…'])])]
+          : [
+              ...(drafts.length > 0 ? [section('Ready for you to open', drafts, DRAFTS_HINT, '')] : []),
+              section('Links', links, 'open first, then closed', 'No asks yet. Ask Claude to make one: “make a form for today’s demo”.'),
+            ]),
     ]);
   }
 
@@ -1709,7 +1728,7 @@ class Threads {
           el('h2', {}, ['Answered by']),
           el('span', { class: 't-hint' }, [answeredHead(all)]),
           el('span', { class: 't-grow' }),
-          ...(fresh > 1 ? [el('button', { type: 'button', class: 't-btn', 'data-act': 'ask-read', 'data-number': String(thread.number) }, [`Mark ${fresh} read`])] : []),
+          ...(fresh > 0 ? [el('button', { type: 'button', class: 't-btn', 'data-act': 'ask-read', 'data-number': String(thread.number) }, [markReadLabel(fresh) ?? ''])] : []),
         ]),
         ...(this.answeredAll && many
           ? [
@@ -1779,27 +1798,21 @@ class Threads {
    * @param {Thread[]} waiting
    */
   waitingRows(waiting) {
-    /** @type {Map<number, Thread[]>} */
-    const byAsk = new Map();
-    for (const thread of waiting) {
-      const number = answeredAsk(thread)?.number;
-      if (number !== undefined) byAsk.set(number, [...(byAsk.get(number) ?? []), thread]);
-    }
-    /** @type {HTMLElement[]} */
-    const rows = [];
-    const folded = new Set();
-    for (const thread of waiting) {
-      const asked = answeredAsk(thread);
-      const group = asked?.number === undefined ? undefined : byAsk.get(asked.number);
-      if (asked && asked.number !== undefined && group && group.length > 1) {
-        if (folded.has(asked.number)) continue;
-        folded.add(asked.number);
-        rows.push(this.foldedRow(asked.number, asked.title ?? titleOf(thread), group));
-      } else if (asked) {
-        rows.push(this.row(thread, el('span', {}, [`${answererName({ name: thread.senderName })} answered `, el('i', {}, [asked.title ?? titleOf(thread)])])));
-      } else rows.push(this.row(thread, firstLine(thread)));
-    }
-    return rows;
+    return foldWaiting(waiting, (thread) => answeredAsk(thread)?.number).map((entry) => {
+      if (entry.kind === 'fold') {
+        const asked = entry.threads[0] ? answeredAsk(entry.threads[0]) : null;
+        return this.foldedRow(entry.number, asked?.title ?? (entry.threads[0] ? titleOf(entry.threads[0]) : ''), entry.threads);
+      }
+      const asked = answeredAsk(entry.thread);
+      return asked
+        ? this.row(entry.thread, el('span', {}, [`${answererName({ name: entry.thread.senderName })} answered `, el('i', {}, [asked.title ?? titleOf(entry.thread)])]))
+        : this.row(entry.thread, firstLine(entry.thread));
+    });
+  }
+
+  /** Waiting on you as Today folds it: what its rows, its keyboard walk and the rail's count all follow. */
+  folded() {
+    return foldWaiting(this.waiting(), (thread) => answeredAsk(thread)?.number);
   }
 
   /**
@@ -1811,7 +1824,7 @@ class Threads {
    */
   foldedRow(number, title, group) {
     const newest = group[0];
-    return el('a', { class: 't-row', href: `/threads/${number}`, 'data-thread': String(number), 'aria-selected': 'false' }, [
+    return el('a', { class: 't-row', href: `/threads/${number}`, 'data-thread': String(number), 'aria-selected': String(this.sel === number) }, [
       el('span', { class: 't-num' }, [`#${number}`]),
       el('span', { class: 't-row-main' }, [
         el('span', { class: 't-row-title' }, [el('span', { class: 't-row-mark', title: 'An ask' }, [icon('ask')]), foldedTitle(title, group.length)]),
@@ -1962,7 +1975,7 @@ class Threads {
           ? [this.nameNode(thread.senderNumber, sender), ' told you this']
           : [this.shown.events[0]?.actor === 'owner' ? 'You started this' : 'You said this; the recorder sync wrote it down'];
     // An ask's summary is his private label: strangers read its title alone, so the head says so.
-    const summaryNote = askOf(thread) ? 'only you see this; people answering see the title alone' : 'kept current by the recorder sync';
+    const summaryNote = summaryNoteFor(askOf(thread) !== null, this.member);
     const summary = thread.summary
       ? el('section', { class: 't-summary', 'aria-label': 'Summary' }, [
           el('div', { class: 't-summary-head' }, [el('span', {}, ['Summary']), el('span', {}, [summaryNote])]),
@@ -2090,7 +2103,8 @@ class Threads {
       this.talk = { ...freshTalk(), ready: true, questions: new Set(said.questions) };
       this.wordsDraft = null;
       // He reads an ask and the answers to it; he doesn't answer his own questions in someone else's thread.
-      frame.contentWindow?.postMessage(helloFor(!this.member && thread.ask ? 'read' : 'member'), '*');
+      this.talk.hello = !this.member && thread.ask ? 'read' : 'member';
+      frame.contentWindow?.postMessage(helloFor(this.talk.hello), '*');
       this.tellPage();
       return;
     }
@@ -2121,7 +2135,8 @@ class Threads {
     } else if (said.kind === 'answer') {
       const now = Date.now();
       this.talk.answered = this.talk.answered.filter((at) => now - at < 60_000);
-      if (!this.talk.questions.has(said.question) || this.talk.answered.length >= ANSWERS_A_MINUTE) {
+      // A page he only reads draws no box, so an answer from it is a page script's own: refused, nothing saved.
+      if (this.talk.hello === null || !takesAnswers(this.talk.hello) || !this.talk.questions.has(said.question) || this.talk.answered.length >= ANSWERS_A_MINUTE) {
         frame.contentWindow?.postMessage({ [KEY]: 'saved', question: said.question, ok: false }, '*');
         return;
       }
@@ -2145,7 +2160,8 @@ class Threads {
       this.talk = { ...freshTalk(), ready: true, questions: new Set(said.questions) };
       // A page that asks nothing is read as it is, as every public page was.
       if (said.questions.length === 0) return;
-      frame.contentWindow?.postMessage(helloFor('visitor'), '*');
+      this.talk.hello = 'visitor';
+      frame.contentWindow?.postMessage(helloFor(this.talk.hello), '*');
       prepareBotCheck();
       this.renderPublic();
       this.tellPublicPage();
@@ -4437,7 +4453,8 @@ class Threads {
     if (said.kind === 'ready') {
       this.talk = { ...freshTalk(), ready: true, questions: new Set(said.questions) };
       if (said.questions.length === 0 || shown.ask.state !== 'open') return;
-      frame.contentWindow?.postMessage(helloFor('private'), '*');
+      this.talk.hello = 'private';
+      frame.contentWindow?.postMessage(helloFor(this.talk.hello), '*');
       prepareBotCheck();
       this.tellAskPage();
       return;

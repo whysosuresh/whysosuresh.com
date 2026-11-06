@@ -2,11 +2,15 @@
 // patterns; a row says who can answer or how many did and when; Answered by puts new answers first and then the
 // newest, and finds a name or a number; its head counts the people and the new ones; Today folds several new answers
 // to one ask into a row that names two and counts the others; a closed ask's Send a note goes to its topic's note
-// when a topic opens it; and every ask event has its history words.
+// when a topic opens it; and every ask event has its history words. Today's Waiting on you is folded once, the same
+// for its rows, its keyboard walk and the rail's count: one entry per lone response thread, one per ask with several
+// new answers, named by the ask's number. Mark read is offered from one new answer. Only he reads that an ask's
+// summary is his alone, and the drafts' hint says only he can open one.
 
 import { describe, expect, it } from "vitest";
 import {
   ASK_PATH,
+  DRAFTS_HINT,
   agoWords,
   answeredHead,
   answererName,
@@ -16,10 +20,13 @@ import {
   askShown,
   countLine,
   foldedTitle,
+  foldWaiting,
   foldedWho,
+  markReadLabel,
   markedWords,
   savedLine,
   stateWords,
+  summaryNoteFor,
   talkLinkFor,
   topicLine,
   visitorHint,
@@ -108,5 +115,39 @@ describe("a visitor's lines and the history's", () => {
     expect(askEventWords("ask-closed", "demo")).toBe("closed the ask");
     expect(askEventWords("ask-read", null)).toBe("marked the answers read");
     expect(askEventWords("moved", null)).toBeNull();
+  });
+});
+
+describe("Waiting on you, folded", () => {
+  const t = (number: number, ask: number | null = null) => ({ number, ask });
+  const askOf = (thread: { ask: number | null }) => thread.ask ?? undefined;
+
+  it("keeps a lone response thread and every other thread as itself, and folds several answers to one ask into one entry named by the ask", () => {
+    const waiting = [t(9), t(41, 15), t(42, 15), t(7), t(52, 51), t(43, 15)];
+    expect(foldWaiting(waiting, askOf)).toEqual([
+      { kind: "one", number: 9, thread: t(9) },
+      { kind: "fold", number: 15, threads: [t(41, 15), t(42, 15), t(43, 15)] },
+      { kind: "one", number: 7, thread: t(7) },
+      { kind: "one", number: 52, thread: t(52, 51) },
+    ]);
+  });
+
+  it("is as many entries as Today draws rows, which is what the rail counts", () => {
+    const many = Array.from({ length: 200 }, (_, i) => t(100 + i, 15));
+    expect(foldWaiting([t(1), ...many], askOf).map((entry) => entry.number)).toEqual([1, 15]);
+    expect(foldWaiting([], askOf)).toEqual([]);
+  });
+});
+
+describe("Mark read and an ask's notes", () => {
+  it("offers Mark read from one new answer, and counts only when there are several", () => {
+    expect([markReadLabel(0), markReadLabel(1), markReadLabel(3)]).toEqual([null, "Mark read", "Mark 3 read"]);
+  });
+
+  it("says the summary is his alone only to him, on an ask's own thread", () => {
+    expect(summaryNoteFor(true, false)).toBe("only you see this; people answering see the title alone");
+    expect(summaryNoteFor(true, true)).toBe("kept current by the recorder sync");
+    expect(summaryNoteFor(false, false)).toBe("kept current by the recorder sync");
+    expect(DRAFTS_HINT).toBe("Only you can open one");
   });
 });

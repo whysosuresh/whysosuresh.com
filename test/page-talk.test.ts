@@ -4,10 +4,10 @@
 // parent; the page is told each person's newest answer, by name and never by address or number, and every
 // discussion's words with the one being written; and cards beside the page sit level with their words, pushed down
 // where two would overlap. The hello each reader's page is answered with is one of four shapes the bridge takes,
-// and a public thread's and a signed-in reader's are the bytes they always were.
+// and a public thread's and a signed-in reader's are the bytes they always were; a page told to be read takes no answer.
 
 import { describe, expect, it } from "vitest";
-import { DRAFT, KEY, MAX_ANSWER, MAX_QUOTE, discussionFor, helloFor, newestAnswers, placesOf, readPageMessage, stack } from "../site/app/page-talk.js";
+import { DRAFT, KEY, MAX_ANSWER, MAX_QUOTE, discussionFor, helloFor, newestAnswers, placesOf, readPageMessage, stack, takesAnswers } from "../site/app/page-talk.js";
 
 /** The bridge's reading of a hello, loaded by a computed path so this project's type check doesn't follow into it. */
 const bridge: string = new URL("../frame/bridge.js", import.meta.url).href;
@@ -192,5 +192,11 @@ describe("the hello a page is answered with", () => {
     expect(readFromThread(helloFor("visitor"))).toEqual({ kind: "hello", visitor: true, mode: "answer" });
     expect(readFromThread(helloFor("private"))).toEqual({ kind: "hello", visitor: true, mode: "private" });
     expect(readFromThread(helloFor("read"))).toEqual({ kind: "hello", visitor: false, mode: "read" });
+  });
+});
+
+describe("which pages take answers", () => {
+  it("takes them from every page but one he only reads, whatever a page script posts", () => {
+    expect([takesAnswers("member"), takesAnswers("visitor"), takesAnswers("private"), takesAnswers("read")]).toEqual([true, true, true, false]);
   });
 });

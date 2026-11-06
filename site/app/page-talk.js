@@ -140,6 +140,15 @@ export function helloFor(as) {
 }
 
 /**
+ * Whether a page answered with this hello takes answers from its frame: every one but a page he only reads (`read`),
+ * whose boxes aren't drawn, so an answer from it can only be a page script's own.
+ * @param {'member' | 'visitor' | 'private' | 'read'} as
+ */
+export function takesAnswers(as) {
+  return as !== 'read';
+}
+
+/**
  * A thread's comments by where they sit, each list oldest first: on the thread, answers, discussions on the page's
  * words, and every comment's replies by its id. Dropped notes are left out, as the history leaves them out.
  * @template {Comment} C

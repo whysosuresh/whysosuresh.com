@@ -112,6 +112,56 @@ export function foldedTitle(title, count) {
   return `${title} · ${count} new answers`;
 }
 
+/**
+ * Waiting on you, folded as Today draws it: a thread that answers no ask, or the only new answer to its ask, is an
+ * entry of its own; several new answers to one ask are one entry, named by the ask's number, where the first of them
+ * was. Today's rows, its keyboard walk and the rail's count all read this, so none of them reaches a thread with no row.
+ * @template T
+ * @param {readonly (T & { number: number })[]} waiting newest first
+ * @param {(thread: T) => number | undefined} askOf the number of the ask a thread answers, if it answers one
+ * @returns {({ kind: 'one', number: number, thread: T } | { kind: 'fold', number: number, threads: T[] })[]}
+ */
+export function foldWaiting(waiting, askOf) {
+  /** @type {Map<number, T[]>} */
+  const byAsk = new Map();
+  for (const thread of waiting) {
+    const ask = askOf(thread);
+    if (ask !== undefined) byAsk.set(ask, [...(byAsk.get(ask) ?? []), thread]);
+  }
+  /** @type {({ kind: 'one', number: number, thread: T } | { kind: 'fold', number: number, threads: T[] })[]} */
+  const entries = [];
+  const folded = new Set();
+  for (const thread of waiting) {
+    const ask = askOf(thread);
+    const group = ask === undefined ? undefined : byAsk.get(ask);
+    if (ask === undefined || group === undefined || group.length < 2) entries.push({ kind: 'one', number: thread.number, thread });
+    else if (!folded.has(ask)) {
+      folded.add(ask);
+      entries.push({ kind: 'fold', number: ask, threads: group });
+    }
+  }
+  return entries;
+}
+
+/** What Mark read says: nothing to mark is no button; one new answer "Mark read"; several count. @param {number} fresh */
+export function markReadLabel(fresh) {
+  if (fresh < 1) return null;
+  return fresh === 1 ? 'Mark read' : `Mark ${fresh} read`;
+}
+
+/** The drafts' hint in Asks. */
+export const DRAFTS_HINT = 'Only you can open one';
+
+/**
+ * The note in a summary's head: on an ask's own thread, for him, that it is his alone; for anyone else, and on every
+ * other thread, the usual line.
+ * @param {boolean} asAsk whether the thread is an ask's own
+ * @param {boolean} member whether an invited person reads it
+ */
+export function summaryNoteFor(asAsk, member) {
+  return asAsk && !member ? 'only you see this; people answering see the title alone' : 'kept current by the recorder sync';
+}
+
 /** The toast after Mark read. @param {number} marked */
 export function markedWords(marked) {
   return marked === 1 ? 'Marked 1 answer read' : `Marked ${marked} answers read`;
