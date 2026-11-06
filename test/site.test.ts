@@ -329,6 +329,20 @@ describe("talk-topics.js, which the Worker imports too", () => {
     expect(read("talk-topics.js")).toMatch(/^ \*   ask\?: string,$/m);
   });
 
+  it("opens the Stigmer and CapsJump asks from their topics, and keeps the note for My videos and Something else", async () => {
+    const { TOPICS } = await loading;
+    expect(TOPICS.map((topic) => [topic.slug, topic.ask ?? null])).toEqual([
+      ["stigmer", "stigmer"],
+      ["videos", null],
+      ["capsjump", "capsjump"],
+      ["other", null],
+    ]);
+    // The picker draws a topic that names an ask as a link to its page; the rest stay buttons that open the note.
+    const talk = read("talk.js");
+    expect(talk).toContain("`/ask/${topic.ask}`");
+    expect(talk).toContain("A few questions");
+  });
+
   it.each([
     ["#talk", { open: true, topic: null }],
     ["#talk/stigmer", { open: true, topic: "stigmer" }],
