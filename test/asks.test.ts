@@ -14,6 +14,7 @@
 // back; Asks lists every ask with how many answered; and an open ask's address carries its title and a fixed line in
 // its preview, never the summary, while a draft's and a missing slug's get the plain shell.
 
+import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SITE, startHarness, type Harness } from "./harness.ts";
 
@@ -69,8 +70,9 @@ async function thread(fields: Record<string, unknown> = {}): Promise<number> {
   return (await answer<{ thread: { number: number } }>(await call("/threads", { as: "sync", body }), 201)).thread.number;
 }
 
-async function savePage(number: number, html: string): Promise<Response> {
-  return harness.fetch(`${SITE}/threads/api/threads/${number}/pages`, {
+async function savePage(number: number, html: string, from?: string): Promise<Response> {
+  const query = from === undefined ? "" : `?${new URLSearchParams({ from }).toString()}`;
+  return harness.fetch(`${SITE}/threads/api/threads/${number}/pages${query}`, {
     method: "POST",
     headers: { "Content-Type": "text/html; charset=utf-8", "Cf-Access-Jwt-Assertion": token("sync") },
     body: new TextEncoder().encode(html),
@@ -332,6 +334,15 @@ describe("answering an ask", () => {
     expect(await spent()).toEqual({ notes: 0, answers: 1, askThreads: 0, askAnswers: 0 });
   });
 
+  it("refuses a new thread at the threads' limit without spending an answer", async () => {
+    await opened("thread-limit");
+    expect((await sendAnswer("thread-limit")).status).toBe(201);
+    const database = await harness.db();
+    await database.prepare("UPDATE ask_thread_senders SET sends = 100").run();
+    expect(await reasonOf(await sendAnswer("thread-limit", { key: KEY_B }))).toEqual([429, "limit"]);
+    expect(await spent()).toEqual({ notes: 0, answers: 0, askThreads: 100, askAnswers: 1 });
+  });
+
   it("stops a network at 400 answers a day, and at 100 new threads, with 429", async () => {
     await opened("limits");
     const database = await harness.db();
@@ -343,6 +354,25 @@ describe("answering an ask", () => {
     await database.prepare("UPDATE ask_thread_senders SET sends = 100").run();
     expect(await reasonOf(await sendAnswer("limits", { key: KEY_B }))).toEqual([429, "limit"]);
     expect((await sendAnswer("limits", { question: "fit" })).status).toBe(201);
+  });
+});
+
+describe("an origin the asks keep", () => {
+  it("is refused to the sync's add, and a thread under it that no ask made never receives an answer", async () => {
+    const ask = await opened("own-origin");
+    const { thread: shown } = await answer<{ thread: { id: string } }>(await call(`/threads/${ask}`));
+    const ref = `ask:${shown.id}:${createHash("sha256").update(KEY_A).digest("hex")}`;
+    const add = { ref, source: "self", title: "Planted", body: "Planted.", space: "stigmer", status: "act" };
+    expect(await reasonOf(await call("/threads", { as: "sync", body: add }))).toEqual([400, "ref"]);
+    const database = await harness.db();
+    await database
+      .prepare("INSERT INTO threads (id, number, created_at, source, body, status, origin_ref) VALUES ('planted', 900, '2026-11-01T00:00:00.000Z', 'self', 'Planted.', 'act', ?1)")
+      .bind(ref)
+      .run();
+    expect((await sendAnswer("own-origin")).status).not.toBe(201);
+    expect((await read("own-origin")).answers).toEqual([]);
+    expect(await database.prepare("SELECT COUNT(*) AS n FROM comments").first<{ n: number }>()).toEqual({ n: 0 });
+    expect(await responses()).toEqual([]);
   });
 });
 
@@ -408,6 +438,25 @@ describe("a response thread", () => {
     expect((await call(`/threads/${ask}/pages/2`, { as: sam })).status).toBe(404);
   });
 
+  it("never tells the respondent he invites back the claude.ai address the ask's page came from", async () => {
+    const ask = await draft("no-source");
+    expect((await savePage(ask, QUESTIONS, "https://claude.ai/artifact/questions")).status).toBe(201);
+    await answer(await askCall(ask, { action: "open" }));
+    expect((await sendAnswer("no-source", { name: "Sam", email: "sam@example.com" })).status).toBe(201);
+    const [response] = await responses();
+    const n = response?.number ?? 0;
+    await answer(await call(`/threads/${n}/people`, { body: { add: { email: "sam@example.com", name: "Sam" } } }));
+    const theirs = await call(`/threads/${n}`, { as: { email: "sam@example.com" } });
+    const text = await theirs.text();
+    expect(theirs.status).toBe(200);
+    expect(text).not.toContain("claude.ai");
+    const page = (JSON.parse(text) as { page: { version: number; versions: Record<string, unknown>[] } & Record<string, unknown> }).page;
+    expect(page.version).toBe(2);
+    expect("source" in page || page.versions.some((version) => "source" in version)).toBe(false);
+    const his = await answer<{ page: { source: string | null } }>(await call(`/threads/${n}`));
+    expect(his.page.source).toBe("https://claude.ai/artifact/questions");
+  });
+
   it("is listed under its ask's thread as who answered, for the owner", async () => {
     const ask = await opened("answered-by");
     expect((await sendAnswer("answered-by", { name: "Asha" })).status).toBe(201);
@@ -439,7 +488,10 @@ describe("Mark read", () => {
     expect((await sendAnswer("other-ask")).status).toBe(201);
     const before = await waiting();
     expect(Object.values(before).filter(Boolean).length).toBe(2);
+    const activity = async (n: number | undefined): Promise<string> => (await answer<{ thread: { activityAt: string } }>(await call(`/threads/${n}`))).thread.activityAt;
+    const [firstBefore, secondBefore] = [await activity(first), await activity(second)];
     expect(await answer(await askCall(ask, { action: "read" }))).toEqual({ marked: 1 });
+    expect([await activity(first), await activity(second)]).toEqual([firstBefore, secondBefore]);
     const after = await waiting();
     expect([after[first ?? 0], after[second ?? 0]]).toEqual([false, false]);
     expect(Object.values(after).filter(Boolean).length).toBe(1);
@@ -449,6 +501,20 @@ describe("Mark read", () => {
     expect(await events(second)).toEqual(["created:visitor"]);
     expect(await answer(await askCall(ask, { action: "read" }))).toEqual({ marked: 0 });
     expect((await answer<{ events: { type: string }[] }>(await call(`/threads/${other}`))).events.map((event) => event.type)).not.toContain("ask-read");
+  });
+
+  it("is never shown to the respondent he invites back, who may not mark anything read", async () => {
+    const ask = await opened("mark-read-member");
+    expect((await sendAnswer("mark-read-member", { name: "Sam", email: "sam@example.com" })).status).toBe(201);
+    const [response] = await responses();
+    const n = response?.number ?? 0;
+    // Inviting is his act on the thread, so it ends the wait itself: Mark read comes first.
+    expect(await answer(await askCall(ask, { action: "read" }))).toEqual({ marked: 1 });
+    await answer(await call(`/threads/${n}/people`, { body: { add: { email: "sam@example.com", name: "Sam" } } }));
+    const sam = { email: "sam@example.com" };
+    const theirs = await answer<{ events: { type: string }[] }>(await call(`/threads/${n}`, { as: sam }));
+    expect(theirs.events.map((event) => event.type)).not.toContain("ask-read");
+    for (const body of [{ action: "read" }, { action: "close" }, { slug: "theirs" }]) expect([body, ...(await reasonOf(await askCall(n, body, sam)))]).toEqual([body, 403, "owner-only"]);
   });
 
   it("is the owner's alone, from his own page, and only on an ask's own thread", async () => {

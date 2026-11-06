@@ -307,15 +307,20 @@ function peopleView(people: readonly PersonRow[], reader: Reader): JsonValue {
   return people.map((person) => ({ id: person.id, number: person.number, name: person.name, email: person.email, addedAt: person.added_at }));
 }
 
-/** A thread's page as its call answers it: the newest version, and every version; null when it has none. */
-function pageView(pages: readonly PageRow[]): JsonValue {
+/**
+ * A thread's page as its call answers it: the newest version, and every version; null when it has none. A response
+ * thread's page is its ask's, his own artifact, so a respondent he invites back never reads where it came from.
+ */
+function pageView(pages: readonly PageRow[], row: ThreadRow, reader: Reader): JsonValue {
   const newest = pages[pages.length - 1];
   if (newest === undefined) return null;
+  const sourced = !(reader.caller === "member" && row.ask_thread_id !== null);
+  const source = (page: PageRow): { source?: string | null } => (sourced ? { source: page.source_url } : {});
   return {
     version: newest.version,
     savedAt: newest.created_at,
-    source: newest.source_url,
-    versions: pages.map((page) => ({ version: page.version, savedAt: page.created_at, actor: page.actor, bytes: page.bytes, source: page.source_url })),
+    ...source(newest),
+    versions: pages.map((page) => ({ version: page.version, savedAt: page.created_at, actor: page.actor, bytes: page.bytes, ...source(page) })),
   };
 }
 
@@ -431,7 +436,7 @@ async function show(number: number, env: Bindings, caller: Caller): Promise<Resp
   ]);
   return json(200, {
     thread: thread(row, caller),
-    page: pageView(pages),
+    page: pageView(pages, row, caller),
     people: peopleView(people, caller),
     comments: comments.slice(0, HISTORY).map((row) => commentView(row, caller)),
     events: events.slice(0, HISTORY).map((event) => eventView(event, caller)),
