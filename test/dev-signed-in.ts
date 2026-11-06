@@ -9,7 +9,10 @@
 // his own is public ("Shipping Stigmer 0.1.0, in public"), shared with the same person, with a comment of his
 // written for anyone, a visitor's note he OK'd and one waiting for his OK, whose words hold Markdown and a link that
 // must show as typed; signed out, its address shows the public view. The pricing page thread is public as well, and
-// not shared, so the invited person reads it in the public view too. Pages are seeded the way the sync saves them, through the threads' call with its
+// not shared, so the invited person reads it in the public view too. Everyone in the seed is a person: Asha wrote
+// from the site and was then invited to the meetup thread, Dev K. told him something in person, Meera is invited
+// (with his own notes on her), Tomás wrote on the public thread with an address (Priya gave none, so she is no
+// person), and Rex's only note was junk he dropped, so Rex sits under the people only in dropped threads. Pages are seeded the way the sync saves them, through the threads' call with its
 // played token: the sealed probe (test/fixtures/sealed-probe.html, every line of which should read "blocked" in the
 // browser), and each file given with `--page <file>` (an
 // artifact's HTML as the Artifact tool's read saved it) as a version of one thread. Requests reach the Worker at
@@ -85,13 +88,32 @@ async function seed(): Promise<void> {
   await asPerson(harness.access.memberClaims(guest), `/${who}/comments`, { body: "Happy to own pricing. I'll draft the tiers by Thursday." });
 
   const database = await harness.db();
-  await database
-    .prepare(
-      `INSERT INTO threads (id, number, created_at, activity_at, source, space, body, status, sender_name, sender_email)
-       VALUES (?1, (SELECT MAX(number) + 1 FROM threads), ?2, ?2, 'talk', 'stigmer', ?3, 'received', 'Asha', 'asha@example.com')`,
-    )
-    .bind(crypto.randomUUID(), new Date().toISOString(), "Followed the install page on Windows. It stops after \"fetching the runner\" with no message.")
-    .run();
+  /** A note sent from the site's note flow, as a visitor sends one; answers its thread's number. */
+  const siteNote = async (name: string, email: string, words: string): Promise<number> => {
+    const response = await harness.fetch(`${SITE}/api/talk`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: SITE, "CF-Connecting-IP": "203.0.113.40" },
+      body: new TextEncoder().encode(JSON.stringify({ topic: "stigmer", body: words, name, email, token: "pass" })),
+    });
+    if (response.status !== 201) throw new Error(`seeding a site note answered ${response.status}: ${await response.text()}`);
+    return (await database.prepare("SELECT MAX(number) AS n FROM threads").first<{ n: number }>())?.n ?? 0;
+  };
+  await siteNote("Asha", "asha@example.com", "Followed the install page on Windows. It stops after \"fetching the runner\" with no message.");
+  const junk = await siteNote("Rex", "rex@example.net", "Cheap followers, best price, reply now.");
+  await asSync(`/${junk}`, { action: "drop", reason: "spam" });
+  const meetup = (await database.prepare("SELECT number FROM threads WHERE origin_ref = 'chat:seed-5'").first<{ number: number }>())?.number ?? 0;
+  await asPerson(owner, `/${meetup}/people`, { add: { email: "asha@example.com", name: "Asha" } });
+  /** A change to a person from the owner's own page. */
+  const toPerson = async (number: number, change: Record<string, string>): Promise<void> => {
+    const response = await harness.fetch(`${SITE}/threads/api/people/${number}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: SITE, "Cf-Access-Jwt-Assertion": harness.access.token(owner) },
+      body: new TextEncoder().encode(JSON.stringify(change)),
+    });
+    if (!response.ok) throw new Error(`seeding person ${number} answered ${response.status}: ${await response.text()}`);
+  };
+  const meera = (await database.prepare("SELECT number FROM people WHERE email = ?1").bind(guest).first<{ number: number }>())?.number ?? 0;
+  await toPerson(meera, { note: "Met at the infra meetup in October.\n\n- prefers async, writes long\n- owns pricing from Friday" });
   const page = async (number: number, html: Uint8Array, from: string | null): Promise<void> => {
     const query = from === null ? "" : `?${new URLSearchParams({ from }).toString()}`;
     const response = await harness.fetch(`${SITE}/threads/api/threads/${number}/pages${query}`, {

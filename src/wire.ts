@@ -75,27 +75,36 @@ export function text(value: unknown, max: number): string | null {
   return trimmed;
 }
 
+/** A person's number as an add names it: a positive whole number of at most nine digits. */
+function isPersonNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 999_999_999;
+}
+
 /**
  * An add from the sync as a new thread, or the reason it is refused: its first field that is wrong, in a fixed
- * order. Something told to Suresh in person (`told`) names the teller; his own (`self`) names no one.
+ * order. Something told to Suresh in person (`told`) names the teller, as he said the name, and may name the person
+ * they are by number (`person`), which the sync proposes and he agrees to; his own (`self`) names no one.
  */
 export function readAdd(value: unknown): NewThread | string {
   if (!isRecord(value)) return "item";
   const source = value.source;
   if (source !== "told" && source !== "self") return "source";
-  const expected = ["body", "ref", "source", "space", "status", "title", ...(source === "told" ? ["name"] : [])].sort().join(",");
-  if (Object.keys(value).sort().join(",") !== expected) return "keys";
+  const keys = ["body", "ref", "source", "space", "status", "title", ...(source === "told" ? ["name"] : [])];
+  const expected = keys.sort().join(",");
+  const withPerson = [...keys, "person"].sort().join(",");
+  const given = Object.keys(value).sort().join(",");
+  if (given !== expected && (source !== "told" || given !== withPerson)) return "keys";
 
   if (typeof value.ref !== "string" || !REF_SHAPE.test(value.ref)) return "ref";
   const title = line(value.title, MAX_TITLE);
   if (title === null) return "title";
   const body = text(value.body, MAX_BODY);
   if (body === null || body === "") return "body";
-  const given = value.space;
+  const space = value.space;
   let about: string | null = null;
-  if (given !== null) {
-    if (typeof given !== "string" || !isSpace(given)) return "space";
-    about = given;
+  if (space !== null) {
+    if (typeof space !== "string" || !isSpace(space)) return "space";
+    about = space;
   }
   let name: string | null = null;
   if (source === "told") {
@@ -104,7 +113,37 @@ export function readAdd(value: unknown): NewThread | string {
   }
   const status = value.status;
   if (status !== "received" && status !== "act" && status !== "discuss") return "status";
-  return { source, space: about, title, body, senderName: name, senderEmail: null, status, originRef: value.ref };
+  const person = value.person;
+  if (person !== undefined && !isPersonNumber(person)) return "person";
+  return { source, space: about, title, body, senderName: name, senderEmail: null, status, originRef: value.ref, person: person ?? null };
+}
+
+/** The longest name the owner gives a person, in UTF-16 code units of the trimmed text. */
+export const MAX_PERSON_NAME = 80;
+/** The longest email address. */
+const MAX_EMAIL = 254;
+/**
+ * An email address as the owner gives a person one (an invitation, or a person's page): one `@`, a domain of two or
+ * more dot-separated parts with none empty (so no trailing dot, which a dictated address often carries and which no
+ * sign-in could ever match), and none of the characters that would split or quote it in a mail draft's recipients.
+ */
+const EMAIL_SHAPE = /^[^\s@,;:<>()"\[\]\\]+@(?:[^\s@,;:<>()"\[\]\\.]+\.)+[^\s@,;:<>()"\[\]\\.]+$/;
+
+/**
+ * An address the owner gives a person, lowercased, as the store keeps it; `person` for one that isn't an address,
+ * and `owner` for his own, which no person may hold.
+ */
+export function readEmail(value: unknown, env: { readonly INBOX_OWNER_EMAIL?: string | undefined }): { readonly email: string } | "person" | "owner" {
+  const address = line(value, MAX_EMAIL);
+  if (address === null || !EMAIL_SHAPE.test(address)) return "person";
+  const email = address.toLowerCase();
+  return email === (env.INBOX_OWNER_EMAIL ?? "").trim().toLowerCase() ? "owner" : { email };
+}
+
+/** Exactly the given keys, as a record; null for anything else. */
+export function exactly(value: unknown, keys: readonly string[]): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  return Object.keys(value).sort().join(",") === [...keys].sort().join(",") ? value : null;
 }
 
 /** A change as one of the store's moves, or null for a malformed one. */
@@ -158,5 +197,5 @@ export function readOwnAdd(value: unknown): NewThread | string {
   if (typeof given !== "string" || !isSpace(given)) return "space";
   const status = value.status;
   if (status !== "received" && status !== "act" && status !== "discuss") return "status";
-  return { source: "self", space: given, title, body, senderName: null, senderEmail: null, status, originRef: null };
+  return { source: "self", space: given, title, body, senderName: null, senderEmail: null, status, originRef: null, person: null };
 }

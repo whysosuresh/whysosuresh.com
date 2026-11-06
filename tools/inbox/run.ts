@@ -1,6 +1,7 @@
 // The inbox's command-line client: how the recorder sync, and any session on Suresh's Mac, lists, adds, moves,
 // comments on, rewrites and reads the threads in Suresh's private inbox through the threads' calls
-// (src/threads.ts), naming each thread by its number, as the sync's Cloudflare Access service token. Its client
+// (src/threads.ts), naming each thread by its number, and reads the people he deals with (src/people.ts) by
+// theirs, without changing any, as the sync's Cloudflare Access service token. Its client
 // id is wrangler.jsonc's public var; its secret comes only from the environment (`INBOX_SYNC_CLIENT_SECRET`), is
 // sent only in the Access header, and is never printed or written anywhere. Every answer is one JSON line on
 // stdout; a refusal exits non-zero with the Worker's reason. Words (a comment, a summary, a main text) come on
@@ -27,6 +28,8 @@ const MAX_PAGES = 200;
 const NUMBER_SHAPE = /^[1-9]\d{0,8}$/;
 /** Where the threads' calls live. */
 const THREADS = "/threads/api/threads";
+/** Where the people calls live. */
+const PEOPLE = "/threads/api/people";
 
 export const USAGE = `Usage: inbox <verb> [arguments]
 
@@ -46,6 +49,9 @@ export const USAGE = `Usage: inbox <verb> [arguments]
   link <number> <claude.ai address> [--title <text>]
                                   the thread's link to an artifact that only works on claude.ai
   link <number> --clear           the link removed; the thread shows its page again, or its text
+  people                          everyone he deals with, whoever was last in touch first, one JSON line each
+  person <number>                 one person (by their number) with their threads and what they said, as
+                                  one JSON line
 
 The service token's secret is read from ${SECRET_VARIABLE}; the client id from wrangler.jsonc.
 Exit status: 0 when every request was answered as asked, 1 on any refusal, 2 on a usage error.
@@ -265,6 +271,27 @@ async function link(io: Io, secret: string, args: readonly string[]): Promise<nu
   return report(io, "link", await call(io, secret, `${THREADS}/${number}/link`, { method: "POST", body: JSON.stringify(change) }), "thread");
 }
 
+/** Everyone, one line each, as the Worker answers them; it says when there were more than it answered. */
+async function people(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  if (args.length > 0) throw new Usage("people takes nothing more");
+  const answer = await call(io, secret, PEOPLE, { method: "GET" });
+  if (answer.status !== 200) {
+    io.err(`inbox: people refused (${answer.status} ${reasonOf(answer)})`);
+    return 1;
+  }
+  const everyone = Array.isArray(answer.body.people) ? (answer.body.people as unknown[]) : [];
+  for (const one of everyone) io.out(JSON.stringify(one));
+  if (answer.body.truncated === true) io.err("inbox: people answered only the people last in touch; there are more");
+  return 0;
+}
+
+/** One person, with their threads and what they said, as the Worker answers them. */
+async function person(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const [given, ...rest] = args;
+  if (given === undefined || !NUMBER_SHAPE.test(given) || rest.length > 0) throw new Usage("person takes one person's number, such as 7");
+  return report(io, "person", await call(io, secret, `${PEOPLE}/${given}`, { method: "GET" }), null);
+}
+
 /** Runs one command line; answers the exit status. */
 export async function run(argv: readonly string[], io: Io): Promise<number> {
   const [verb, ...args] = argv;
@@ -286,6 +313,8 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     if (verb === "show") return await show(io, secret, args);
     if (verb === "page") return await page(io, secret, args);
     if (verb === "link") return await link(io, secret, args);
+    if (verb === "people") return await people(io, secret, args);
+    if (verb === "person") return await person(io, secret, args);
     throw new Usage(`unknown verb: ${verb}`);
   } catch (error) {
     if (error instanceof Usage) {

@@ -1,6 +1,7 @@
 // The inbox's command line (tools/inbox/), driven through its logic with a played fetch: each verb's request to
 // the threads' calls, by the thread's number, with the service token's two Access headers and the client id
-// wrangler.jsonc names; a list followed through every page; an add answered line by line; a comment (for everyone
+// wrangler.jsonc names; everyone, and one person by their number, read through the people calls; a told thread's
+// person passed through an add; a list followed through every page; an add answered line by line; a comment (for everyone
 // in the thread, or with --only-me for the owner alone) and an edit taking their words from stdin as they are; a page sent from a file as HTML, refused here past 16 MiB; a link set
 // and cleared; the Worker's refusals and the edge's passed through with a
 // non-zero exit; usage errors; and the secret in no line it prints. One run of the real entry point as a child
@@ -335,6 +336,55 @@ describe("link", () => {
     const { io, sent } = client([]);
     expect(await run(argv, io)).toBe(2);
     expect(sent).toEqual([]);
+  });
+});
+
+describe("people", () => {
+  it("prints everyone, one line each, as the Worker answers them", async () => {
+    const asha = { number: 1, name: "Asha", email: "asha@example.com", dropped: false, counts: { sent: 2 } };
+    const { io, sent, out, err } = client([{ status: 200, body: { people: [asha, { number: 2, name: "Dev", email: null }], truncated: false } }]);
+    expect(await run(["people"], io)).toBe(0);
+    expect(sent.map((one) => [one.method, one.url])).toEqual([["GET", `${ORIGIN}/threads/api/people`]]);
+    expect(out.map((line) => JSON.parse(line))).toEqual([asha, { number: 2, name: "Dev", email: null }]);
+    expect(err).toEqual([]);
+  });
+
+  it("says when there were more than the Worker answered", async () => {
+    const { io, err } = client([{ status: 200, body: { people: [{ number: 1 }], truncated: true } }]);
+    expect(await run(["people"], io)).toBe(0);
+    expect(err).toEqual(["inbox: people answered only the people last in touch; there are more"]);
+  });
+
+  it("prints one person as one line, and passes a number nobody has through with exit 1", async () => {
+    const one = { person: { number: 7, name: "Meera", note: "Prefers async." }, threads: [{ number: 16, roles: ["invited"] }], words: [], truncated: false };
+    const found = client([{ status: 200, body: one }]);
+    expect(await run(["person", "7"], found.io)).toBe(0);
+    expect(found.sent.map((call) => call.url)).toEqual([`${ORIGIN}/threads/api/people/7`]);
+    expect(found.out.map((line) => JSON.parse(line))).toEqual([one]);
+    const missing = client([{ status: 404, body: { reason: "no-person" } }]);
+    expect(await run(["person", "9"], missing.io)).toBe(1);
+    expect(missing.err).toEqual(["inbox: person refused (404 no-person)"]);
+  });
+
+  it("are usage errors with anything else, sending nothing", async () => {
+    for (const argv of [["people", "7"], ["person"], ["person", "07"], ["person", "7", "8"]]) {
+      const { io, sent } = client([]);
+      expect(await run(argv, io)).toBe(2);
+      expect(sent).toEqual([]);
+    }
+  });
+});
+
+describe("add, naming a told thread's person", () => {
+  it("passes the person's number through as given, and a refusal of a number nobody has, line by line", async () => {
+    const told = { ref: "recorder:a:1", source: "told", name: "Noor", person: 7, title: "T", body: "B", space: null, status: "received" };
+    const { io, sent, out } = client([{ status: 201, body: { thread: { number: 43, senderNumber: 7 } } }, { status: 404, body: { reason: "no-person" } }]);
+    expect(await run(["add"], { ...io, stdin: async () => `${JSON.stringify(told)}\n${JSON.stringify({ ...told, ref: "recorder:a:2", person: 9 })}\n` })).toBe(1);
+    expect(JSON.parse(sent[0]?.body ?? "{}")).toEqual(told);
+    expect(out.map((line) => JSON.parse(line))).toEqual([
+      { line: 1, status: 201, thread: { number: 43, senderNumber: 7 } },
+      { line: 2, status: 404, reason: "no-person" },
+    ]);
   });
 });
 
