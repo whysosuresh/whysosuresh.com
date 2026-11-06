@@ -104,6 +104,20 @@ describe("list", () => {
     expect(out.map((line) => JSON.parse(line))).toEqual([row]);
   });
 
+  it("lists every open thread as pending", async () => {
+    const { io, sent, out } = client([{ status: 200, body: { threads: [THREAD], counts: {}, next: null } }]);
+    expect(await run(["list", "pending"], io)).toBe(0);
+    expect(sent.map((one) => one.url)).toEqual([`${THREADS}?tab=pending`]);
+    expect(out.map((line) => JSON.parse(line))).toEqual([THREAD]);
+  });
+
+  it.each([[["list"]], [["list", "new"]], [["list", "Pending"]], [["list", "act", "done"]]])("refuses %j as a usage error naming the five lists, sending nothing", async (argv) => {
+    const { io, sent, err } = client([]);
+    expect(await run(argv, io)).toBe(2);
+    expect(sent).toEqual([]);
+    expect(err.join("\n")).toContain("pending, look, act, discuss, done");
+  });
+
   it.each([
     ["the Worker's refusal", { status: 403, body: { reason: "caller" } }, "403 caller"],
     ["the edge's sign-in redirect, for no token", { status: 302 }, "302 sign-in"],

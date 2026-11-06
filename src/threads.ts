@@ -6,7 +6,7 @@
 // the one people say out loud (#42).
 //
 //   GET  /threads/api/me                                                      everyone: who is calling
-//   GET  /threads/api/threads?tab=look|act|discuss|done[&before=<number>]   owner and sync
+//   GET  /threads/api/threads?tab=pending|look|act|discuss|done[&before=<number>]   owner and sync
 //   GET  /threads/api/threads                                                 invited: the threads they are in
 //   POST /threads/api/threads                 {"ref": ..., "source": ..., ...}   sync
 //   POST /threads/api/threads                 {"title", "body", "space", "status"}   owner
@@ -43,7 +43,8 @@
 // comment (`audience` `owner`, which only the owner and the sync may write). The people on a thread are the
 // owner's to change, from his own page: the sync never invites anyone, because an invitation grants access.
 //
-// A list answers one tab, newest number first, 50 at a time, with the number to go on from and every tab's count;
+// A list answers one tab (site/app/standing.js names them: pending, every open thread; look, act and discuss, each
+// open status alone; done), newest number first, 50 at a time, with the number to go on from and every tab's count;
 // each row also says how many people the thread is shared with (`shared`) and whether its last word is an invited
 // person's (`waiting`, which the owner's Today shows). `me` says who is calling, and to the owner and invited people
 // their own address (the owner's page needs it to open Gmail as him). The sync's add (src/wire.ts)

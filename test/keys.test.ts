@@ -1,6 +1,6 @@
 // The threads page's keys (site/app/keys.js), one map for the key handler and the keyboard sheet. What it holds:
 // every key the sheet lists does what the sheet says, ⌘K and Ctrl+K find, the browser's own shortcuts stay its own,
-// and a key the page doesn't use does nothing. An invited person's sheet lists only keys their page answers, and
+// and a key the page doesn't use does nothing (3 and 4 among them, now the list has two tabs). An invited person's sheet lists only keys their page answers, and
 // their page answers no move, edit, reply, new thread or share.
 
 import { describe, expect, it } from "vitest";
@@ -16,8 +16,8 @@ describe("the keys", () => {
     ["k", "prev"],
     ["Enter", "open"],
     ["Escape", "back"],
-    ["1", "tab-look"],
-    ["4", "tab-done"],
+    ["1", "tab-pending"],
+    ["2", "tab-done"],
     ["a", "act"],
     ["t", "discuss"],
     ["d", "drop"],
@@ -48,7 +48,7 @@ describe("the keys", () => {
   });
 
   it("does nothing for a key the page doesn't use", () => {
-    for (const key of ["x", "5", " ", "Tab"]) expect(commandFor(press(key))).toBeNull();
+    for (const key of ["x", "3", "4", "5", " ", "Tab"]) expect(commandFor(press(key))).toBeNull();
   });
 
   it("lists on the sheet only keys that do something", () => {
@@ -64,7 +64,7 @@ describe("the keys", () => {
       const command = commandFor(press(key === "?" ? "?" : key.toLowerCase()));
       expect([key, command !== null && MEMBER_COMMANDS.has(command)]).toEqual([key, true]);
     }
-    for (const owners of ["act", "discuss", "drop", "done", "reopen", "space", "undo", "edit", "reply", "new", "share", "tab-look"] as const) {
+    for (const owners of ["act", "discuss", "drop", "done", "reopen", "space", "undo", "edit", "reply", "new", "share", "tab-pending", "tab-done"] as const) {
       expect(MEMBER_COMMANDS.has(owners)).toBe(false);
     }
   });

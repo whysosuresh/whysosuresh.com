@@ -1,6 +1,6 @@
 // @ts-check
 // The threads' data: every call the threads page makes, to the threads' own calls under /threads/api/
-// (src/threads.ts), behind Cloudflare Access. A list reads one tab, 50 threads at a time, newest number first; a
+// (src/threads.ts), behind Cloudflare Access. A list reads one list, 50 threads at a time, newest number first; a
 // thread's call answers it with its comments, its history and its people; a move, a comment, a text and a new
 // thread each answer what they changed; a search answers up to 20 threads for ⌘K. `me` says who is calling: the
 // owner, or a person he invited, whose list is the threads they are in (`listMine`). The owner's people calls read,
@@ -40,8 +40,8 @@
 // `answerJournal` keeps a typed answer to a day's question. A photo loads from its own address (`journalPhoto`).
 
 /**
- * @typedef {'look' | 'act' | 'discuss' | 'done'} Tab
- * @typedef {'received' | 'act' | 'discuss' | 'done' | 'dropped' | 'filed'} Status
+ * @typedef {import('./standing.js').List} List
+ * @typedef {import('./standing.js').Status} Status
  * @typedef {{
  *   number: number, id: string, createdAt: string, source: 'talk' | 'told' | 'self' | string, space: string | null,
  *   title: string | null, body: string, summary: string | null, senderName: string | null, senderEmail: string | null,
@@ -95,7 +95,7 @@
  * @typedef {{ caller: 'owner' | 'sync' | 'member', email: string | null }} Me
  * @typedef {{ id: number, at: string, actor: 'owner' | 'sync' | 'visitor' | 'import' | string, type: string, data: Record<string, unknown> }} Event
  * @typedef {{ thread: Thread, page: Page | null, people: Person[], comments: Comment[], events: Event[], truncated: boolean, answeredBy?: Answerer[] }} Shown
- * @typedef {{ threads: Thread[], counts: Record<Tab, number>, next: number | null }} Listing
+ * @typedef {{ threads: Thread[], counts: Record<List, number>, next: number | null }} Listing
  * @typedef {{ action: 'act' | 'discuss' | 'unsort' | 'done' | 'reopen' | 'reply-opened' | 'publish' | 'unpublish' }
  *   | { action: 'drop', reason: string }
  *   | { action: 'space', space: string }} Action
@@ -172,8 +172,8 @@ function post(path, body) {
 }
 
 /**
- * One tab's threads, newest number first, below the number `before` when it is given.
- * @param {Tab} tab
+ * One list's threads (site/app/standing.js names them), newest number first, below the number `before` when it is given.
+ * @param {List} tab
  * @param {number | null} before
  * @returns {Promise<Listing>}
  */
@@ -200,8 +200,8 @@ export async function listMine() {
 }
 
 /**
- * Every thread in a tab, page after page, with the tab counts from the last page.
- * @param {Tab} tab
+ * Every thread in a list, page after page, with the lists' counts from the last page.
+ * @param {List} tab
  * @returns {Promise<Listing>}
  */
 export async function listAll(tab) {
