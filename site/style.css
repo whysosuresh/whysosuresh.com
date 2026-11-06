@@ -408,9 +408,7 @@ p { margin: 0; }
 }
 .t-side { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; padding: 14px 10px; padding-left: max(10px, env(safe-area-inset-left, 0px)); border-right: 1px solid var(--line); background: var(--surface); }
 .t-side-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 8px; }
-.t-brand { font-size: 15px; font-weight: 800; letter-spacing: -0.01em; }
-.t-site { color: var(--muted); font-size: 11px; text-decoration: none; }
-.threads .t-site { color: var(--muted); }
+.t-brand { font-size: 15px; font-weight: 800; letter-spacing: -0.01em; text-decoration: none; }
 .t-side-find, .t-side-new {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px;
   border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--muted); font-size: 12px; text-align: left;
@@ -428,6 +426,7 @@ p { margin: 0; }
 .threads .t-nav-item:hover { background: var(--hover); color: var(--ink); }
 .threads .t-nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--ink); }
 .t-nav-pad { width: 15px; flex: none; }
+.t-nav-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t-nav-count { margin-left: auto; font-size: 11.5px; font-variant-numeric: tabular-nums; color: var(--faint); }
 .t-side-foot { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 8px; font-size: 12px; }
 .t-side-who small { display: block; color: var(--muted); font-size: 11px; }

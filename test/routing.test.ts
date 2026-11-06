@@ -4,7 +4,8 @@
 // holds: the two doors (/api/, /threads/api/) answer the Worker's JSON, the public threads' calls under
 // /api/threads/ among them; the pages come from site/; /inbox, the
 // threads' old address, and everything under it, its old calls included, redirect for good to /threads/;
-// a page's .html address redirects to its clean one; /threads/, every thread's address and the people pages
+// a page's .html address redirects to its clean one, and /me/ to /me; /me (the door everyone signed in enters by),
+// /threads/, every thread's address and the people pages
 // (/threads/people, /threads/people/<n>) answer the threads page with the site's headers (its CSP among them) and status 200, whatever the number, with no sign-in, because
 // Access guards only the threads' calls, never a thread's page; and any other path under /threads/ is what the
 // site's files make of it.
@@ -74,6 +75,7 @@ describe("the site's own files", () => {
   });
 
   it.each([
+    "/me",
     "/threads/",
     "/threads/?tab=act&space=company",
     "/threads/42",
@@ -95,13 +97,19 @@ describe("the site's own files", () => {
     },
   );
 
+  it("redirect /me/ to /me for good", async () => {
+    const response = await harness.fetch(`${SITE}/me/`, { redirect: "manual" });
+    expect(response.status).toBe(301);
+    expect(new URL(response.headers.get("location") ?? "", SITE).pathname).toBe("/me");
+  });
+
   it("redirect /threads to /threads/", async () => {
     const response = await harness.fetch(`${SITE}/threads`, { redirect: "manual" });
     expect(response.status).toBe(307);
     expect(new URL(response.headers.get("location") ?? "", SITE).pathname).toBe("/threads/");
   });
 
-  it.each(["/threads/042", "/threads/42/comments", "/threads/0", "/threads/nope", "/threads/people/07", "/threads/people/7/threads", "/threads/peoples"])("answer %s with the site's 404 page", async (path) => {
+  it.each(["/threads/042", "/threads/42/comments", "/threads/0", "/threads/nope", "/threads/people/07", "/threads/people/7/threads", "/threads/peoples", "/me/42", "/mex"])("answer %s with the site's 404 page", async (path) => {
     const response = await harness.fetch(`${SITE}${path}`, { redirect: "manual" });
     expect(response.status).toBe(404);
     expect(response.headers.get("content-type")).toContain("text/html");

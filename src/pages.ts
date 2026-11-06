@@ -1,5 +1,6 @@
 // The threads page's addresses, which the Worker answers because no file can sit at every thread's number:
-// /threads/ (Today and the list, which the page tells apart by its query), /threads/<n>, with the thread's
+// /me (the door everyone signed in enters by: Today for the owner, their threads for an invited person),
+// /threads/ (the list, with its tab and space in the query), /threads/<n>, with the thread's
 // title after the number or not (/threads/42-who-owns-what), and the people pages, /threads/people and
 // /threads/people/<n> with the person's name after it or not (/threads/people/7-meera), which read nothing: a
 // person's address gets the plain shell whatever the number, so it never says whether that person exists. Each gets the one page, site/threads/index.html,
@@ -24,8 +25,8 @@ import { parse, type Inline } from "../site/app/markdown.js";
 import type { Bindings } from "./bindings.ts";
 import { publicPreview, type PreviewRow } from "./store.ts";
 
-/** Today, the list, a thread by its number with any title after it, everyone, and a person by their number. */
-const PAGE = /^\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?|people(?:\/(?:[1-9]\d{0,8}(?:-[^/]*)?)?)?)?$/;
+/** /me, the list, a thread by its number with any title after it, everyone, and a person by their number. */
+const PAGE = /^(?:\/me|\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?|people(?:\/(?:[1-9]\d{0,8}(?:-[^/]*)?)?)?)?)$/;
 
 /** The page's own address among the site's files. */
 const SHELL = "/threads/";

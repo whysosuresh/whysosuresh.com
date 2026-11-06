@@ -1,8 +1,11 @@
 // @ts-check
-// whysosuresh.com/threads: Suresh's threads, one page for all of them (site/threads/index.html, which the Worker
-// hands over at /threads/ and at every thread's own address). Three views, each at its own address: Today
-// (/threads/: new notes, and open threads that sat a week untouched), the list (/threads/?tab=act&space=company:
-// four tabs by where a thread stands, and the five spaces), and a thread (/threads/42-who-owns-what): its living
+// whysosuresh.com/me and /threads: Suresh's threads, one page for all of them (site/threads/index.html, which the
+// Worker hands over at /me, at /threads/ and at every thread's own address). /me is the door everyone signed in
+// enters by, and the side rail is drawn for rooms: its head is the site, then Today, Threads with the five spaces
+// under it, and People. Three views, each at its own address: Today (/me: notes waiting for his OK, threads waiting
+// on him, new ones, and open threads that sat a week untouched), the Threads room (/threads/, or
+// /threads/?tab=act&space=company: four tabs by where a thread stands, and the five spaces), and a thread
+// (/threads/42-who-owns-what): its living
 // summary on top, then its main section, then its comments and its history in the order they happened. The main
 // section is the thread's text, a page or a link: a page is a Claude artifact's own HTML, shown in a sealed frame
 // at its own address (the Worker's src/page.ts sets the seal) with a bar for its versions, Open in Claude and full
@@ -46,7 +49,7 @@
 // visitor's note, a comment for anyone, an answer or a reply; the history keeps one line for each answer and
 // discussion, with Show, and a discussion whose words this version no longer has stays in the history whole.
 //
-// Everyone he deals with is a person (people.js holds their words and addresses): People, under All threads, lists
+// Everyone he deals with is a person (people.js holds their words and addresses): People, under the spaces, lists
 // everyone at /threads/people, whoever was last in touch first, those only ever in threads he dropped folded away; a
 // person's page (/threads/people/7-meera) shows every thread they are in and how, what they said, newest first,
 // his own notes on them (only he reads them; Markdown, saved on ⌘↵ or on leaving the box), their name to change (W)
@@ -58,8 +61,9 @@
 // alone never says a thread exists; a device that has signed in before also gets a small "Sign in". The link in an
 // invitation carries `?invite`: signed out, it goes straight to the sign-in and back; signed in, the page drops it
 // from the address, so a copied link is the clean one. `?invite` on any number does the same, so it says nothing
-// about a thread. At /threads/ itself, and at a people address, which says nothing about whether a person exists,
-// it always says "Threads" with a Sign in button. Either sign-in goes through the
+// about a thread. At /me it says "Suresh's private space" with a Sign in button, and at /threads/ itself and at a
+// people address, which says nothing about whether a person exists, "Threads" with one. An invited person's home is
+// /me too: the rail lists their threads under "Shared with you, by Suresh". Either sign-in goes through the
 // threads' sign-in call and comes back to the same address. When the sign-in ends mid-use, a line says so and nothing typed
 // is lost. Every element is built with DOM calls and every text is set as text, so nothing anyone wrote becomes
 // markup; Markdown is parsed into blocks first (markdown.js). The CSP allows no inline script or style attribute.
@@ -202,6 +206,10 @@ function repliable(said) {
 const MAX_NOTE = 4000;
 /** A thread's own address, with its title after the number or not. */
 const THREAD_PATH = /^\/threads\/([1-9]\d{0,8})(?:-[^/]*)?$/;
+/** The door everyone signed in enters by: Today for him, their threads for a person he invited. */
+const ME = '/me';
+/** The Threads room, its first tab and every space. */
+const THREADS = '/threads/';
 
 /**
  * @template {Element} T
@@ -498,22 +506,23 @@ function routeOf(at) {
   if (PEOPLE_PATH.test(at.pathname)) return { view: 'people' };
   const person = PERSON_PATH.exec(at.pathname);
   if (person) return { view: 'person', number: Number(person[1]) };
+  if (at.pathname === ME) return { view: 'today' };
   const query = new URLSearchParams(at.search);
   const tab = query.get('tab') ?? '';
   const space = query.get('space') ?? '';
-  if (isTab(tab) || isSpace(space)) return { view: 'list', tab: isTab(tab) ? tab : 'look', space: isSpace(space) ? space : null };
-  return { view: 'today' };
+  return { view: 'list', tab: isTab(tab) ? tab : 'look', space: isSpace(space) ? space : null };
 }
 
 /** @param {Route} route @param {Map<number, Thread>} threads @param {readonly Someone[]} [people] */
 function pathOf(route, threads, people = []) {
-  if (route.view === 'today') return '/threads/';
+  if (route.view === 'today') return ME;
   if (route.view === 'people') return '/threads/people';
   if (route.view === 'person') {
     const someone = people.find((one) => one.number === route.number);
     return someone ? personPath(someone) : `/threads/people/${route.number}`;
   }
   if (route.view === 'list') {
+    if (route.tab === 'look' && route.space === null) return THREADS;
     const query = new URLSearchParams({ tab: route.tab });
     if (route.space !== null) query.set('space', route.space);
     return `/threads/?${query.toString()}`;
@@ -879,7 +888,7 @@ class Threads {
       } else this.fail(error, "The threads didn't load.");
       return;
     }
-    if (inviting || (this.caller === 'member' && (route.view === 'list' || route.view === 'people' || route.view === 'person'))) history.replaceState(null, '', this.route.view === 'thread' ? location.pathname : '/threads/');
+    if (inviting || (this.caller === 'member' && (route.view === 'list' || route.view === 'people' || route.view === 'person'))) history.replaceState(null, '', this.route.view === 'thread' ? location.pathname : ME);
     this.applyCaller();
     rememberSignedIn();
     if (this.member && this.missing !== null && (await this.tryPublic(route))) return;
@@ -1014,16 +1023,25 @@ class Threads {
   }
 
   /**
-   * The signed-out page. At /threads/ (Today and the list), which names no thread, it says what it is and offers
-   * Sign in. At a thread's address it is what a missing address shows, with a small "Sign in" only on a device that
-   * has signed in before, so the address never says whether that thread exists.
+   * The signed-out page. At /me, the door, it says whose space this is and offers Sign in; at /threads/ (the list),
+   * which names no thread, it says what it is and offers Sign in. At a thread's address it is what a missing address
+   * shows, with a small "Sign in" only on a device that has signed in before, so the address never says whether that
+   * thread exists.
    */
   showLost() {
     this.app.hidden = true;
     this.lost.hidden = false;
     const here = location.pathname;
-    const index = here === '/threads/' || isPeopleAddress(here);
-    this.signInLink.href = signInAddress(index || isThreadAddress(here) ? here : '/threads/');
+    const index = here === THREADS || isPeopleAddress(here);
+    this.signInLink.href = signInAddress(here === ME || index || isThreadAddress(here) ? here : ME);
+    if (here === ME) {
+      this.lostTitle.textContent = 'whysosuresh.com';
+      this.lostText.textContent = "Suresh's private space. Sign in to open it.";
+      this.signInLink.className = 't-btn t-btn-primary';
+      this.signIn.hidden = false;
+      document.title = 'Sign in · whysosuresh.com';
+      return;
+    }
     if (index) {
       this.lostTitle.textContent = 'Threads';
       this.lostText.textContent = "Suresh's private threads. Sign in to open them.";
@@ -1059,7 +1077,7 @@ class Threads {
     }
     if (error instanceof SignedOut) {
       const here = location.pathname;
-      const link = el('a', { href: signInAddress(here === '/threads/' || isThreadAddress(here) || isPeopleAddress(here) ? here : '/threads/') }, ['Sign in again']);
+      const link = el('a', { href: signInAddress(here === ME || here === THREADS || isThreadAddress(here) || isPeopleAddress(here) ? here : ME) }, ['Sign in again']);
       this.banner.replaceChildren(icon('lock'), 'Your sign-in ended. Nothing you did was lost. ', link);
     } else {
       this.banner.replaceChildren(`${what} Check your connection and try again.`);
@@ -1257,11 +1275,11 @@ class Threads {
     } else if (this.route.view === 'list') {
       this.ensureSel();
       this.main.replaceChildren(this.listView());
-      document.title = `${this.space === null ? 'All threads' : spaceLabel(this.space)} · Threads`;
+      document.title = `${this.space === null ? 'Threads' : `${spaceLabel(this.space)} · Threads`} · whysosuresh.com`;
     } else {
       this.ensureSel();
       this.main.replaceChildren(this.member ? this.mineView() : this.todayView());
-      document.title = this.member ? 'Shared with you · Threads' : 'Today · Threads';
+      document.title = this.member ? 'Shared with you · whysosuresh.com' : 'Today · whysosuresh.com';
     }
     if (this.keepScroll) this.main.scrollTop = scroll;
     this.keepScroll = false;
@@ -1281,17 +1299,25 @@ class Threads {
 
   renderNav() {
     if (this.member) {
-      const item = el('a', { class: 't-nav-item', href: '/threads/', 'data-go': 'today' }, [icon('people'), 'Your threads', el('span', { class: 't-nav-count' }, [String(this.threads.size)])]);
+      const item = el('a', { class: 't-nav-item', href: ME, 'data-go': 'today' }, [icon('people'), 'Yours', el('span', { class: 't-nav-count' }, [String(this.threads.size)])]);
       if (this.route.view === 'today') item.setAttribute('aria-current', 'page');
-      this.nav.replaceChildren(el('div', { class: 't-nav-label' }, ['Shared with you']), item);
+      const theirs = this.mine().map((thread) => {
+        const link = el('a', { class: 't-nav-item', href: threadPath(thread), 'data-thread': String(thread.number) }, [
+          el('span', { class: 't-nav-pad' }),
+          el('span', { class: 't-nav-text' }, [`#${thread.number} ${titleOf(thread)}`]),
+        ]);
+        if (this.route.view === 'thread' && this.route.number === thread.number) link.setAttribute('aria-current', 'page');
+        return link;
+      });
+      this.nav.replaceChildren(el('div', { class: 't-nav-label' }, ['Shared with you, by Suresh']), item, ...theirs);
       return;
     }
     const counts = new Map();
     for (const thread of this.threads.values()) if (isOpen(thread) && thread.space !== null) counts.set(thread.space, (counts.get(thread.space) ?? 0) + 1);
     const view = this.route.view;
     const today = this.noting().length + this.waiting().length + this.fresh().length + this.sat().length;
-    const todayItem = el('a', { class: 't-nav-item', href: '/threads/', 'data-go': 'today' }, [icon('sun'), 'Today', el('span', { class: 't-nav-count' }, [String(today)])]);
-    const allItem = el('a', { class: 't-nav-item', href: '/threads/?tab=look', 'data-go': 'list' }, [icon('list'), 'All threads']);
+    const todayItem = el('a', { class: 't-nav-item', href: ME, 'data-go': 'today' }, [icon('sun'), 'Today', el('span', { class: 't-nav-count' }, [String(today)])]);
+    const allItem = el('a', { class: 't-nav-item', href: THREADS, 'data-go': 'list' }, [icon('list'), 'Threads']);
     const peopleItem = el('a', { class: 't-nav-item', href: '/threads/people', 'data-go': 'people' }, [
       icon('person'),
       'People',
@@ -1309,7 +1335,8 @@ class Threads {
       if (view === 'list' && this.space === space.slug) item.setAttribute('aria-current', 'page');
       return item;
     });
-    this.nav.replaceChildren(todayItem, allItem, peopleItem, el('div', { class: 't-nav-label' }, ['Spaces']), ...spaces);
+    // A space is a filter on the threads, so the five sit under Threads rather than beside the rooms.
+    this.nav.replaceChildren(todayItem, allItem, ...spaces, peopleItem);
   }
 
   renderTabbar() {
@@ -1419,7 +1446,7 @@ class Threads {
     return el('div', { class: 't-wrap' }, [
       el('div', { class: 't-head' }, [
         el('div', {}, [
-          el('h1', {}, [this.space === null ? 'All threads' : spaceLabel(this.space)]),
+          el('h1', {}, [this.space === null ? 'Threads' : spaceLabel(this.space)]),
           el('p', {}, [this.space === null ? 'Every thread, by where it stands. Newest number first.' : `Threads in ${spaceLabel(this.space)}, newest number first.`]),
         ]),
         el('button', { type: 'button', class: 't-btn', 'data-act': 'new' }, [icon('plus'), 'New thread']),
@@ -1442,7 +1469,7 @@ class Threads {
         el('div', { class: 't-missing' }, [
           el('h1', {}, [this.missing !== null ? 'Nothing here' : 'Loading…']),
           el('p', {}, [this.missing !== null ? `There's no thread #${this.missing}.` : '']),
-          el('a', { href: '/threads/', 'data-go': 'today' }, [this.member ? 'Back to your threads' : 'Back to Today']),
+          el('a', { href: ME, 'data-go': 'today' }, [this.member ? 'Back to your threads' : 'Back to Today']),
         ]),
       ]);
     }
@@ -2904,7 +2931,7 @@ class Threads {
         ]
       : [
           { label: 'Go to Today', hay: 'today', key: '', run: () => void this.go({ view: 'today' }) },
-          { label: 'Go to all threads', hay: 'threads all list', key: '', run: () => void this.go({ view: 'list', tab: this.tab, space: null }) },
+          { label: 'Go to Threads', hay: 'threads all list', key: '', run: () => void this.go({ view: 'list', tab: this.tab, space: null }) },
           { label: 'Go to people', hay: 'people person everyone who', key: '', run: () => void this.go({ view: 'people' }) },
           { label: 'New thread', hay: 'new thread start create', key: 'N', run: () => this.openNew({ title: words !== '' && !/^#?\d+$/.test(words) ? words : '' }) },
           { label: 'Show the keys', hay: 'keys keyboard shortcuts help', key: '?', run: () => this.openKeys() },
