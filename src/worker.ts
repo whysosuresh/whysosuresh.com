@@ -1,11 +1,13 @@
-// The Worker's code, which runs only for /api/*, /threads/* and /me (`run_worker_first` in wrangler.jsonc); every other
+// The Worker's code, which runs only for /api/*, /threads/*, /me, /meetings, /people and /people/* (`run_worker_first`
+// in wrangler.jsonc); every other
 // path is a file from site/, /inbox's redirect to /threads/ among them (site/_redirects). Four doors: POST /api/talk,
 // the note flow's public send (src/talk.ts); the threads' private calls under /threads/api/ (src/threads.ts),
 // behind their Cloudflare Access application and the Worker's own check of the caller against its tag; and, under
 // /api/access/, the site's answer to Access's sign-in question for invited people, with the public key it is
 // signed with (src/evaluate.ts), which Access calls itself and so are outside the application. A thread Suresh
 // made public is read, and a note sent on it, under /api/threads/ (src/public.ts), outside Access too, with no
-// sign-in. /me, the door everyone signed in enters by, and every other path under /threads/ are the threads page
+// sign-in. The rooms (/me, the door everyone signed in enters by; /meetings; /people and a person under it) and every
+// other path under /threads/ are the threads page
 // (src/pages.ts), handed over from site/ with no sign-in, because Access guards the calls, never a thread's page. The calls are matched first, so no call ever
 // reaches the pages.
 
@@ -35,7 +37,7 @@ export default {
     }
     if (pathname.startsWith("/api/threads/")) return handlePublic(request, env);
     if (pathname.startsWith("/threads/api/")) return handleThreads(request, env);
-    if (pathname.startsWith("/threads/") || pathname === "/me") return handlePage(request, env);
+    if (pathname.startsWith("/threads/") || pathname.startsWith("/people/") || pathname === "/me" || pathname === "/meetings" || pathname === "/people") return handlePage(request, env);
     return json(404, { reason: "not-found" });
   },
 } satisfies ExportedHandler<Bindings>;

@@ -22,6 +22,9 @@
 // person with their threads and what they said, and `editPerson` changes their name, their address once, or his notes
 // on them; an address another person holds is refused as Failed `email-taken`, whose `detail` names that person's
 // number. A search answers the people whose name or address holds the words beside the threads, for him alone.
+//
+// Any thread can be one meeting (`meeting` on every thread: its when, length, where and people): `meet` sets or
+// clears it, and `attendee` adds someone by number, or someone new by name, or takes one off; each answers the thread.
 
 /**
  * @typedef {'look' | 'act' | 'discuss' | 'done'} Tab
@@ -32,7 +35,8 @@
  *   status: Status, kind: 'feedback' | 'idea' | null, dropReason: string | null, replyOpenedAt: string | null,
  *   ref: string | null, filedLink: string | null, movedAt: string | null, activityAt: string,
  *   main: 'text' | 'page' | 'link', link: { url: string, title: string | null } | null, publicAt: string | null,
- *   senderNumber?: number | null, shared?: number, waiting?: boolean
+ *   senderNumber?: number | null, shared?: number, waiting?: boolean,
+ *   meeting?: import('./meetings.js').Meeting | null
  * }} Thread
  * @typedef {{ version: number, savedAt: string, actor: string, bytes: number, source: string | null }} PageVersion
  * @typedef {{ version: number, savedAt: string, source: string | null, versions: PageVersion[] }} Page
@@ -54,7 +58,7 @@
  * @typedef {{ thread: PublicThread, page: PublicPage | null, comments: PublicComment[], truncated: boolean }} PublicShown
  * @typedef {'show' | 'drop'} Judgement
  * @typedef {{ id?: string, number?: number, name: string | null, email?: string, addedAt?: string, owner?: boolean }} Person
- * @typedef {{ sent: number, told: number, invited: number, removed: number, commented: number, noted: number }} Counts
+ * @typedef {{ sent: number, told: number, invited: number, removed: number, commented: number, noted: number, met?: number }} Counts
  * @typedef {{
  *   number: number, name: string | null, email: string | null, createdAt: string, lastContact: string,
  *   invited: boolean, dropped: boolean, counts: Counts, note?: string | null
@@ -299,6 +303,28 @@ export async function invite(number, email, name) {
  */
 export async function uninvite(number, person) {
   return /** @type {People} */ (await post(`/threads/${number}/people`, { remove: person }));
+}
+
+/**
+ * Sets a thread's meeting (a day, or a moment with its offset, with a length and a where), or clears it with `when`
+ * null, which takes its people off too; answers the thread as it now is.
+ * @param {number} number
+ * @param {{ when: string | null, minutes: number | null, where: string | null }} meeting
+ * @returns {Promise<Thread>}
+ */
+export async function meet(number, meeting) {
+  return /** @type {{ thread: Thread }} */ (await post(`/threads/${number}/meeting`, meeting)).thread;
+}
+
+/**
+ * Changes a meeting's people: someone known by their number, someone new by a name, or one taken off by number;
+ * answers the thread as it now is.
+ * @param {number} number
+ * @param {{ add: { person: number } | { name: string } } | { remove: number }} change
+ * @returns {Promise<Thread>}
+ */
+export async function attendee(number, change) {
+  return /** @type {{ thread: Thread }} */ (await post(`/threads/${number}/attendees`, change)).thread;
 }
 
 /**

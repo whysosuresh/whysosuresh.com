@@ -10,7 +10,8 @@
 // drop reason or mail opening, no earlier version of any text, no "Only me" comment, and the people by name only.
 // They reply, answer and comment on words, never under an Only me comment, and their own comments are told apart from
 // a namesake's by their address, which is never shown. They read a meeting of a thread they are in, its people by name only and its
-// history with where it moved from; being in a meeting grants nothing, at the door or at sign-in. The owner's list says how many people each thread is shared with, and which wait on him: an invited person had
+// history with where it moved from, their own place marked as theirs by their address; being in a meeting grants
+// nothing, at the door or at sign-in. The owner's list says how many people each thread is shared with, and which wait on him: an invited person had
 // the last word, until he comments, moves or edits.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -491,6 +492,25 @@ describe("a meeting, as an invited person sees it", () => {
       { type: "attendee-added", data: { name: "Dev" } },
       { type: "attendee-added", data: { name: "Leela" } },
     ]);
+  });
+
+  it("marks their own place in a meeting as theirs, by the address they signed in with, and shows no address", async () => {
+    const { n } = await stage();
+    const meeraNumber = (await (await harness.db()).prepare("SELECT number FROM people WHERE email = ?1").bind(MEERA).first<{ number: number }>())?.number ?? 0;
+    await answer(await call(`/threads/${n}/attendees`, { body: { add: { person: meeraNumber } } }));
+    // A namesake with no address is someone else, never "you".
+    await answer(await call(`/threads/${n}/attendees`, { body: { add: { name: "Meera" } } }));
+    const seen = await answer<Shown>(await call(`/threads/${n}`, { as: { email: MEERA } }));
+    expect((seen.thread.meeting as { attendees: unknown[] }).attendees).toEqual([{ name: "Dev" }, { name: "Leela" }, { name: "Meera", you: true }, { name: "Meera" }]);
+    const listed = JSON.stringify(await answer(await call("/threads", { as: { email: MEERA } })));
+    expect(listed).toContain('"you":true');
+    expect(JSON.stringify(seen)).not.toMatch(/meera@|dev@/);
+    // The owner and the sync read the thread's people with their addresses, as always; its meeting carries none.
+    for (const caller of ["owner", "sync"] as const) {
+      expect(JSON.stringify((await answer<Shown>(await call(`/threads/${n}`, { as: caller }))).thread.meeting)).not.toMatch(/meera@|dev@|email/);
+    }
+    const owner = await answer<Shown>(await call(`/threads/${n}`));
+    expect(JSON.stringify(owner.thread.meeting)).not.toContain("you");
   });
 
   it("grants an attendee with an address nothing: the door refuses them, and so does the sign-in's answer", async () => {

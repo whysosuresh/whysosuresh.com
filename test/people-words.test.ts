@@ -1,7 +1,7 @@
 // What people's pages say (site/app/people.js). What it holds: a person is called by their name, else the address
 // they typed, else their number, with up to two initials; their page's address is their number then their name in
 // lower case, as a thread's is, and the page's patterns read it back; the line under a name says how he knows them in
-// plain counts, and a thread's line how they are in it; an address they typed with no invitation behind it says so;
+// plain counts (the meetings they are in among them), and a thread's line how they are in it (in its meeting too); an address they typed with no invitation behind it says so;
 // Everyone keeps its order and folds away those only in dropped threads; and an address another person holds says
 // whose it is.
 
@@ -29,14 +29,15 @@ describe("a person's name and address", () => {
   });
 
   it("is a page at their number and name, which the page's patterns read back", () => {
-    expect(personPath({ number: 7, name: "Meera K.", email: null })).toBe("/threads/people/7-meera-k");
-    expect(personPath({ number: 8, name: null, email: "Lin.Wu@example.net" })).toBe("/threads/people/8-lin-wu");
-    expect(personPath({ number: 9, name: "మీరా", email: null })).toBe("/threads/people/9");
-    expect(personPath({ number: 5, name: "Tomás Núñez", email: null })).toBe("/threads/people/5-tomas-nunez");
-    expect(PERSON_PATH.exec("/threads/people/7-meera-k")?.[1]).toBe("7");
-    expect(PERSON_PATH.exec("/threads/people/9")?.[1]).toBe("9");
-    for (const path of ["/threads/people", "/threads/people/"]) expect(PEOPLE_PATH.test(path)).toBe(true);
-    for (const path of ["/threads/people/07", "/threads/people/7/x", "/threads/peoples", "/threads/7"]) expect([path, PERSON_PATH.test(path) || PEOPLE_PATH.test(path)]).toEqual([path, false]);
+    expect(personPath({ number: 7, name: "Meera K.", email: null })).toBe("/people/7-meera-k");
+    expect(personPath({ number: 8, name: null, email: "Lin.Wu@example.net" })).toBe("/people/8-lin-wu");
+    expect(personPath({ number: 9, name: "మీరా", email: null })).toBe("/people/9");
+    expect(personPath({ number: 5, name: "Tomás Núñez", email: null })).toBe("/people/5-tomas-nunez");
+    expect(PERSON_PATH.exec("/people/7-meera-k")?.[1]).toBe("7");
+    expect(PERSON_PATH.exec("/people/9")?.[1]).toBe("9");
+    expect(PEOPLE_PATH.test("/people")).toBe(true);
+    // The addresses from before the rooms redirect at the Worker, so the page never reads them.
+    for (const path of ["/people/", "/people/07", "/people/7/x", "/peoples", "/threads/people", "/threads/people/7", "/threads/7"]) expect([path, PERSON_PATH.test(path) || PEOPLE_PATH.test(path)]).toEqual([path, false]);
   });
 });
 
@@ -47,6 +48,8 @@ describe("how he knows them", () => {
     expect(howLine({ ...NONE, told: 3, commented: 1, noted: 2 })).toBe("Told you 3 things · 1 comment · 2 notes on public threads");
     expect(howLine({ ...NONE, removed: 1, noted: 1 })).toBe("Invitation taken back on 1 thread · 1 note on a public thread");
     expect(howLine(NONE)).toBe("Nothing from them yet");
+    expect(howLine({ ...NONE, invited: 1, met: 1 })).toBe("In 1 thread you shared · in 1 meeting");
+    expect(howLine({ ...NONE, met: 3 })).toBe("In 3 meetings");
   });
 
   it("says how they are in a thread", () => {
@@ -54,6 +57,8 @@ describe("how he knows them", () => {
     expect(roleLine(["told"])).toBe("Told you this");
     expect(roleLine(["removed", "wrote"])).toBe("Invitation taken back · wrote here");
     expect(roleLine([])).toBe("");
+    expect(roleLine(["invited", "met"])).toBe("Invited · in the meeting");
+    expect(roleLine(["met"])).toBe("In the meeting");
   });
 
   it("marks an address they typed themselves when no invitation stands behind it", () => {

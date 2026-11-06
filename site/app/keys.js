@@ -1,14 +1,15 @@
 // @ts-check
 // The threads page's keys, as one map: it names what each key does for the page's key handler
 // (site/app/threads.js) and draws the keyboard sheet (`?`), so the two never disagree. The one-key moves are the
-// inbox's, kept as they were, plus M (comment), W (edit), N (new), S (share) and ⌘K (find). A person the owner
+// inbox's, kept as they were, plus M (comment), W (edit), N (new), S (share), B (the meeting: book it, move it,
+// change who is in it) and ⌘K (find). A person the owner
 // invited reads and comments, so their page answers only the keys on their own sheet (`MEMBER_SHEET`,
 // `MEMBER_COMMANDS`). A key pressed while typing in a field, or inside a page shown in a thread, never reaches
 // here. Plain data and pure functions, so a test can read them without a page.
 
 /**
  * @typedef {'next' | 'prev' | 'open' | 'back' | 'tab-look' | 'tab-act' | 'tab-discuss' | 'tab-done' | 'find' | 'act'
- *   | 'discuss' | 'drop' | 'done' | 'reopen' | 'space' | 'undo' | 'comment' | 'edit' | 'reply' | 'new' | 'share' | 'keys'} Command
+ *   | 'discuss' | 'drop' | 'done' | 'reopen' | 'space' | 'undo' | 'comment' | 'edit' | 'reply' | 'new' | 'share' | 'meeting' | 'keys'} Command
  * @typedef {{ keys: string, label: string }} KeyRow
  */
 
@@ -46,6 +47,7 @@ export const SHEET = Object.freeze([
       { keys: 'R', label: 'Reply by email to a note' },
       { keys: 'N', label: 'New thread' },
       { keys: 'S', label: 'Share the thread' },
+      { keys: 'B', label: 'Make it a meeting, or change it' },
       { keys: '⌘↵', label: 'Save, or send the comment' },
       { keys: '?', label: 'These keys' },
     ],
@@ -76,6 +78,7 @@ const PLAIN = Object.freeze({
   r: 'reply',
   n: 'new',
   s: 'share',
+  b: 'meeting',
   '?': 'keys',
 });
 

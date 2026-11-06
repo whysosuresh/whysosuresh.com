@@ -935,3 +935,66 @@ textarea.t-field { resize: vertical; line-height: 1.5; }
 @media (prefers-reduced-motion: reduce) {
   .t-fold .t-i { transition: none; }
 }
+
+/* Meetings, from their design page. A thread's meeting is a strip above its summary: its day as a calendar leaf (ink
+   while it is near), the when, length and where, and who is in the room; dashed once it has passed. A row carries
+   its date as a chip, solid while near and faint once past. The Meetings room's rows lead with their time or day.
+   Today opens with the next meeting as a card, and so does an invited person's /me. The editor is a dialog: the
+   day, a time and a length side by side, the where, then the people chosen as chips over a picker. */
+.t-meet { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 2px 12px; align-items: center; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.t-meet[data-when="past"] { background: transparent; border-style: dashed; }
+.t-meet-cal { grid-row: 1 / span 2; display: grid; justify-items: center; align-content: center; width: 30px; height: 32px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); line-height: 1; }
+.t-meet-cal small { font-size: 8.5px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.t-meet-cal b { font-size: 14px; font-variant-numeric: tabular-nums; }
+.t-meet[data-when="soon"] .t-meet-cal { background: var(--ink); border-color: var(--ink); color: var(--accent-ink); }
+.t-meet[data-when="soon"] .t-meet-cal small { color: inherit; opacity: 0.75; }
+.t-meet-when { min-width: 0; font-weight: 650; font-size: 13.5px; overflow-wrap: anywhere; }
+.t-meet-when span { color: var(--muted); font-weight: 500; }
+.t-meet-with { grid-column: 2; min-width: 0; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.t-meet-with .t-name-link { font-weight: 500; }
+.t-meet-act { grid-column: 3; grid-row: 1 / span 2; }
+.t-meet-add { justify-self: start; }
+
+.t-chip-meet { color: var(--ink); border-color: var(--ink); font-variant-numeric: tabular-nums; }
+.t-chip-meet[data-when="soon"] { background: var(--ink); color: var(--accent-ink); }
+.t-chip-meet[data-when="past"] { color: var(--faint); border-color: var(--line); }
+
+.t-row-when { color: var(--ink); font-weight: 600; }
+.t-row-meet .t-meet-lead { color: var(--ink); font-size: 12px; white-space: nowrap; }
+.t-row-meet[data-when="soon"] .t-meet-lead { font-weight: 800; }
+.t-row-meet[data-when="past"] .t-meet-lead, .t-row-meet[data-when="past"] .t-row-when { color: var(--muted); }
+
+.t-card { display: grid; gap: 3px; align-content: start; min-width: 0; padding: 11px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); text-decoration: none; }
+.threads .t-card { color: var(--ink); }
+.t-card:hover { border-color: var(--muted); }
+.t-card-lbl { color: var(--faint); font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.t-card-big { font-size: 14px; font-weight: 650; overflow-wrap: anywhere; }
+.t-card-sm { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+
+.t-meet-form { display: grid; }
+.t-meet-time { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.t-meet-zone { margin: 0; color: var(--muted); font-size: 12px; }
+.t-attendees { display: flex; flex-wrap: wrap; gap: 6px; }
+.t-attendee { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); font-size: 12.5px; font-weight: 600; }
+.t-attendee .t-av { width: 20px; height: 20px; font-size: 9.5px; }
+.t-attendee small { color: var(--faint); font-weight: 500; }
+.t-attendee button { display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); }
+.t-attendee button:hover { background: var(--hover); color: var(--ink); }
+.t-attendee .t-i { width: 11px; height: 11px; }
+.t-picker { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.t-picker .t-field { border: 0; border-radius: 0; }
+.t-picker-list { display: grid; max-height: 200px; overflow-y: auto; }
+.t-picker-item { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 8px; align-items: center; width: 100%; padding: 6px 10px; border: 0; border-top: 1px solid var(--line); background: transparent; text-align: left; font-size: 13px; }
+.t-picker-item:hover, .t-picker-item[aria-selected="true"] { background: var(--accent-soft); }
+.t-picker-item small { color: var(--faint); font-size: 11.5px; }
+.t-picker-new { font-weight: 600; }
+.t-sheet-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px 14px; border-top: 1px solid var(--line); }
+.t-pick .t-i { color: var(--muted); }
+a.t-pick { color: var(--ink); text-decoration: none; }
+
+@media (max-width: 719px) {
+  .t-meet { grid-template-columns: 30px minmax(0, 1fr); }
+  .t-meet-act { grid-column: 2; grid-row: auto; justify-self: start; margin-top: 4px; }
+  .t-meet-time { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .t-meet-time > :first-child { grid-column: 1 / -1; }
+}

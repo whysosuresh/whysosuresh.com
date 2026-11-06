@@ -27,6 +27,7 @@ const SERVED = [
   "app/markdown.js",
   "app/page-talk.js",
   "app/people.js",
+  "app/meetings.js",
   "app/share.js",
   "app/threads-store.js",
   "app/threads.js",
@@ -440,7 +441,7 @@ describe("style.css", () => {
 });
 
 describe("_redirects", () => {
-  it("sends /inbox and everything under it to /threads/ for good, and nothing else", () => {
+  it("sends /inbox and everything under it to /threads/ for good, /me/ and /meetings/ to their rooms, and nothing else", () => {
     const rules = read("_redirects")
       .split("\n")
       .filter((line) => line.trim() !== "" && !line.trimStart().startsWith("#"))
@@ -450,6 +451,7 @@ describe("_redirects", () => {
       ["/inbox/", "/threads/", "301"],
       ["/inbox/*", "/threads/", "301"],
       ["/me/", "/me", "301"],
+      ["/meetings/", "/meetings", "301"],
     ]);
   });
 });
@@ -515,8 +517,8 @@ describe("wrangler.jsonc", () => {
     expect(text).not.toContain("custom_domain");
   });
 
-  it("runs the code only under /api/ and /threads/ and at /me, and every other page comes straight from site/", () => {
-    expect(text).toContain('"run_worker_first": ["/api/*", "/threads/*", "/me"]');
+  it("runs the code only under /api/ and /threads/ and at the rooms (/me, /meetings, /people), and every other page comes straight from site/", () => {
+    expect(text).toContain('"run_worker_first": ["/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*"]');
     expect(text.match(/"run_worker_first"/g)).toHaveLength(1);
   });
 
