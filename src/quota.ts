@@ -1,6 +1,8 @@
-// The daily limits on what visitors write, counted without keeping anyone's address, in two budgets: notes (the note
-// flow's and a public thread's, 20 a day from one network and 60 a day in all) and answers to a public thread's page
-// (60 and 300, because one questionnaire is many answers). Each UTC day gets one random salt, shared by both; a
+// The daily limits on what visitors write, counted without keeping anyone's address, in four budgets: notes (the note
+// flow's and a public thread's, 20 a day from one network and 60 a day in all), answers to a public thread's page (60
+// and 300, because one questionnaire is many answers), and an ask's own two, apart from those so a link handed to a
+// room of people never spends the note flow's allowance: the answers that make a browser's thread for an ask (100 and
+// 500, which caps how many threads strangers can make), and every answer to an ask (400 and 2,000). Each UTC day gets one random salt, shared by both; a
 // network is counted under the SHA-256 of that salt and the network, and each send deletes earlier days' salts and
 // its own budget's earlier counts, so yesterday's hashes can't be matched to anyone once the day is over.
 
@@ -8,6 +10,8 @@
 export const BUDGETS = {
   notes: { table: "talk_senders", perNetwork: 20, perDay: 60 },
   answers: { table: "answer_senders", perNetwork: 60, perDay: 300 },
+  askThreads: { table: "ask_thread_senders", perNetwork: 100, perDay: 500 },
+  askAnswers: { table: "ask_answer_senders", perNetwork: 400, perDay: 2000 },
 } as const;
 
 export type Budget = keyof typeof BUDGETS;

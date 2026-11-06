@@ -105,7 +105,8 @@ export function readAdd(value: unknown): NewThread | string {
   const given = Object.keys(value).sort().join(",");
   if (given !== expected && (source !== "told" || given !== withPerson)) return "keys";
 
-  if (typeof value.ref !== "string" || !REF_SHAPE.test(value.ref)) return "ref";
+  // `ask:` is the origin the store keeps a browser's answers to an ask under; no item the sync adds may take it.
+  if (typeof value.ref !== "string" || !REF_SHAPE.test(value.ref) || value.ref.startsWith("ask:")) return "ref";
   const title = line(value.title, MAX_TITLE);
   if (title === null) return "title";
   const body = text(value.body, MAX_BODY);

@@ -1,11 +1,13 @@
-// The checks everything a visitor writes Suresh passes, in one place, for the site's three public writes: the note
-// flow's send (src/talk.ts), a new thread about one of his topics; a note on a public thread; and an answer to a
-// question of a public thread's page (both src/public.ts), each shown at once. All come from the site's own page as
+// The checks everything a visitor writes Suresh passes, in one place, for the site's four public writes: the note
+// flow's send (src/talk.ts), a new thread about one of his topics; a note on a public thread; an answer to a
+// question of a public thread's page (both src/public.ts), each shown at once; and an answer to an ask (src/asks.ts),
+// which only he reads. All come from the site's own page as
 // JSON with exactly the string keys their door names, and share one order of refusals, each the cheapest that
 // applies: no bot-check secret (503), another origin (403), no or too large a declared length (411, 413), a body that
 // isn't JSON (415; a browser form can't send JSON, so this also closes cross-site form posts), a malformed note or
 // answer (400), a failed bot check (403), and the daily limits (429, whose `limit` reason the page shows), which every
-// note counts against one budget and every answer against another (src/quota.ts). Bots are refused before the
+// note counts against one budget, every answer to a public page against another, and an ask's answers against the
+// ask's own two (src/quota.ts). Bots are refused before the
 // limits, so they can't spend real visitors' allowance. Nothing personal is ever logged: a refusal's line holds its
 // status and reason only.
 
@@ -124,6 +126,30 @@ export function readAnswer(fields: Record<string, string>): Answer | Response {
   if (!VISITOR_KEY_SHAPE.test(key)) return refuse(400, "form");
   if (token === "" || token.length > MAX_TOKEN) return refuse(400, "form");
   return { question, body, name, key, token };
+}
+
+/** A visitor's answer to an ask as the checks read it: as a public page's, with a name and an email both optional. */
+export interface AskAnswerFields {
+  readonly question: string;
+  readonly body: string;
+  readonly name: string | null;
+  readonly email: string | null;
+  readonly key: string;
+  readonly token: string;
+}
+
+/**
+ * The answer to an ask in the fields, or the refusal of its first field that is wrong: the words (`body`, as a note's),
+ * then the rest (`form`): a question id, the key and the token, and a name and an email, each optional as a note's,
+ * because nobody but him reads an ask's answers, so nobody needs a name to tell them apart.
+ */
+export function readAskAnswer(fields: Record<string, string>): AskAnswerFields | Response {
+  const note = readNote({ body: fields.body ?? "", name: fields.name ?? "", email: fields.email ?? "", token: fields.token ?? "" });
+  if (note instanceof Response) return note;
+  const question = fields.question ?? "";
+  const key = fields.key ?? "";
+  if (!QUESTION_SHAPE.test(question) || !VISITOR_KEY_SHAPE.test(key)) return refuse(400, "form");
+  return { question, body: note.body, name: note.name, email: note.email, key, token: note.token };
 }
 
 /** The sender's network once the bot check passes, or the refusal: no address (400), a failed check (403). */

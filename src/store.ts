@@ -62,6 +62,18 @@
 // meeting, a change of time keeping where it moved from (`from`, as a move does), and clearing it takes its people
 // off with it; `attend` and `unattend` change who is in it. A name given to `attend` always makes a new person,
 // because both callers hold the people list already and say a number for anyone they know.
+//
+// One of his own threads whose main section is a page may also be an ask (migrations/0016_asks.sql): a questions page
+// handed to many people by one link, /ask/<slug> (src/asks.ts). `makeAsk` makes it a draft under a slug, which never
+// changes; `setAskState` opens it (his alone, the door holds that) and closes it, each with its event. An ask's thread
+// is never public and never given a link, so its page stays its main section and strangers read only what the ask
+// calls say. Each browser that answers gets a thread of its own, a site note (`source` `talk`, with every protection a
+// site note has: never public, its words never rewritten) naming the ask (`ask_thread_id`), with the ask's title and
+// space, an empty body, and the ask's page as its main section: `answerAsk` keeps the answer and, the first time, the
+// thread, in one batch, one thread per ask and browser by its origin (`ask:<the ask's id>:<the key's hash>`), and holds
+// the ask being open in each insert's own SQL, so an answer racing a close is kept nowhere. A response thread's pages
+// are its ask's (`COALESCE(ask_thread_id, id)` wherever pages are read), and it is never given a page or a link of its
+// own. Its answers carry its person, so a person's page shows them (`wordsOfPerson`).
 
 /** Where a thread came from: the site's note flow, something told to him in person, or his own. */
 export type Source = "talk" | "told" | "self";
@@ -96,9 +108,9 @@ export function isTab(value: string): value is Tab {
 // Who a thread is from is read with their number, so a page can link the name; a subquery, which RETURNING allows.
 // So are a meeting's people, as one JSON array of their numbers, names and addresses (`[]` for none), in no promised
 // order: SQLite doesn't order an aggregate, so the door sorts them, and it never emits an address; it reads one only
-// to tell an invited reader which attendee is them.
+// to tell an invited reader which attendee is them. A response thread reads its ask's number, slug and title the same way.
 export const COLUMNS =
-  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at, person_id, (SELECT people.number FROM people WHERE people.id = threads.person_id) AS sender_number, meeting_when, meeting_minutes, meeting_where, (SELECT json_group_array(json_object('number', people.number, 'name', people.name, 'email', people.email)) FROM attendees JOIN people ON people.id = attendees.person_id WHERE attendees.thread_id = threads.id) AS meeting_people";
+  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at, person_id, (SELECT people.number FROM people WHERE people.id = threads.person_id) AS sender_number, meeting_when, meeting_minutes, meeting_where, (SELECT json_group_array(json_object('number', people.number, 'name', people.name, 'email', people.email)) FROM attendees JOIN people ON people.id = attendees.person_id WHERE attendees.thread_id = threads.id) AS meeting_people, ask_slug, ask_state, ask_thread_id, (SELECT asked.number FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_number, (SELECT asked.ask_slug FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_slug, (SELECT asked.title FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_title";
 
 export interface ThreadRow {
   id: string;
@@ -134,6 +146,14 @@ export interface ThreadRow {
   meeting_where: string | null;
   /** Its meeting's people, as a JSON array of `{number, name, email}` in no promised order; the address is never shown. */
   meeting_people: string;
+  /** His own thread as an ask: its slug and state (`AskState`); null on every other thread. */
+  ask_slug: string | null;
+  ask_state: string | null;
+  /** A response thread: the ask's thread it answers, and that thread's number, slug and title; null on every other. */
+  ask_thread_id: string | null;
+  ask_of_number: number | null;
+  ask_of_slug: string | null;
+  ask_of_title: string | null;
   /** On a list's rows only (`LIST_EXTRAS`): how many people the thread is shared with now. */
   shared?: number;
   /** On a list's rows only: 1 when the last word on it is an invited person's or a visitor's, else 0. */
@@ -142,6 +162,9 @@ export interface ThreadRow {
 
 /** A thread's main section: its text, a page saved into it, or a link to an artifact on claude.ai. */
 export type Main = "text" | "page" | "link";
+
+/** An ask's state: made and not yet before anyone, taking answers, or read and taking none. */
+export type AskState = "draft" | "open" | "closed";
 
 /** One saved version of a thread's page. */
 export interface PageRow {
@@ -287,6 +310,8 @@ export interface NewThread {
   readonly originRef: string | null;
   /** A told thread only: the person the sync names as the teller, by number; null to find them by name. */
   readonly person: number | null;
+  /** A response thread only: the id of the ask's thread it answers, which must be open when it is kept. */
+  readonly ask?: string;
 }
 
 /** The number the next person gets: one more than the largest, given inside their INSERT, as a thread's is. */
@@ -341,36 +366,46 @@ function personOf(db: D1Database, sender: Sender, now: string, when: (p: Params)
   return { make, id: `COALESCE((SELECT id FROM people WHERE id = ${into.add(id)}), (SELECT id FROM people WHERE ${sameName("name", sender.name, into)}))` };
 }
 
+/** The ask whose thread has the id bound in is open, as a condition any statement can hold. */
+function askOpen(askId: string, p: Params): string {
+  return `EXISTS (SELECT 1 FROM threads AS ask WHERE ask.id = ${p.add(askId)} AND ask.ask_state = 'open')`;
+}
+
 /**
- * Keeps a new thread, numbered after the largest, with its `created` event and the person it is from, found or made
- * in the same batch. With an `originRef` already kept, nothing is written and the thread already there is answered,
- * `created` false. `no-person` when the sync names a person number nobody has; then nothing is written.
+ * A new thread's statements, in the order its batch runs them: the person it is from when they are new, the thread,
+ * and its `created` event; `row` is the index of the thread's insert, whose RETURNING is the row when it made one. With
+ * an `originRef` already kept, the insert does nothing, and nobody is made. A response thread (`ask`) is kept only
+ * while its ask is open, and shows its ask's page.
  */
-export async function create(db: D1Database, thread: NewThread, actor: Actor): Promise<{ row: ThreadRow; created: boolean } | null | "no-person"> {
-  const id = crypto.randomUUID();
-  const now = new Date().toISOString();
+function createStatements(db: D1Database, thread: NewThread, actor: Actor, now: string, id: string): { statements: D1PreparedStatement[]; row: number } {
   const sender = senderOf(thread);
-  if (sender?.by === "number" && (await db.prepare("SELECT 1 AS yes FROM people WHERE number = ?1").bind(sender.number).first()) === null) return "no-person";
   const p = new Params();
-  // Nobody is made for an add that answers the thread already there.
-  const fresh = (q: Params): string => (thread.originRef === null ? "1" : `NOT EXISTS (SELECT 1 FROM threads WHERE origin_ref = ${q.add(thread.originRef)})`);
+  // Nobody is made for an add that answers the thread already there, or a response to an ask that isn't open.
+  const fresh = (q: Params): string => {
+    const conditions = [thread.originRef === null ? "1" : `NOT EXISTS (SELECT 1 FROM threads WHERE origin_ref = ${q.add(thread.originRef)})`];
+    if (thread.ask !== undefined) conditions.push(askOpen(thread.ask, q));
+    return conditions.join(" AND ");
+  };
   const person = personOf(db, sender, now, fresh, p);
+  const values = p.list([
+    id,
+    now,
+    now,
+    thread.source,
+    thread.space,
+    thread.title,
+    thread.body,
+    thread.status,
+    KIND_OF[thread.status],
+    thread.senderName,
+    thread.senderEmail,
+    thread.originRef,
+  ]);
   const insert = statement(
     db,
-    `INSERT INTO threads (id, number, created_at, activity_at, source, space, title, body, status, kind, sender_name, sender_email, origin_ref, person_id)
-     VALUES (${p.add(id)}, (SELECT COALESCE(MAX(number), 0) + 1 FROM threads), ${p.list([
-       now,
-       now,
-       thread.source,
-       thread.space,
-       thread.title,
-       thread.body,
-       thread.status,
-       KIND_OF[thread.status],
-       thread.senderName,
-       thread.senderEmail,
-       thread.originRef,
-     ])}, ${person.id})
+    `INSERT INTO threads (id, created_at, activity_at, source, space, title, body, status, kind, sender_name, sender_email, origin_ref, number, person_id, main, ask_thread_id)
+     SELECT ${values}, (SELECT COALESCE(MAX(number), 0) + 1 FROM threads), ${person.id}, ${p.add(thread.ask === undefined ? "text" : "page")}, ${p.add(thread.ask ?? null)}
+     WHERE ${thread.ask === undefined ? "1" : askOpen(thread.ask, p)}
      ON CONFLICT (origin_ref) WHERE origin_ref IS NOT NULL DO NOTHING
      RETURNING ${COLUMNS}`,
     p,
@@ -383,8 +418,20 @@ export async function create(db: D1Database, thread: NewThread, actor: Actor): P
      SELECT id, created_at, ${e.add(actor)}, 'created', json_object('source', source, 'status', status) FROM threads WHERE id = ${e.add(id)}`,
     e,
   );
-  const results = await db.batch<ThreadRow>([...(person.make === null ? [] : [person.make]), insert, event]);
-  const row = results[person.make === null ? 0 : 1]?.results[0];
+  return { statements: [...(person.make === null ? [] : [person.make]), insert, event], row: person.make === null ? 0 : 1 };
+}
+
+/**
+ * Keeps a new thread, numbered after the largest, with its `created` event and the person it is from, found or made
+ * in the same batch. With an `originRef` already kept, nothing is written and the thread already there is answered,
+ * `created` false. `no-person` when the sync names a person number nobody has; then nothing is written.
+ */
+export async function create(db: D1Database, thread: NewThread, actor: Actor): Promise<{ row: ThreadRow; created: boolean } | null | "no-person"> {
+  const sender = senderOf(thread);
+  if (sender?.by === "number" && (await db.prepare("SELECT 1 AS yes FROM people WHERE number = ?1").bind(sender.number).first()) === null) return "no-person";
+  const made = createStatements(db, thread, actor, new Date().toISOString(), crypto.randomUUID());
+  const results = await db.batch<ThreadRow>(made.statements);
+  const row = results[made.row]?.results[0];
   if (row !== undefined) return { row, created: true };
   if (thread.originRef === null) return null;
   const there = await db.prepare(`SELECT ${COLUMNS} FROM threads WHERE origin_ref = ?1`).bind(thread.originRef).first<ThreadRow>();
@@ -419,6 +466,16 @@ async function listed(db: D1Database, page: D1PreparedStatement): Promise<Listed
 }
 
 /**
+ * Whether the thread `alias` names waits on him: the newest comment by an invited person or a visitor is later than
+ * his newest comment or change, as one SQL expression.
+ */
+function waitingOn(alias: string): string {
+  return `(COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.thread_id = ${alias}.id AND comments.author IN ('member', 'visitor')), '')
+    > MAX(COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.thread_id = ${alias}.id AND comments.author = 'owner'), ''),
+          COALESCE((SELECT MAX(at) FROM events WHERE events.thread_id = ${alias}.id AND events.actor = 'owner'), '')))`;
+}
+
+/**
  * What the owner's list says of each row beside the thread: how many people it is shared with now (`shared`),
  * whether the last word on it is someone else's (`waiting`): an invited person's or a visitor's newest comment is later
  * than the owner's newest comment or change, so it waits on him until he comments, moves it or edits it. Derived from
@@ -426,9 +483,7 @@ async function listed(db: D1Database, page: D1PreparedStatement): Promise<Listed
  * compare as the ISO strings every writer stamps.
  */
 const LIST_EXTRAS = `(SELECT COUNT(*) FROM members WHERE members.thread_id = threads.id AND members.removed_at IS NULL) AS shared,
-  (COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.thread_id = threads.id AND comments.author IN ('member', 'visitor')), '')
-    > MAX(COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.thread_id = threads.id AND comments.author = 'owner'), ''),
-          COALESCE((SELECT MAX(at) FROM events WHERE events.thread_id = threads.id AND events.actor = 'owner'), ''))) AS waiting`;
+  ${waitingOn("threads")} AS waiting`;
 
 /** Up to `limit` threads of a tab, newest number first, below `before` when given, each with `LIST_EXTRAS`. */
 export async function listByNumber(db: D1Database, tab: Tab, before: number | null, limit: number): Promise<Listed> {
@@ -459,10 +514,11 @@ const COMMENT_COLUMNS =
   "comments.id, comments.thread_id, comments.author, comments.body, comments.created_at, comments.audience, comments.state, comments.person_id, CASE WHEN comments.author = 'member' THEN people.name END AS person_name, people.number AS person_number, comments.sender_name, comments.sender_email, comments.parent_id, comments.question, comments.quote, comments.quote_prefix, comments.quote_suffix, comments.page_version, people.email AS person_email, comments.visitor_key";
 
 /**
- * Events an invited person never sees: the owner's mail opening, the copy from the old inbox, and a visitor's note
- * dropped or sent back to waiting, which would tell them a note arrived that they could never read.
+ * Events an invited person never sees: the owner's mail opening, the copy from the old inbox, a visitor's note
+ * dropped or sent back to waiting, which would tell them a note arrived that they could never read, and his marking
+ * an ask's answers read.
  */
-const OWNERS_EVENTS = "'reply-opened', 'imported', 'note-dropped', 'note-held'";
+const OWNERS_EVENTS = "'reply-opened', 'imported', 'note-dropped', 'note-held', 'ask-read'";
 
 /**
  * A thread's comments and events, oldest first, up to `limit` of each. An invited person reads only the comments
@@ -564,7 +620,8 @@ function ruleOf(move: Move, now: string): Rule {
       return {
         from: [...OPEN, "done", "dropped", "filed"],
         sets: (p) => [`public_at = ${p.add(now)}`],
-        where: "source = 'self' AND public_at IS NULL",
+        // An ask's thread is never public: strangers read an ask only through the ask calls, never its summary.
+        where: "source = 'self' AND public_at IS NULL AND ask_slug IS NULL",
         only: "owner",
         event: () => ({ type: "published", data: "json_object()" }),
       };
@@ -597,15 +654,15 @@ export function onlyFor(move: Move): Author | null {
 
 /**
  * Makes a move and writes its event, or neither: `no-thread` when there is no such thread, `not-his-words` when it
- * would publish a thread that isn't his own, `not-from-here` when the thread isn't where the move starts. Every
- * move stamps `moved_at`.
+ * would publish a thread that isn't his own, `an-ask` when it would publish an ask's thread, `not-from-here` when the
+ * thread isn't where the move starts. Every move stamps `moved_at`.
  */
 export async function makeMove(
   db: D1Database,
   locator: Locator,
   move: Move,
   actor: Author,
-): Promise<ThreadRow | "no-thread" | "not-from-here" | "not-his-words"> {
+): Promise<ThreadRow | "no-thread" | "not-from-here" | "not-his-words" | "an-ask"> {
   const now = new Date().toISOString();
   const rule = ruleOf(move, now);
   const guard = (p: Params): string => `${locate(locator, p)} AND status IN (${p.list(rule.from)})${rule.where === undefined ? "" : ` AND ${rule.where}`}`;
@@ -623,7 +680,8 @@ export async function makeMove(
   if (row !== undefined) return row;
   const there = await find(db, locator, EVERY_THREAD);
   if (there === null) return "no-thread";
-  return move.action === "publish" && there.source !== "self" ? "not-his-words" : "not-from-here";
+  if (move.action === "publish" && there.source !== "self") return "not-his-words";
+  return move.action === "publish" && there.ask_slug !== null ? "an-ask" : "not-from-here";
 }
 
 /** The texts of a thread that can be rewritten: its title, the living summary on top, and the main text. */
@@ -704,7 +762,7 @@ export async function comment(
     parent === null
       ? ""
       : ` AND EXISTS (SELECT 1 FROM comments AS parent WHERE parent.id = ${parentKey} AND parent.thread_id = threads.id AND ${repliable("parent")}${visible("parent", reader)})`,
-    quote === null ? "" : ` AND EXISTS (SELECT 1 FROM pages WHERE pages.thread_id = threads.id AND pages.version = ${p.add(quote.version)})`,
+    quote === null ? "" : ` AND EXISTS (SELECT 1 FROM pages WHERE pages.thread_id = COALESCE(threads.ask_thread_id, threads.id) AND pages.version = ${p.add(quote.version)})`,
   ];
   const insert = statement(
     db,
@@ -775,18 +833,18 @@ export interface NewPage {
 
 /**
  * Keeps a new version of a thread's page, numbered after its last, with its `page-saved` event, and makes the
- * page the thread's main section: one batch, so all of it is kept or none. Null when there is no such thread.
- * Throws when the batch fails, a save racing another for the same version among the ways it can; either way the
+ * page the thread's main section: one batch, so all of it is kept or none. `no-thread` when there is no such thread,
+ * `asked` when it is a response thread, whose page is its ask's. Throws when the batch fails, a save racing another for the same version among the ways it can; either way the
  * caller deletes the object it wrote, so no object is left that no row names.
  */
-export async function savePage(db: D1Database, number: number, page: NewPage, actor: Author): Promise<{ row: ThreadRow; version: number } | null> {
+export async function savePage(db: D1Database, number: number, page: NewPage, actor: Author): Promise<{ row: ThreadRow; version: number } | "no-thread" | "asked"> {
   const now = new Date().toISOString();
   const p = new Params();
   const insert = statement(
     db,
     `INSERT INTO pages (thread_id, version, object_key, created_at, actor, bytes, source_url)
      SELECT id, (SELECT COALESCE(MAX(version), 0) + 1 FROM pages WHERE pages.thread_id = threads.id), ${p.list([page.objectKey, now, actor, page.bytes, page.sourceUrl])}
-     FROM threads WHERE number = ${p.add(number)}`,
+     FROM threads WHERE number = ${p.add(number)} AND ask_thread_id IS NULL`,
     p,
   );
   // The object's key is unique and new, so this finds the row the insert above made, and nothing when it made none.
@@ -809,44 +867,55 @@ export async function savePage(db: D1Database, number: number, page: NewPage, ac
   const [, , updated, saved] = await db.batch<ThreadRow | { version: number }>([insert, event, update, version]);
   const row = updated?.results[0] as ThreadRow | undefined;
   const kept = saved?.results[0] as { version: number } | undefined;
-  return row === undefined || kept === undefined ? null : { row, version: kept.version };
+  if (row !== undefined && kept !== undefined) return { row, version: kept.version };
+  return (await find(db, { number }, EVERY_THREAD)) === null ? "no-thread" : "asked";
 }
 
-/** One version of a thread's page, by the thread's number; null when either isn't there, or the reader may not read it. */
+/**
+ * One version of a thread's page, by the thread's number; null when either isn't there, or the reader may not read it.
+ * A response thread's page is its ask's.
+ */
 export async function findPage(db: D1Database, number: number, version: number, reader: Reader): Promise<PageRow | null> {
   const p = new Params();
   return statement(
     db,
     `SELECT pages.version, pages.object_key, pages.created_at, pages.actor, pages.bytes, pages.source_url
-     FROM pages JOIN threads ON threads.id = pages.thread_id
+     FROM pages JOIN threads ON pages.thread_id = COALESCE(threads.ask_thread_id, threads.id)
      WHERE threads.number = ${p.add(number)} AND pages.version = ${p.add(version)}${readable(reader, p)}`,
     p,
   ).first<PageRow>();
 }
 
-/** Every version of a thread's page, oldest first. */
+/** Every version of a thread's page, oldest first; a response thread's are its ask's. */
 export async function pagesOf(db: D1Database, threadId: string): Promise<PageRow[]> {
   return (
     await db
-      .prepare("SELECT version, object_key, created_at, actor, bytes, source_url FROM pages WHERE thread_id = ?1 ORDER BY version")
+      .prepare(
+        "SELECT version, object_key, created_at, actor, bytes, source_url FROM pages WHERE thread_id = COALESCE((SELECT ask_thread_id FROM threads WHERE id = ?1), ?1) ORDER BY version",
+      )
       .bind(threadId)
       .all<PageRow>()
   ).results;
 }
 
+/** A thread that is neither an ask nor a response to one, as a condition on `threads`. */
+const NO_ASK = "ask_slug IS NULL AND ask_thread_id IS NULL";
+
 /**
  * Sets a thread's link to an artifact on claude.ai and makes it the main section, or (`url` null) clears it, the
  * main section going back to the page when the thread has one, else to its text. The `link-set` event keeps the
- * address it replaced. A link set again to what it already is still writes its event: it is what was asked.
+ * address it replaced. A link set again to what it already is still writes its event: it is what was asked. An ask's
+ * thread is never given one, so its page stays its main section (`an-ask`), nor is a response thread, whose page is its
+ * ask's (`asked`); `no-thread` when there is no such thread. Either way nothing is written.
  */
-export async function setLink(db: D1Database, number: number, url: string | null, title: string | null, actor: Author): Promise<ThreadRow | null> {
+export async function setLink(db: D1Database, number: number, url: string | null, title: string | null, actor: Author): Promise<ThreadRow | "no-thread" | "an-ask" | "asked"> {
   const now = new Date().toISOString();
   const e = new Params();
   const event = statement(
     db,
     `INSERT INTO events (thread_id, at, actor, type, data)
      SELECT id, ${e.add(now)}, ${e.add(actor)}, 'link-set', json_object('url', ${e.add(url)}, 'title', ${e.add(title)}, 'before', link_url)
-     FROM threads WHERE number = ${e.add(number)}`,
+     FROM threads WHERE number = ${e.add(number)} AND ${NO_ASK}`,
     e,
   );
   const u = new Params();
@@ -855,11 +924,15 @@ export async function setLink(db: D1Database, number: number, url: string | null
   const update = statement(
     db,
     `UPDATE threads SET link_url = ${u.add(url)}, link_title = ${u.add(title)}, main = ${main}, activity_at = ${u.add(now)}
-     WHERE number = ${u.add(number)} RETURNING ${COLUMNS}`,
+     WHERE number = ${u.add(number)} AND ${NO_ASK} RETURNING ${COLUMNS}`,
     u,
   );
   const [, updated] = await db.batch<ThreadRow>([event, update]);
-  return updated?.results[0] ?? null;
+  const row = updated?.results[0];
+  if (row !== undefined) return row;
+  const there = await find(db, { number }, EVERY_THREAD);
+  if (there === null) return "no-thread";
+  return there.ask_slug !== null ? "an-ask" : "asked";
 }
 
 /**
@@ -1449,9 +1522,12 @@ export async function threadsOfPerson(db: D1Database, personId: string, limit: n
   ).results;
 }
 
-/** Something a person said: a site note (`note`), a comment as an invited person (`comment`), or a note on a public thread (`public-note`). */
+/**
+ * Something a person said: a site note (`note`), a comment as an invited person (`comment`), a note on a public thread
+ * (`public-note`), or an answer to an ask (`answer`), on the thread it made them.
+ */
 export interface WordsRow {
-  kind: "note" | "comment" | "public-note";
+  kind: "note" | "comment" | "public-note" | "answer";
   number: number;
   title: string | null;
   body: string;
@@ -1461,15 +1537,18 @@ export interface WordsRow {
   audience: string | null;
 }
 
-/** Up to `limit` of what a person said, newest first, each with the thread it is on. */
+/**
+ * Up to `limit` of what a person said, newest first, each with the thread it is on. A response thread's body is empty,
+ * so it is no note: its answers are what they said.
+ */
 export async function wordsOfPerson(db: D1Database, personId: string, limit: number): Promise<WordsRow[]> {
   return (
     await db
       .prepare(
         `SELECT 'note' AS kind, threads.number, threads.title, threads.body, threads.created_at AS at, NULL AS state, NULL AS audience, threads.id AS key
-         FROM threads WHERE threads.person_id = ?1 AND threads.source = 'talk'
+         FROM threads WHERE threads.person_id = ?1 AND threads.source = 'talk' AND threads.ask_thread_id IS NULL
          UNION ALL
-         SELECT CASE comments.author WHEN 'member' THEN 'comment' ELSE 'public-note' END, threads.number, threads.title, comments.body, comments.created_at,
+         SELECT CASE WHEN comments.author = 'member' THEN 'comment' WHEN threads.ask_thread_id IS NOT NULL THEN 'answer' ELSE 'public-note' END, threads.number, threads.title, comments.body, comments.created_at,
            comments.state, comments.audience, comments.id
          FROM comments JOIN threads ON threads.id = comments.thread_id WHERE comments.person_id = ?1
          ORDER BY at DESC, key DESC LIMIT ${limit}`,
@@ -1508,4 +1587,247 @@ export async function editPerson(
   if (person.email !== null) return "has-email";
   const holder = await db.prepare("SELECT number FROM people WHERE email = ?1").bind(change.email).first<{ number: number }>();
   return holder === null ? person : { taken: holder.number };
+}
+
+/** An ask as its own calls find it by slug: its thread's id, number, title, space, state and main section. */
+export interface AskRow {
+  id: string;
+  number: number;
+  title: string | null;
+  space: string | null;
+  state: AskState;
+  main: Main;
+}
+
+/** The ask with that slug, whatever its state; null when no thread has it. One indexed query, whatever the slug. */
+export async function findAsk(db: D1Database, slug: string): Promise<AskRow | null> {
+  return db.prepare("SELECT id, number, title, space, ask_state AS state, main FROM threads WHERE ask_slug = ?1").bind(slug).first<AskRow>();
+}
+
+/** One version of an ask's page, while the ask is open or closed and its page is its main section; null otherwise. */
+export async function findAskPage(db: D1Database, slug: string, version: number): Promise<PageRow | null> {
+  return db
+    .prepare(
+      `SELECT pages.version, pages.object_key, pages.created_at, pages.actor, pages.bytes, pages.source_url
+       FROM pages JOIN threads ON threads.id = pages.thread_id
+       WHERE threads.ask_slug = ?1 AND threads.ask_state IN ('open', 'closed') AND threads.main = 'page' AND pages.version = ?2`,
+    )
+    .bind(slug, version)
+    .first<PageRow>();
+}
+
+/** The origin a browser's response thread to an ask is kept under: one per ask and key. */
+function askOrigin(askId: string, key: string): string {
+  return `ask:${askId}:${key}`;
+}
+
+/** Whether the browser whose key hashes to `key` has a thread for the ask yet. */
+export async function hasAnswered(db: D1Database, askId: string, key: string): Promise<boolean> {
+  return (await db.prepare("SELECT 1 AS yes FROM threads WHERE origin_ref = ?1 AND ask_thread_id = ?2").bind(askOrigin(askId, key), askId).first()) !== null;
+}
+
+/** A browser's own answer, as the ask's read gives it back to that browser alone. */
+export interface OwnAnswerRow {
+  question: string;
+  body: string;
+  at: string;
+}
+
+/**
+ * The newest answer per question the browser whose key hashes to `key` gave an ask, from its own thread, by question:
+ * a dropped newest hides that question's answer, never bringing back an older one. Nobody reads anyone else's.
+ */
+export async function ownAnswers(db: D1Database, askId: string, key: string): Promise<OwnAnswerRow[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT comments.question, comments.body, comments.created_at AS at FROM comments JOIN threads ON threads.id = comments.thread_id
+         WHERE threads.origin_ref = ?1 AND threads.ask_thread_id = ?3 AND comments.author = 'visitor' AND comments.question IS NOT NULL AND comments.visitor_key = ?2 AND comments.state = 'shown'
+           AND NOT EXISTS (SELECT 1 FROM comments AS newer WHERE newer.thread_id = comments.thread_id AND newer.question = comments.question
+             AND newer.visitor_key = comments.visitor_key AND (newer.created_at > comments.created_at OR (newer.created_at = comments.created_at AND newer.id > comments.id)))
+         ORDER BY comments.question`,
+      )
+      .bind(askOrigin(askId, key), key, askId)
+      .all<OwnAnswerRow>()
+  ).results;
+}
+
+/** A visitor's answer to an ask, as the door checked it, with the hash of their browser's key. */
+export interface AskAnswer {
+  readonly question: string;
+  readonly body: string;
+  readonly name: string | null;
+  readonly email: string | null;
+  readonly key: string;
+}
+
+/**
+ * Keeps a visitor's answer to an open ask, in one batch: the first time from their browser, the thread it makes (a site
+ * note with the ask's title and space, its `created` event, and the person their email is, made when new), then the
+ * answer on that thread, for everyone in it, shown at once, with their key's hash and the thread's person, and the
+ * thread's last activity. The name and email are the thread's, written when it is made and never after. Each insert
+ * holds the ask being open in its own SQL, so an answer racing a close is refused whole: false then.
+ */
+export async function answerAsk(db: D1Database, ask: Pick<AskRow, "id" | "title" | "space">, answer: AskAnswer): Promise<boolean> {
+  const now = new Date().toISOString();
+  const origin = askOrigin(ask.id, answer.key);
+  const made = createStatements(
+    db,
+    { source: "talk", space: ask.space, title: ask.title, body: "", senderName: answer.name, senderEmail: answer.email, status: "received", originRef: origin, person: null, ask: ask.id },
+    "visitor",
+    now,
+    crypto.randomUUID(),
+  );
+  const id = crypto.randomUUID();
+  const p = new Params();
+  const insert = statement(
+    db,
+    `INSERT INTO comments (id, thread_id, author, body, created_at, audience, state, sender_name, question, visitor_key, person_id)
+     SELECT ${p.add(id)}, threads.id, 'visitor', ${p.list([answer.body, now])}, 'thread', 'shown', threads.sender_name, ${p.list([answer.question, answer.key])}, threads.person_id
+     FROM threads WHERE threads.origin_ref = ${p.add(origin)} AND threads.ask_thread_id = ${p.add(ask.id)} AND ${askOpen(ask.id, p)} RETURNING id`,
+    p,
+  );
+  const u = new Params();
+  const touch = statement(db, `UPDATE threads SET activity_at = ${u.add(now)} WHERE id = (SELECT thread_id FROM comments WHERE id = ${u.add(id)})`, u);
+  const results = await db.batch<ThreadRow | { id: string }>([...made.statements, insert, touch]);
+  return (results[made.statements.length]?.results.length ?? 0) > 0;
+}
+
+/**
+ * Makes one of his own threads an ask, a draft under `slug`, with its `ask-drafted` event and the thread's last
+ * activity: one batch. Only a thread of his own whose main section is a page, that isn't public, an ask or a response
+ * already, under a slug no thread has. Refused, nothing is written: `no-thread`, `not-his-words`, `an-ask`, `public`,
+ * `no-page`, or `slug-taken`.
+ */
+export async function makeAsk(
+  db: D1Database,
+  number: number,
+  slug: string,
+  actor: Author,
+): Promise<ThreadRow | "no-thread" | "not-his-words" | "an-ask" | "public" | "no-page" | "slug-taken"> {
+  const now = new Date().toISOString();
+  const guard = (p: Params): string =>
+    `number = ${p.add(number)} AND source = 'self' AND public_at IS NULL AND main = 'page' AND ${NO_ASK}
+     AND NOT EXISTS (SELECT 1 FROM threads AS other WHERE other.ask_slug = ${p.add(slug)})`;
+  const e = new Params();
+  const event = statement(
+    db,
+    `INSERT INTO events (thread_id, at, actor, type, data) SELECT id, ${e.add(now)}, ${e.add(actor)}, 'ask-drafted', json_object('slug', ${e.add(slug)}) FROM threads WHERE ${guard(e)}`,
+    e,
+  );
+  const u = new Params();
+  const update = statement(db, `UPDATE threads SET ask_slug = ${u.add(slug)}, ask_state = 'draft', activity_at = ${u.add(now)} WHERE ${guard(u)} RETURNING ${COLUMNS}`, u);
+  const [, updated] = await db.batch<ThreadRow>([event, update]);
+  const row = updated?.results[0];
+  if (row !== undefined) return row;
+  const there = await find(db, { number }, EVERY_THREAD);
+  if (there === null) return "no-thread";
+  if (there.source !== "self") return "not-his-words";
+  if (there.ask_slug !== null) return "an-ask";
+  if (there.public_at !== null) return "public";
+  return there.main === "page" ? "slug-taken" : "no-page";
+}
+
+/** What opening and closing an ask start from, go to, and the event each writes. */
+const ASK_CHANGES = {
+  open: { from: ["draft", "closed"], to: "open", event: "ask-opened" },
+  close: { from: ["open"], to: "closed", event: "ask-closed" },
+} as const satisfies Record<string, { from: readonly AskState[]; to: AskState; event: string }>;
+
+/** An ask's change of state: opened, or closed. */
+export type AskChange = keyof typeof ASK_CHANGES;
+
+/**
+ * Opens or closes an ask, with its event and the thread's last activity: one batch. Who may (only he opens) is the
+ * door's to hold. `no-thread`, `not-an-ask` when the thread has no slug, `not-from-here` when it isn't where the change
+ * starts; then nothing is written.
+ */
+export async function setAskState(db: D1Database, number: number, change: AskChange, actor: Author): Promise<ThreadRow | "no-thread" | "not-an-ask" | "not-from-here"> {
+  const now = new Date().toISOString();
+  const rule = ASK_CHANGES[change];
+  const guard = (p: Params): string => `number = ${p.add(number)} AND ask_slug IS NOT NULL AND ask_state IN (${p.list(rule.from)})`;
+  const e = new Params();
+  const event = statement(
+    db,
+    `INSERT INTO events (thread_id, at, actor, type, data) SELECT id, ${e.add(now)}, ${e.add(actor)}, ${e.add(rule.event)}, json_object('slug', ask_slug) FROM threads WHERE ${guard(e)}`,
+    e,
+  );
+  const u = new Params();
+  const update = statement(db, `UPDATE threads SET ask_state = ${u.add(rule.to)}, activity_at = ${u.add(now)} WHERE ${guard(u)} RETURNING ${COLUMNS}`, u);
+  const [, updated] = await db.batch<ThreadRow>([event, update]);
+  const row = updated?.results[0];
+  if (row !== undefined) return row;
+  const there = await find(db, { number }, EVERY_THREAD);
+  if (there === null) return "no-thread";
+  return there.ask_slug === null ? "not-an-ask" : "not-from-here";
+}
+
+/** An ask as Asks lists it: its thread's number and title, its slug and state, how many answered, and when last. */
+export interface AskListRow {
+  number: number;
+  title: string | null;
+  slug: string;
+  state: AskState;
+  answered: number;
+  last_answered_at: string | null;
+}
+
+/** The most asks Asks lists. */
+const ASKS_LIMIT = 500;
+
+/** Every ask, drafts first, then open, then closed, newest number first in each. */
+export async function listAsks(db: D1Database): Promise<AskListRow[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT number, title, ask_slug AS slug, ask_state AS state,
+           (SELECT COUNT(*) FROM threads AS response WHERE response.ask_thread_id = threads.id) AS answered,
+           (SELECT MAX(comments.created_at) FROM comments JOIN threads AS response ON response.id = comments.thread_id
+            WHERE response.ask_thread_id = threads.id AND comments.author = 'visitor') AS last_answered_at
+         FROM threads WHERE ask_slug IS NOT NULL
+         ORDER BY CASE ask_state WHEN 'draft' THEN 0 WHEN 'open' THEN 1 ELSE 2 END, number DESC LIMIT ${ASKS_LIMIT}`,
+      )
+      .all<AskListRow>()
+  ).results;
+}
+
+/** Who answered an ask: each response thread's number, the name its respondent gave, when it was made, and whether it waits on him. */
+export interface AnsweredRow {
+  number: number;
+  name: string | null;
+  at: string;
+  waiting: number;
+}
+
+/** The threads that answer the ask whose thread has that id, first answered first. */
+export async function answeredBy(db: D1Database, askId: string): Promise<AnsweredRow[]> {
+  return (
+    await db
+      .prepare(`SELECT number, sender_name AS name, created_at AS at, ${waitingOn("threads")} AS waiting FROM threads WHERE ask_thread_id = ?1 ORDER BY created_at, number`)
+      .bind(askId)
+      .all<AnsweredRow>()
+  ).results;
+}
+
+/**
+ * Marks an ask's answers read, the owner's alone: one `ask-read` event by him on each of its response threads that
+ * waits on him now, in one batch, so each stops waiting; a response thread that doesn't wait gets nothing. It leaves
+ * their last activity alone, so a respondent he invited back never sees a thread move for his reading it. There is no undoing it, because events are never deleted. Answers how many were marked; `no-thread`,
+ * or `not-an-ask` when the thread has no slug.
+ */
+export async function markAskRead(db: D1Database, number: number): Promise<{ marked: number } | "no-thread" | "not-an-ask"> {
+  const now = new Date().toISOString();
+  const waiting = (p: Params): string =>
+    `response.ask_thread_id = (SELECT id FROM threads WHERE number = ${p.add(number)} AND ask_slug IS NOT NULL) AND ${waitingOn("response")}`;
+  const e = new Params();
+  const event = statement(
+    db,
+    `INSERT INTO events (thread_id, at, actor, type, data) SELECT response.id, ${e.add(now)}, 'owner', 'ask-read', json_object() FROM threads AS response WHERE ${waiting(e)} RETURNING id`,
+    e,
+  );
+  const marked = await event.all<{ id: number }>();
+  const there = await find(db, { number }, EVERY_THREAD);
+  if (there === null) return "no-thread";
+  if (there.ask_slug === null) return "not-an-ask";
+  return { marked: marked.results.length };
 }

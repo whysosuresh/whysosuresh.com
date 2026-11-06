@@ -16,7 +16,10 @@
 // sits: every earlier comment is a general one, and a reply's parent is a comment that is there. For 0014, meetings:
 // every earlier thread is no meeting and no one attends, an attendee names a thread and a person that are there, and
 // is kept once per thread and person. For 0015, visitors' answers: a note still waiting for his OK is shown, every
-// other comment keeps its state, no earlier comment has a visitor's key, and the answers' budget starts empty.
+// other comment keeps its state, no earlier comment has a visitor's key, and the answers' budget starts empty. For
+// 0016, asks: every earlier thread is no ask and answers none, a slug is kept once, a response names a thread that is
+// there, one DELETE clears an ask's thread with the threads that answer it, which the harness's reset relies on, and
+// the asks' two budgets start empty.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -256,11 +259,24 @@ describe("0007, the inbox retired a deploy later", () => {
     expect((await database.prepare("SELECT COUNT(*) AS n FROM threads WHERE origin_ref = 'chat:twice'").first<{ n: number }>())?.n).toBe(1);
     expect(await thread(harness, "00000000-0000-4000-8000-000000000007")).toBeNull();
     const after = (await database.prepare("SELECT * FROM threads WHERE id NOT IN (?1, ?2, ?3) ORDER BY number").bind("00000000-0000-4000-8000-000000000003", "00000000-0000-4000-8000-000000000005", "00000000-0000-4000-8000-000000000006").all<Record<string, unknown>>()).results;
-    // Later migrations add a thread's last activity, its main section, who it is from and its meeting; everything 0007 found stays as it was.
+    // Later migrations add a thread's last activity, its main section, who it is from, its meeting and its ask; everything 0007 found stays as it was.
     expect(
       after.map(
-        ({ activity_at: _activity, main: _main, link_url: _url, link_title: _title, public_at: _public, person_id: _person, meeting_when: _when, meeting_minutes: _minutes, meeting_where: _where, ...rest }) =>
-          rest,
+        ({
+          activity_at: _activity,
+          main: _main,
+          link_url: _url,
+          link_title: _title,
+          public_at: _public,
+          person_id: _person,
+          meeting_when: _when,
+          meeting_minutes: _minutes,
+          meeting_where: _where,
+          ask_slug: _slug,
+          ask_state: _state,
+          ask_thread_id: _asked,
+          ...rest
+        }) => rest,
       ),
     ).toEqual(before);
   });
@@ -513,5 +529,32 @@ describe("0014, meetings", () => {
     await expect(database.prepare("INSERT INTO attendees (thread_id, person_id, added_at) VALUES ('t1', 'p1', '2026-11-03T00:00:00.000Z')").run()).rejects.toThrow(/UNIQUE|PRIMARY/);
     await expect(database.prepare("INSERT INTO attendees (thread_id, person_id, added_at) VALUES ('t1', 'p-nobody', '2026-11-03T00:00:00.000Z')").run()).rejects.toThrow(/FOREIGN KEY/);
     await expect(database.prepare("INSERT INTO attendees (thread_id, person_id, added_at) VALUES ('t-nobody', 'p1', '2026-11-03T00:00:00.000Z')").run()).rejects.toThrow(/FOREIGN KEY/);
+  });
+});
+
+describe("0016, asks", () => {
+  it("leaves every earlier thread no ask, keeps a slug once, and refuses a response to a thread that isn't there", async () => {
+    harness = await startHarness({ through: "0015" });
+    const database = await harness.db();
+    await database.prepare("INSERT INTO threads (id, number, created_at, source, body, status) VALUES ('t1', 1, '2026-11-01T00:00:00.000Z', 'self', 'x', 'act')").run();
+    await harness.migrate();
+    expect(await database.prepare("SELECT ask_slug, ask_state, ask_thread_id FROM threads").all().then((r) => r.results)).toEqual([
+      { ask_slug: null, ask_state: null, ask_thread_id: null },
+    ]);
+    expect((await threadsTab(harness, "act")).threads.map((row) => row.ask)).toEqual([null]);
+    await database.batch([
+      database.prepare("UPDATE threads SET ask_slug = 'demo', ask_state = 'open' WHERE id = 't1'"),
+      database.prepare("INSERT INTO threads (id, number, created_at, source, body, status, ask_thread_id) VALUES ('t2', 2, '2026-11-02T00:00:00.000Z', 'talk', '', 'received', 't1')"),
+    ]);
+    await expect(
+      database.prepare("INSERT INTO threads (id, number, created_at, source, body, status, ask_slug) VALUES ('t3', 3, '2026-11-02T00:00:00.000Z', 'self', 'y', 'act', 'demo')").run(),
+    ).rejects.toThrow(/UNIQUE/);
+    await expect(
+      database.prepare("INSERT INTO threads (id, number, created_at, source, body, status, ask_thread_id) VALUES ('t4', 4, '2026-11-02T00:00:00.000Z', 'talk', '', 'received', 't-nobody')").run(),
+    ).rejects.toThrow(/FOREIGN KEY/);
+    await expect(database.prepare("DELETE FROM threads WHERE id = 't1'").run()).rejects.toThrow(/FOREIGN KEY/);
+    await database.prepare("DELETE FROM threads").run();
+    expect(await database.prepare("SELECT COUNT(*) AS n FROM threads").first<{ n: number }>()).toEqual({ n: 0 });
+    for (const table of ["ask_thread_senders", "ask_answer_senders"]) expect(await database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>()).toEqual({ n: 0 });
   });
 });

@@ -2,8 +2,9 @@
 // What a note to Suresh can be about: the one list the note flow draws and the Worker checks a send
 // against, so a new topic is one edit here. Each topic has the questions shown above the box, about a
 // moment or a decision, never about colours or logos. Also how a page address opens the flow: #talk
-// opens the topic picker, #talk/<topic> opens that topic's note. Plain data and pure functions with no
-// page and no side effect, because the Worker imports this file too.
+// opens the topic picker, #talk/<topic> opens that topic's note. A topic may also name an ask (`ask`, its slug),
+// a short questions page of its own at /ask/<slug>, which the Worker's list of asks says the topic opens. Plain
+// data and pure functions with no page and no side effect, because the Worker imports this file too.
 
 /**
  * @typedef {{
@@ -12,6 +13,7 @@
  *   hint: string,
  *   questions: readonly string[],
  *   offersCall?: boolean,
+ *   ask?: string,
  * }} Topic
  * @typedef {{ open: false } | { open: true, topic: string | null }} HashLink
  */
