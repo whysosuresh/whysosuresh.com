@@ -43,8 +43,9 @@ const JOURNAL = "/threads/api/journal";
 /** A journal entry's key: a day (2026-11-06) or an ISO week (2026-W44); the Worker refuses one that isn't real. */
 const KEY_SHAPE = /^\d{4}-(?:\d{2}-\d{2}|W\d{2})$/;
 const DAY_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
-/** A version or a base as typed: whole digits only. */
-const VERSION_SHAPE = /^\d{1,9}$/;
+/** A version as typed: no sign, no leading zero, at most nine digits; a base may also be 0, a new entry's. */
+const VERSION_SHAPE = /^[1-9]\d{0,8}$/;
+const BASE_SHAPE = /^(?:0|[1-9]\d{0,8})$/;
 /** A photo's id, as its upload answered it. */
 const PHOTO_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** The largest journal photo the Worker keeps: 4 MiB. */
@@ -450,7 +451,7 @@ async function journal(io: Io, secret: string, args: readonly string[]): Promise
   }
   if (sub === "write") {
     const key = keyOf("write", rest[0]);
-    if (rest.length !== 3 || rest[1] !== "--base" || !VERSION_SHAPE.test(rest[2] ?? "")) throw new Usage("journal write takes a key and --base <version>, and the page text on stdin");
+    if (rest.length !== 3 || rest[1] !== "--base" || !BASE_SHAPE.test(rest[2] ?? "")) throw new Usage("journal write takes a key and --base <version>, and the page text on stdin");
     const text = await io.stdin();
     if (text.trim() === "") throw new Usage("journal write read nothing on stdin");
     const answer = await call(io, secret, `${JOURNAL}/${key}`, { method: "POST", body: JSON.stringify({ text, base: Number(rest[2]) }) });

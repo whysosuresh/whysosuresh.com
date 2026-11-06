@@ -15,8 +15,9 @@
 // A key is a real calendar day (`2026-11-06`) or ISO week (`2026-W44`); anything else answers 404 `no-entry`, the
 // same bytes as a day never written. An entry is the whole page text in the sync's grammar (site/app/journal.js,
 // which reads it here to index it, as the page reads it to draw it), stored byte for byte as sent, at most 64,000
-// characters, and it must have a `## ` title (400 `journal`). A photo it shows is `photo:<id>` of a photo already
-// uploaded (400 `photo` otherwise). Every save names the version it was built on (`base`, 0 for a new entry): while
+// characters and 100 storylines, and it must have a `## ` title (400 `journal`). A photo it shows is `photo:<id>` of a
+// photo already uploaded, at most 100 of them (400 `photo` otherwise).
+// A save that fails for any other reason fails as itself, never as stale, so nothing retries it for ever. Every save names the version it was built on (`base`, 0 for a new entry): while
 // that is still the newest, the save is version `base + 1` (201); otherwise nothing is written and the answer is 409
 // `stale` with the newest version, so the sync reads, rebuilds and saves again, and a hand edit is never lost. Every
 // version is kept for good. An answer is at most 4,000 characters, on a day that has an entry (404 `no-entry`); all
@@ -41,6 +42,8 @@ import { MAX_ANSWER, MAX_JOURNAL, MAX_JOURNAL_BYTES, MAX_PHOTO_BYTES, MAX_TEXT_B
 const BODY_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/;
 /** A version as a query names it: no sign, no leading zero, at most nine digits. */
 const VERSION_SHAPE = /^[1-9]\d{0,8}$/;
+/** The most storylines, and the most photos, one page may name: far beyond a day, and within D1's bound parameters. */
+const MAX_LINES = 100;
 /** A photo's id: the UUID it was given. */
 const PHOTO_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** The two kinds of image a page shows, each with its file's first bytes and the extension its object takes. */
@@ -111,8 +114,10 @@ async function write(request: Request, key: string, kind: "day" | "week", env: B
   if (typeof base !== "number" || !Number.isInteger(base) || base < 0 || base > 999_999_999 || text === null) return refuse(400, "journal");
   const entry = parse(text);
   if (entry === null) return refuse(400, "journal");
+  const lines = onceEach(entry.storylines);
+  if (lines.length > MAX_LINES) return refuse(400, "journal");
   const photos = photosOf(entry);
-  if ((await missingPhotos(env.DB, photos)).length > 0) return refuse(400, "photo");
+  if (new Set(photos).size > MAX_LINES || (await missingPhotos(env.DB, photos)).length > 0) return refuse(400, "photo");
   const saved = await saveEntry(
     env.DB,
     {
@@ -126,7 +131,7 @@ async function write(request: Request, key: string, kind: "day" | "week", env: B
       stories: entry.stories.length,
       photos: photos.length,
       question: kind === "day" ? entry.question : null,
-      storylines: kind === "day" ? onceEach(entry.storylines) : [],
+      storylines: kind === "day" ? lines : [],
     },
     actor,
   );

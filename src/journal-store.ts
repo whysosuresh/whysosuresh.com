@@ -151,15 +151,18 @@ export async function saveEntry(db: D1Database, save: Save, actor: Author): Prom
     ),
     db.prepare("SELECT version FROM journal_versions WHERE save_id = ?").bind(saveId),
   ];
+  const newest = async (): Promise<number> =>
+    (await db.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM journal_versions WHERE key = ?").bind(save.key).first<{ version: number }>())?.version ?? 0;
   try {
     const results = await db.batch<{ version: number }>(statements);
     const kept = results[results.length - 1]?.results[0];
     if (kept !== undefined) return { version: kept.version };
-  } catch {
-    // A save that raced another for the same version; it wrote nothing, and is answered as stale below.
+  } catch (error) {
+    // A batch writes all or nothing. One that failed while `base` is still the newest wasn't stale, and saying it was
+    // would send the sync round again for ever, so it fails as itself; a newer version means another save won.
+    if ((await newest()) === save.base) throw error;
   }
-  const newest = await db.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM journal_versions WHERE key = ?").bind(save.key).first<{ version: number }>();
-  return { stale: newest?.version ?? 0 };
+  return { stale: await newest() };
 }
 
 /** The photo ids a text names that the store doesn't hold. */

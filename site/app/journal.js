@@ -138,7 +138,9 @@ export function storylinePath(name) {
 export function inline(text) {
   /** @type {Inline[]} */
   const runs = [];
-  const pattern = /(\*\*(?=\S)(.+?)(?<=\S)\*\*)|(\[([^\]\n]+)\]\(([^)\s]+)\))|((?<![\w*])\*(?=[^*\s])(.+?)(?<=[^*\s])\*(?![\w*]))/g;
+  // Every body is bounded (no star in a bold or italic body, at most 300 characters of a link's words), so a long run of
+  // openers with no closer is read in linear time, as markdown.js reads its own.
+  const pattern = /(\*\*(?=\S)([^*\n]*?\S)\*\*)|(\[([^\]\n]{1,300})\]\(([^)\s]{1,2000})\))|((?<![\w*])\*(?=[^*\s])([^*\n]*?[^*\s])\*(?![\w*]))/g;
   let at = 0;
   for (const match of text.matchAll(pattern)) {
     const start = match.index ?? 0;
@@ -152,12 +154,14 @@ export function inline(text) {
   return runs;
 }
 
-/** A link's run: the site's own path, another http(s) address, or just its words. @param {string} words @param {string} href @returns {Inline} */
+/**
+ * A link's run: the site's own path, another http(s) address, or just its words. A path opens in place only when it
+ * stays on the site: one `/` and no second `/` or `\` after it, which a browser would read as another host.
+ * @param {string} words @param {string} href @returns {Inline}
+ */
 export function linkRun(words, href) {
-  if (href.startsWith(`${SITE_ORIGIN}/`) || href === SITE_ORIGIN) {
-    const path = href.slice(SITE_ORIGIN.length) || '/';
-    return { type: 'site', text: words, path };
-  }
+  const path = href === SITE_ORIGIN ? '/' : href.startsWith(`${SITE_ORIGIN}/`) ? href.slice(SITE_ORIGIN.length) : null;
+  if (path !== null && /^\/(?![/\\])/.test(path)) return { type: 'site', text: words, path };
   if (/^https?:\/\/[^\s/]+/.test(href)) return { type: 'link', text: words, href };
   return { type: 'text', text: words };
 }

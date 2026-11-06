@@ -26,8 +26,11 @@ export const MAX_TITLE = 200;
  * and close is about 12,000, so this leaves room for a long day without a second limit to meet.
  */
 export const MAX_JOURNAL = 64_000;
-/** The largest journal save: 64,000 code units are at most 192,000 bytes of UTF-8, and JSON escapes at most double. */
-export const MAX_JOURNAL_BYTES = 256 * 1024;
+/**
+ * The largest journal save: 64,000 code units escaped as `\uXXXX` throughout (as some JSON writers escape everything
+ * outside ASCII) are 384,000 bytes, the most any JSON of that text takes, and the base and keys fit in what is left.
+ */
+export const MAX_JOURNAL_BYTES = 400 * 1024;
 /** The longest typed answer to a day's question, in UTF-16 code units of the trimmed text, as a page's answer is. */
 export const MAX_ANSWER = 4000;
 /** The largest journal photo: the sync shrinks each to about 250 KB, so 4 MiB is any photo it would ever send. */

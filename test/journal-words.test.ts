@@ -203,6 +203,25 @@ describe("inline runs", () => {
     ]);
   });
 
+  it("opens in place only a path on the site itself, never one that leaves it", () => {
+    expect(inline("[a](https://whysosuresh.com//evil.com) [b](https://whysosuresh.com/\\evil.com) [c](https://whysosuresh.com)")).toEqual([
+      { type: "link", text: "a", href: "https://whysosuresh.com//evil.com" },
+      { type: "text", text: " " },
+      { type: "link", text: "b", href: "https://whysosuresh.com/\\evil.com" },
+      { type: "text", text: " " },
+      { type: "site", text: "c", path: "/" },
+    ]);
+  });
+
+  it("reads a long run of openers in linear time", () => {
+    for (const run of [" **x", "[a", " *x", "**"]) {
+      const line = run.repeat(Math.floor(64_000 / run.length));
+      const started = performance.now();
+      inline(line);
+      expect([run, performance.now() - started < 250]).toEqual([run, true]);
+    }
+  });
+
   it("never reads a lone star or a star inside a word as italic", () => {
     expect(inline("2 * 3 and a*b*c")).toEqual([{ type: "text", text: "2 * 3 and a*b*c" }]);
   });

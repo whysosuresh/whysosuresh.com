@@ -218,11 +218,27 @@ describe("saving", () => {
     expect(await count("journal_versions")).toBe(0);
   });
 
+  it("refuses a page naming more than 100 storylines or 100 photos", async () => {
+    const lines = Array.from({ length: 101 }, (_, n) => `**Storyline · Line ${n}:** fine.`);
+    expect(await reasonOf(await post("/2026-03-03", { text: day("Many", lines), base: 0 }))).toEqual([400, "journal"]);
+    expect((await post("/2026-03-03", { text: day("Enough", lines.slice(0, 100)), base: 0 })).status).toBe(201);
+    const photos = Array.from({ length: 101 }, (_, n) => `![p](photo:0b6f2c8e-1d1a-4c55-9a0e-${String(n).padStart(12, "0")})`).join("\n\n");
+    expect(await reasonOf(await post("/2026-03-04", { text: day("Photos", [], `\n\n${photos}`), base: 0 }))).toEqual([400, "photo"]);
+    expect(await count("journal_versions")).toBe(1);
+  });
+
+  it("takes a page escaped as \\uXXXX throughout, at its full length", async () => {
+    const text = `## ${"త".repeat(63_000)}\n`;
+    const body = new TextEncoder().encode(JSON.stringify({ text, base: 0 }).replace(/[\u0080-\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`));
+    const response = await harness.fetch(`${JOURNAL}/2026-03-03`, { method: "POST", headers: { ...headersFor("sync"), "Content-Type": "application/json" }, body });
+    expect(response.status).toBe(201);
+  });
+
   it("refuses a body with no declared length, one too large, and one that isn't JSON", async () => {
     const text = new TextEncoder().encode(JSON.stringify({ text: day("X"), base: 0 }));
     const wrongType = await harness.fetch(`${JOURNAL}/2026-03-03`, { method: "POST", headers: { ...headersFor("sync"), "Content-Type": "text/plain" }, body: text });
     expect(await reasonOf(wrongType)).toEqual([415, "type"]);
-    const large = await harness.fetch(`${JOURNAL}/2026-03-03`, { method: "POST", headers: { ...headersFor("sync"), "Content-Type": "application/json" }, body: new Uint8Array(256 * 1024 + 1) });
+    const large = await harness.fetch(`${JOURNAL}/2026-03-03`, { method: "POST", headers: { ...headersFor("sync"), "Content-Type": "application/json" }, body: new Uint8Array(400 * 1024 + 1) });
     expect(await reasonOf(large)).toEqual([413, "too-large"]);
   });
 });
