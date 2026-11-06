@@ -2,21 +2,32 @@
 // R2, Turnstile played, and Cloudflare Access played for the private calls. What it holds: making a thread public
 // and taking it back are moves, the owner's alone, and only his own threads may be public. Every number that isn't
 // a public thread (private, shared with people, a site note, a told thread, missing, not a number) answers the same
-// 404 bytes on the thread, its page and its notes. A public answer holds no email, status, origin, people, events,
-// ids, last activity or page source, and only the comments written as Public that are shown. A page version is
-// served only while the page is the thread's main section. A visitor's note waits for his OK, answers no number, is
-// refused once the thread is taken back, and counts against the note flow's daily limits. Only he shows, drops or
-// holds a note; members see shown notes and never a waiting or dropped one, an email, or the events that would
-// tell them one arrived. The sync never writes for anyone. Nobody replies under a public comment or a visitor's note,
-// and answers, comments on words and replies never reach a stranger, nor does a meeting or anyone in it. A public thread's address carries its title and preview
-// tags, escaped, with no ETag; a private and a missing number get the shell byte for byte.
+// 404 bytes on the thread, its page, its notes and its answers. A public answer holds no email, status, origin,
+// people, events, ids, last activity or page source, and only the comments written as Public that are shown. A page
+// version is served only while the page is the thread's main section. A visitor's note is shown at once, answers no
+// number, is refused once the thread is taken back, and counts against the note flow's daily limits. A visitor's
+// answer to a page's question is shown at once too, only while the page is the main section, with a name and a key
+// whose hash alone is kept; the newest per question and key is the one that shows, a dropped newest hides that key's
+// answer, and a stranger reads other people's answers to a question only once their own key has answered it. Answers
+// count against their own daily limits, apart from notes'. Only he drops a visitor's words, shows them again, or
+// holds them; members see shown ones and never a waiting or dropped one, an email, or the events that would tell
+// them of one. A visitor's words make the thread wait on him. The sync never writes for anyone. Nobody replies under
+// a public comment or a visitor's note, and invited people's answers, comments on words and replies never reach a
+// stranger, nor does a meeting or anyone in it. A public thread's address carries its title and preview tags,
+// escaped, with no ETag; a private and a missing number get the shell byte for byte.
 
+import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SITE, startHarness, type Harness } from "./harness.ts";
 
 const MEERA = "meera@example.com";
 /** The note flow's limit per network, stated here as the contract. */
 const PER_NETWORK = 20;
+/** The answers' own limit per network. */
+const ANSWERS_PER_NETWORK = 60;
+/** Two visitors' keys, as their browsers make them: 32 random bytes as hex. */
+const KEY_A = "a1".repeat(32);
+const KEY_B = "b2".repeat(32);
 
 let harness: Harness;
 
@@ -91,6 +102,18 @@ async function publicRead(path: string, init: RequestInit = {}): Promise<Respons
   return harness.fetch(`${SITE}/api/threads/${path}`, init);
 }
 
+/** A public thread's comments as a visitor with `key` reads them (none for no key). */
+async function readAs(number: number, key: string | null): Promise<Record<string, unknown>[]> {
+  const headers: Record<string, string> = key === null ? {} : { "X-Visitor-Key": key };
+  return (await answer<{ comments: Record<string, unknown>[] }>(await publicRead(String(number), { headers }))).comments;
+}
+
+async function sendAnswer(number: number | string, fields: Record<string, unknown> = {}, options: { ip?: string } = {}): Promise<Response> {
+  const headers = { "Content-Type": "application/json", "CF-Connecting-IP": options.ip ?? "203.0.113.7", Origin: SITE };
+  const body = { question: "first-job", body: "It ran in **two** minutes.", name: "Sam", token: "pass", key: KEY_A, ...fields };
+  return harness.fetch(`${SITE}/api/threads/${number}/answers`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(body)) });
+}
+
 interface Note {
   body?: string;
   name?: string;
@@ -108,7 +131,7 @@ async function sendNote(number: number | string, note: Note = {}, options: { ip?
 
 interface Shown {
   thread: Record<string, unknown>;
-  comments: { id: string; author: string; name: string | null; audience: string; state: string; body: string; senderEmail?: string | null }[];
+  comments: { id: string; author: string; name: string | null; audience: string; state: string; body: string; question: string | null; senderEmail?: string | null }[];
   events: { type: string; actor: string; data: Record<string, unknown> }[];
 }
 
@@ -116,14 +139,22 @@ async function shown(number: number, as: Who = "owner"): Promise<Shown> {
   return answer<Shown>(await call(`/threads/${number}`, { as }));
 }
 
-async function noteOn(number: number): Promise<string> {
-  expect((await sendNote(number)).status).toBe(201);
-  const note = (await shown(number)).comments.find((comment) => comment.author === "visitor" && comment.state === "pending");
-  return note?.id ?? "";
+/** Sends a note and answers its id, as the owner reads it. */
+async function noteOn(number: number, note: Note = {}): Promise<string> {
+  expect((await sendNote(number, note)).status).toBe(201);
+  const notes = (await shown(number)).comments.filter((comment) => comment.author === "visitor");
+  return notes.at(-1)?.id ?? "";
 }
 
 async function judge(number: number, noteId: string, action: string, as: Who = "owner", origin?: string | null): Promise<Response> {
   return call(`/threads/${number}/comments/${noteId}`, { as, body: { action }, ...(origin === undefined ? {} : { origin }) });
+}
+
+/** A public thread whose main section is a page that asks two questions. */
+async function asking(): Promise<number> {
+  const n = await published();
+  await savePage(n, '<!doctype html><p data-thread-question="first-job">Did it run?</p><p data-thread-question="would-you">Would you?</p>');
+  return n;
 }
 
 async function savePage(number: number, html: string): Promise<void> {
@@ -180,12 +211,25 @@ describe("making a thread public", () => {
     await answer(await move(n, "unpublish"));
   });
 
-  it("puts the public time and the waiting notes on the owner's list", async () => {
+  it("puts the public time on the owner's list, with nothing waiting for his OK", async () => {
     const n = await published();
     await noteOn(n);
     await noteOn(n);
     const list = await answer<{ threads: { number: number; publicAt: string | null; pending: number }[] }>(await call("/threads?tab=act"));
-    expect(list.threads.find((row) => row.number === n)).toMatchObject({ publicAt: expect.any(String), pending: 2 });
+    expect(list.threads.find((row) => row.number === n)).toMatchObject({ publicAt: expect.any(String), pending: 0 });
+  });
+
+  it("waits on him once a visitor's note or answer is the last word, until he writes", async () => {
+    const waiting = async (n: number): Promise<boolean | undefined> =>
+      (await answer<{ threads: { number: number; waiting: boolean }[] }>(await call("/threads?tab=act"))).threads.find((row) => row.number === n)?.waiting;
+    const n = await asking();
+    expect(await waiting(n)).toBe(false);
+    await noteOn(n);
+    expect(await waiting(n)).toBe(true);
+    await answer(await call(`/threads/${n}/comments`, { body: { body: "Thanks." } }), 201);
+    expect(await waiting(n)).toBe(false);
+    expect((await sendAnswer(n)).status).toBe(201);
+    expect(await waiting(n)).toBe(true);
   });
 });
 
@@ -204,11 +248,11 @@ describe("a number that isn't a public thread", () => {
     return [String(priv), String(invited), String(talk), String(told), String(taken), "999", "0", "042", "abc"];
   }
 
-  it("answers the same 404 bytes on the thread, its page and its notes", async () => {
+  it("answers the same 404 bytes on the thread, its page, its notes and its answers", async () => {
     const numbers = await notPublic();
     const seen = new Set<string>();
     for (const n of numbers) {
-      for (const response of [await publicRead(n), await publicRead(`${n}/pages/1`), await sendNote(n)]) {
+      for (const response of [await publicRead(n), await publicRead(`${n}/pages/1`), await sendNote(n), await sendAnswer(n)]) {
         expect(response.status).toBe(404);
         expect(response.headers.get("x-robots-tag")).toBe("noindex");
         seen.add(await response.text());
@@ -223,6 +267,7 @@ describe("a number that isn't a public thread", () => {
     expect(await (await publicRead(`${n}/people`)).text()).toBe(JSON.stringify({ reason: "no-thread" }));
     expect((await publicRead(`${n}`, { method: "POST" })).status).toBe(405);
     expect((await publicRead(`${n}/notes`)).status).toBe(405);
+    expect((await publicRead(`${n}/answers`)).status).toBe(405);
     expect((await publicRead(`${n}`, { method: "HEAD" })).status).toBe(200);
   });
 });
@@ -265,17 +310,15 @@ describe("a public thread, as anyone reads it", () => {
     await answer(await call(`/threads/${n}/comments`, { body: { body: "For anyone.", audience: "public" } }), 201);
     await answer(await call(`/threads/${n}/people`, { body: { add: { email: MEERA, name: "Meera" } } }));
     await answer(await call(`/threads/${n}/comments`, { as: { email: MEERA }, body: { body: "Agreed, publicly.", audience: "public" } }), 201);
-    const waiting = await noteOn(n);
-    const shownNote = await noteOn(n);
-    await answer(await judge(n, shownNote, "show"));
-    const dropped = await noteOn(n);
+    await noteOn(n);
+    const dropped = await noteOn(n, { body: "Spam." });
     await answer(await judge(n, dropped, "drop"));
-    void waiting;
     const read = await answer<{ comments: Record<string, unknown>[] }>(await publicRead(String(n)));
+    const general = { createdAt: expect.any(String), question: null, mine: false };
     expect(read.comments).toEqual([
-      { author: "owner", name: "Suresh", body: "For anyone.", createdAt: expect.any(String) },
-      { author: "member", name: "Meera", body: "Agreed, publicly.", createdAt: expect.any(String) },
-      { author: "visitor", name: "Tomás", body: "Loved this. **not bold**", createdAt: expect.any(String) },
+      { author: "owner", name: "Suresh", body: "For anyone.", ...general },
+      { author: "member", name: "Meera", body: "Agreed, publicly.", ...general },
+      { author: "visitor", name: "Tomás", body: "Loved this. **not bold**", ...general },
     ]);
     expect(JSON.stringify(read)).not.toContain("tomas@example.com");
   });
@@ -283,10 +326,8 @@ describe("a public thread, as anyone reads it", () => {
   it("names a visitor who gave no name as null", async () => {
     const n = await published();
     expect((await sendNote(n, { name: "", email: "" })).status).toBe(201);
-    const note = (await shown(n)).comments[0];
-    await answer(await judge(n, note?.id ?? "", "show"));
     const read = await answer<{ comments: Record<string, unknown>[] }>(await publicRead(String(n)));
-    expect(read.comments).toEqual([{ author: "visitor", name: null, body: "Loved this. **not bold**", createdAt: expect.any(String) }]);
+    expect(read.comments).toEqual([{ author: "visitor", name: null, body: "Loved this. **not bold**", createdAt: expect.any(String), question: null, mine: false }]);
   });
 
   it("shows a link only while the link is the main section, and the text only while the text is", async () => {
@@ -317,7 +358,7 @@ describe("a public thread, as anyone reads it", () => {
 });
 
 describe("a note on a public thread", () => {
-  it("waits for his OK, keeps the name and email typed, answers no number, and writes no event", async () => {
+  it("is shown at once, keeps the name and email typed, answers no number, and writes no event", async () => {
     const n = await published();
     const response = await sendNote(n);
     expect(response.status).toBe(201);
@@ -330,7 +371,7 @@ describe("a note on a public thread", () => {
         author: "visitor",
         name: "Tomás",
         audience: "public",
-        state: "pending",
+        state: "shown",
         body: "Loved this. **not bold**",
         createdAt: expect.any(String),
         parent: null,
@@ -380,30 +421,40 @@ describe("a note on a public thread", () => {
   });
 });
 
-describe("his OK on a note", () => {
-  it("shows it, drops it, and sends either back to waiting, each with its event and never the email", async () => {
+describe("his ruling on a visitor's words", () => {
+  it("drops a note, shows it again (the page's Undo), and holds it, each with its event and never the email", async () => {
     const n = await published();
     const id = await noteOn(n);
-    expect((await answer<{ comment: Record<string, unknown> }>(await judge(n, id, "show"))).comment).toMatchObject({ state: "shown", senderEmail: "tomas@example.com" });
-    expect((await answer<{ comment: Record<string, unknown> }>(await judge(n, id, "hold"))).comment).toMatchObject({ state: "pending" });
-    expect((await answer<{ comment: Record<string, unknown> }>(await judge(n, id, "drop"))).comment).toMatchObject({ state: "dropped" });
+    expect((await answer<{ comment: Record<string, unknown> }>(await judge(n, id, "drop"))).comment).toMatchObject({ state: "dropped", senderEmail: "tomas@example.com" });
+    expect(await readAs(n, null)).toEqual([]);
+    expect((await answer<{ comment: Record<string, unknown> }>(await judge(n, id, "show"))).comment).toMatchObject({ state: "shown" });
+    expect((await readAs(n, null)).map((comment) => comment.body)).toEqual(["Loved this. **not bold**"]);
     expect((await answer<{ comment: Record<string, unknown> }>(await judge(n, id, "hold"))).comment).toMatchObject({ state: "pending" });
     const events = (await shown(n)).events.filter((event) => event.type.startsWith("note-"));
     expect(events.map((event) => [event.type, event.actor, event.data])).toEqual([
-      ["note-shown", "owner", { note: id, name: "Tomás" }],
-      ["note-held", "owner", { note: id, name: "Tomás" }],
       ["note-dropped", "owner", { note: id, name: "Tomás" }],
+      ["note-shown", "owner", { note: id, name: "Tomás" }],
       ["note-held", "owner", { note: id, name: "Tomás" }],
     ]);
   });
 
-  it("is refused when the note isn't where the ruling starts, or isn't a visitor's note on that thread", async () => {
+  it("drops a visitor's answer and shows it again, as a note", async () => {
+    const n = await asking();
+    expect((await sendAnswer(n)).status).toBe(201);
+    const id = (await shown(n)).comments[0]?.id ?? "";
+    expect((await answer<{ comment: Record<string, unknown> }>(await judge(n, id, "drop"))).comment).toMatchObject({ state: "dropped", question: "first-job" });
+    expect(await readAs(n, KEY_A)).toEqual([]);
+    await answer(await judge(n, id, "show"));
+    expect((await readAs(n, KEY_A)).map((comment) => comment.body)).toEqual(["It ran in **two** minutes."]);
+  });
+
+  it("is refused when the words aren't where the ruling starts, or aren't a visitor's on that thread", async () => {
     const n = await published();
     const other = await published();
     const id = await noteOn(n);
-    expect(await reasonOf(await judge(n, id, "hold"))).toEqual([409, "not-from-here"]);
-    await answer(await judge(n, id, "drop"));
     expect(await reasonOf(await judge(n, id, "show"))).toEqual([409, "not-from-here"]);
+    await answer(await judge(n, id, "drop"));
+    expect(await reasonOf(await judge(n, id, "drop"))).toEqual([409, "not-from-here"]);
     expect(await reasonOf(await judge(other, id, "show"))).toEqual([404, "no-note"]);
     const mine = await answer<{ comment: { id: string } }>(await call(`/threads/${n}/comments`, { body: { body: "Mine." } }), 201);
     expect(await reasonOf(await judge(n, mine.comment.id, "drop"))).toEqual([404, "no-note"]);
@@ -419,8 +470,8 @@ describe("his OK on a note", () => {
     expect(await reasonOf(await judge(999, id, "show", "sync"))).toEqual([403, "owner-only"]);
     await answer(await call(`/threads/${n}/people`, { body: { add: { email: MEERA, name: "Meera" } } }));
     expect(await reasonOf(await judge(n, id, "show", { email: MEERA }))).toEqual([403, "owner-only"]);
-    expect(await reasonOf(await judge(n, id, "show", "owner", "https://elsewhere.example"))).toEqual([403, "origin"]);
-    expect((await shown(n)).comments[0]?.state).toBe("pending");
+    expect(await reasonOf(await judge(n, id, "drop", "owner", "https://elsewhere.example"))).toEqual([403, "origin"]);
+    expect((await shown(n)).comments[0]?.state).toBe("shown");
   });
 });
 
@@ -428,14 +479,11 @@ describe("what invited people see on a public thread", () => {
   it("is the shown notes by name, never a waiting or dropped one, an email, or the events that would tell of one", async () => {
     const n = await published();
     await answer(await call(`/threads/${n}/people`, { body: { add: { email: MEERA, name: "Meera" } } }));
-    const shownNote = await noteOn(n);
-    await answer(await judge(n, shownNote, "show"));
+    await noteOn(n);
     const dropped = await noteOn(n);
     await answer(await judge(n, dropped, "drop"));
     const held = await noteOn(n);
-    await answer(await judge(n, held, "show"));
     await answer(await judge(n, held, "hold"));
-    await noteOn(n);
     await answer(await call(`/threads/${n}/comments`, { body: { body: "Mine, for anyone.", audience: "public" } }), 201);
 
     const view = await shown(n, { email: MEERA });
@@ -445,7 +493,23 @@ describe("what invited people see on a public thread", () => {
       ["owner", null, "shown", "public"],
     ]);
     expect(JSON.stringify(view)).not.toContain("tomas@example.com");
-    expect(view.events.map((event) => event.type)).toEqual(["created", "published", "invited", "note-shown", "note-shown"]);
+    expect(view.events.map((event) => event.type)).toEqual(["created", "published", "invited"]);
+  });
+
+  it("is every visitor's answers by name and key, each of them, never an email", async () => {
+    const n = await asking();
+    await answer(await call(`/threads/${n}/people`, { body: { add: { email: MEERA, name: "Meera" } } }));
+    expect((await sendAnswer(n, { body: "First." })).status).toBe(201);
+    expect((await sendAnswer(n, { body: "Changed." })).status).toBe(201);
+    expect((await sendAnswer(n, { body: "Other Sam.", key: KEY_B })).status).toBe(201);
+    const view = await shown(n, { email: MEERA });
+    const visitor = (key: string): string => createHash("sha256").update(key).digest("hex").slice(0, 16);
+    expect(view.comments.map((comment) => [comment.name, comment.body, (comment as Record<string, unknown>).visitor, comment.question])).toEqual([
+      ["Sam", "First.", visitor(KEY_A), "first-job"],
+      ["Sam", "Changed.", visitor(KEY_A), "first-job"],
+      ["Sam", "Other Sam.", visitor(KEY_B), "first-job"],
+    ]);
+    expect(JSON.stringify(view)).not.toContain("senderEmail");
   });
 });
 
@@ -475,18 +539,156 @@ describe("replies, answers and words on a public thread", () => {
     const open = await answer<{ comment: { id: string } }>(await call(`/threads/${n}/comments`, { body: { body: "For the people here." } }), 201);
     const forAnyone = await answer<{ comment: { id: string } }>(await call(`/threads/${n}/comments`, { body: { body: "For anyone.", audience: "public" } }), 201);
     const note = await noteOn(n);
-    await answer(await judge(n, note, "show"));
     for (const parent of [forAnyone.comment.id, note]) {
       expect(await reasonOf(await call(`/threads/${n}/comments`, { body: { body: "x", parent } }))).toEqual([409, "no-replies-here"]);
     }
     await answer(await call(`/threads/${n}/comments`, { body: { body: "Re.", parent: open.comment.id } }), 201);
     await answer(await call(`/threads/${n}/comments`, { body: { body: "Yes.", question: "order" } }), 201);
     await answer(await call(`/threads/${n}/comments`, { body: { body: "Why?", quote: "Who opens", prefix: "", suffix: "", version: 1 } }), 201);
-    const read = await answer<{ comments: Record<string, unknown>[] }>(await publicRead(String(n)));
+    const read = await answer<{ comments: Record<string, unknown>[] }>(await publicRead(String(n), { headers: { "X-Visitor-Key": KEY_A } }));
+    const general = { createdAt: expect.any(String), question: null, mine: false };
     expect(read.comments).toEqual([
-      { author: "owner", name: "Suresh", body: "For anyone.", createdAt: expect.any(String) },
-      { author: "visitor", name: "Tomás", body: "Loved this. **not bold**", createdAt: expect.any(String) },
+      { author: "owner", name: "Suresh", body: "For anyone.", ...general },
+      { author: "visitor", name: "Tomás", body: "Loved this. **not bold**", ...general },
     ]);
+  });
+});
+
+describe("a visitor's answer to a public thread's page", () => {
+  it("is shown at once by the name typed, answers no number, keeps only its key's hash, and writes no event", async () => {
+    const n = await asking();
+    const response = await sendAnswer(n);
+    expect([response.status, await response.text(), response.headers.get("x-robots-tag")]).toEqual([201, "{}", "noindex"]);
+    expect(await readAs(n, KEY_A)).toEqual([
+      { author: "visitor", name: "Sam", body: "It ran in **two** minutes.", createdAt: expect.any(String), question: "first-job", mine: true },
+    ]);
+    const view = await shown(n);
+    expect(view.comments).toEqual([
+      {
+        id: expect.any(String),
+        author: "visitor",
+        name: "Sam",
+        audience: "public",
+        state: "shown",
+        body: "It ran in **two** minutes.",
+        createdAt: expect.any(String),
+        parent: null,
+        question: "first-job",
+        quote: null,
+        mine: false,
+        visitor: createHash("sha256").update(KEY_A).digest("hex").slice(0, 16),
+        senderEmail: null,
+      },
+    ]);
+    expect(view.events.map((event) => event.type)).toEqual(["created", "published", "page-saved"]);
+    const stored = await (await harness.db()).prepare("SELECT visitor_key, person_id, sender_email FROM comments").first();
+    expect(stored).toEqual({ visitor_key: createHash("sha256").update(KEY_A).digest("hex"), person_id: null, sender_email: null });
+    expect(JSON.stringify([view, await readAs(n, KEY_A)])).not.toContain(KEY_A);
+  });
+
+  it("shows the newest answer a key gave to a question in place of its last, and keeps every one in his view", async () => {
+    const n = await asking();
+    expect((await sendAnswer(n, { body: "Not yet." })).status).toBe(201);
+    expect((await sendAnswer(n, { body: "Yes, after the docs." })).status).toBe(201);
+    expect((await sendAnswer(n, { question: "would-you", body: "Not yet." })).status).toBe(201);
+    expect((await readAs(n, KEY_A)).map((comment) => [comment.question, comment.body])).toEqual([
+      ["first-job", "Yes, after the docs."],
+      ["would-you", "Not yet."],
+    ]);
+    expect((await shown(n)).comments.map((comment) => comment.body)).toEqual(["Not yet.", "Yes, after the docs.", "Not yet."]);
+  });
+
+  it("hides a key's answer when he drops its newest, never bringing back an older one", async () => {
+    const n = await asking();
+    expect((await sendAnswer(n, { body: "First." })).status).toBe(201);
+    expect((await sendAnswer(n, { body: "Rude." })).status).toBe(201);
+    const newest = (await shown(n)).comments.at(-1)?.id ?? "";
+    await answer(await judge(n, newest, "drop"));
+    expect(await readAs(n, KEY_A)).toEqual([]);
+    expect((await sendAnswer(n, { body: "Sorry, fixed." })).status).toBe(201);
+    expect((await readAs(n, KEY_A)).map((comment) => comment.body)).toEqual(["Sorry, fixed."]);
+  });
+
+  it("shows other people's answers to a question only once the reader's own key has answered it", async () => {
+    const n = await asking();
+    expect((await sendAnswer(n, { body: "A on the job." })).status).toBe(201);
+    expect((await sendAnswer(n, { question: "would-you", body: "A would." })).status).toBe(201);
+    expect(await readAs(n, null)).toEqual([]);
+    expect(await readAs(n, KEY_B)).toEqual([]);
+    expect(await readAs(n, "not-a-key")).toEqual([]);
+    expect((await sendAnswer(n, { body: "B on the job.", name: "Ana", key: KEY_B })).status).toBe(201);
+    expect((await readAs(n, KEY_B)).map((comment) => [comment.name, comment.body, comment.mine])).toEqual([
+      ["Sam", "A on the job.", false],
+      ["Ana", "B on the job.", true],
+    ]);
+    expect((await readAs(n, KEY_A)).map((comment) => [comment.name, comment.body, comment.mine])).toEqual([
+      ["Sam", "A on the job.", true],
+      ["Sam", "A would.", true],
+      ["Ana", "B on the job.", false],
+    ]);
+  });
+
+  it("keeps two visitors who typed the same name apart", async () => {
+    const n = await asking();
+    expect((await sendAnswer(n, { body: "One Sam." })).status).toBe(201);
+    expect((await sendAnswer(n, { body: "Another Sam.", key: KEY_B })).status).toBe(201);
+    expect((await readAs(n, KEY_A)).map((comment) => [comment.body, comment.mine])).toEqual([
+      ["One Sam.", true],
+      ["Another Sam.", false],
+    ]);
+  });
+
+  it("is taken only while the thread's page is its main section, the same 404 otherwise", async () => {
+    const text = await published();
+    expect(await (await sendAnswer(text)).text()).toBe(JSON.stringify({ reason: "no-thread" }));
+    const n = await asking();
+    await answer(await call(`/threads/${n}/link`, { body: { url: "https://claude.ai/artifact/abc", title: "Moved on" } }));
+    expect(await (await sendAnswer(n)).text()).toBe(JSON.stringify({ reason: "no-thread" }));
+    const back = await asking();
+    await answer(await move(back, "unpublish"));
+    expect(await (await sendAnswer(back)).text()).toBe(JSON.stringify({ reason: "no-thread" }));
+    expect(await (await harness.db()).prepare("SELECT COUNT(*) AS n FROM comments").first<{ n: number }>()).toEqual({ n: 0 });
+  });
+
+  it.each([
+    ["no name", { name: "" }, [400, "form"]],
+    ["a blank name", { name: "   " }, [400, "form"]],
+    ["a name too long", { name: "x".repeat(81) }, [400, "form"]],
+    ["a key too short", { key: "a1".repeat(31) }, [400, "form"]],
+    ["a key in capitals", { key: "A1".repeat(32) }, [400, "form"]],
+    ["a question the bridge would never name", { question: "First Job" }, [400, "form"]],
+    ["an empty answer", { body: "  " }, [400, "body"]],
+    ["an answer past 4,000 characters", { body: "x".repeat(4001) }, [400, "body"]],
+    ["an email, which answers never carry", { email: "sam@example.com" }, [400, "form"]],
+    ["a failed bot check", { token: "fail" }, [403, "bot-check"]],
+  ] as const)("with %s is refused", async (_, fields, expected) => {
+    const n = await asking();
+    expect(await reasonOf(await sendAnswer(n, fields))).toEqual(expected);
+  });
+
+  it("takes an answer of exactly 4,000 characters, and checks the bot before it reads the thread", async () => {
+    const n = await asking();
+    expect((await sendAnswer(n, { body: "x".repeat(4000) })).status).toBe(201);
+    expect(await reasonOf(await sendAnswer(999, { token: "fail" }))).toEqual([403, "bot-check"]);
+  });
+
+  it("counts against the answers' own daily limit per network, apart from notes'", async () => {
+    const n = await asking();
+    for (let i = 0; i < PER_NETWORK; i += 1) expect((await sendNote(n, {}, { ip: "192.0.2.45" })).status).toBe(201);
+    expect(await reasonOf(await sendNote(n, {}, { ip: "192.0.2.45" }))).toEqual([429, "limit"]);
+    for (let i = 0; i < ANSWERS_PER_NETWORK; i += 1) expect((await sendAnswer(n, { body: `Answer ${i}.` }, { ip: "192.0.2.45" })).status).toBe(201);
+    expect(await reasonOf(await sendAnswer(n, {}, { ip: "192.0.2.45" }))).toEqual([429, "limit"]);
+    expect((await sendAnswer(n, {}, { ip: "192.0.2.46" })).status).toBe(201);
+    expect((await sendNote(n, {}, { ip: "192.0.2.46" })).status).toBe(201);
+  });
+
+  it("stops every network once the site's answers for the day reach 300, notes still taken", async () => {
+    const n = await asking();
+    expect((await sendAnswer(n)).status).toBe(201);
+    const day = new Date().toISOString().slice(0, 10);
+    await (await harness.db()).prepare("INSERT INTO answer_senders (day, sender, sends) VALUES (?1, 'others', 299)").bind(day).run();
+    expect(await reasonOf(await sendAnswer(n, {}, { ip: "192.0.2.47" }))).toEqual([429, "limit"]);
+    expect((await sendNote(n, {}, { ip: "192.0.2.47" })).status).toBe(201);
   });
 });
 

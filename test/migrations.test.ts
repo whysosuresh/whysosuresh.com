@@ -15,7 +15,8 @@
 // the invitations stay joined, the foreign keys enforced, and the invited person signs in. For 0013, where a comment
 // sits: every earlier comment is a general one, and a reply's parent is a comment that is there. For 0014, meetings:
 // every earlier thread is no meeting and no one attends, an attendee names a thread and a person that are there, and
-// is kept once per thread and person.
+// is kept once per thread and person. For 0015, visitors' answers: a note still waiting for his OK is shown, every
+// other comment keeps its state, no earlier comment has a visitor's key, and the answers' budget starts empty.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -460,7 +461,7 @@ describe("0013, where a comment sits", () => {
       database.prepare("INSERT INTO comments (id, thread_id, author, body, created_at, audience) VALUES ('c1', 't1', 'owner', 'Mine.', '2026-11-02T00:00:00.000Z', 'owner')"),
       database.prepare("INSERT INTO comments (id, thread_id, author, body, created_at, state, sender_name) VALUES ('c2', 't1', 'visitor', 'Hi.', '2026-11-03T00:00:00.000Z', 'pending', 'Asha')"),
     ]);
-    await harness.migrate();
+    await harness.migrate("0013");
     const comments = (await database.prepare("SELECT id, audience, state, parent_id, question, quote, quote_prefix, quote_suffix, page_version FROM comments ORDER BY id").all()).results;
     const general = { parent_id: null, question: null, quote: null, quote_prefix: null, quote_suffix: null, page_version: null };
     expect(comments).toEqual([
@@ -470,6 +471,28 @@ describe("0013, where a comment sits", () => {
     await expect(
       database.prepare("INSERT INTO comments (id, thread_id, author, body, created_at, parent_id) VALUES ('c3', 't1', 'owner', 'Re.', '2026-11-04T00:00:00.000Z', 'c-nobody')").run(),
     ).rejects.toThrow(/FOREIGN KEY/);
+  });
+});
+
+describe("0015, visitors' answers", () => {
+  it("shows every waiting note, leaves every other state alone, and gives no earlier comment a key", async () => {
+    harness = await startHarness({ through: "0014" });
+    const database = await harness.db();
+    await database.batch([
+      database.prepare("INSERT INTO threads (id, number, created_at, source, body, status, public_at) VALUES ('t1', 1, '2026-11-01T00:00:00.000Z', 'self', 'x', 'act', '2026-11-01T00:00:00.000Z')"),
+      database.prepare("INSERT INTO comments (id, thread_id, author, body, created_at, audience) VALUES ('c1', 't1', 'owner', 'Mine.', '2026-11-02T00:00:00.000Z', 'owner')"),
+      database.prepare("INSERT INTO comments (id, thread_id, author, body, created_at, audience, state, sender_name) VALUES ('c2', 't1', 'visitor', 'Hi.', '2026-11-03T00:00:00.000Z', 'public', 'pending', 'Asha')"),
+      database.prepare("INSERT INTO comments (id, thread_id, author, body, created_at, audience, state, sender_name) VALUES ('c3', 't1', 'visitor', 'Spam.', '2026-11-03T00:00:00.000Z', 'public', 'dropped', 'Bot')"),
+    ]);
+    await harness.migrate();
+    expect((await database.prepare("SELECT id, state, visitor_key FROM comments ORDER BY id").all()).results).toEqual([
+      { id: "c1", state: "shown", visitor_key: null },
+      { id: "c2", state: "shown", visitor_key: null },
+      { id: "c3", state: "dropped", visitor_key: null },
+    ]);
+    expect(await database.prepare("SELECT COUNT(*) AS n FROM answer_senders").first<{ n: number }>()).toEqual({ n: 0 });
+    const read = (await (await harness.fetch(`${SITE}/api/threads/1`)).json()) as { comments: { body: string }[] };
+    expect(read.comments.map((comment) => comment.body)).toEqual(["Hi."]);
   });
 });
 

@@ -1,20 +1,21 @@
-// The checks every note a visitor sends Suresh passes, in one place, for the site's two public writes: the note
-// flow's send (src/talk.ts), a new thread about one of his topics, and a note on a public thread (src/public.ts),
-// which waits for his OK. Both come from the site's own page as JSON with exactly the string keys their door names,
-// and share one order of refusals, each the cheapest that applies: no bot-check secret (503), another origin (403),
-// no or too large a declared length (411, 413), a body that isn't JSON (415; a browser form can't send JSON, so
-// this also closes cross-site form posts), a malformed note (400), a failed bot check (403), and the daily limits
-// (429, whose `limit` reason the page shows as its own screen), which every note counts against one budget. Bots
-// are refused before the limits, so they can't spend real visitors' allowance. Nothing personal is ever logged: a
-// refusal's line holds its status and reason only.
+// The checks everything a visitor writes Suresh passes, in one place, for the site's three public writes: the note
+// flow's send (src/talk.ts), a new thread about one of his topics; a note on a public thread; and an answer to a
+// question of a public thread's page (both src/public.ts), each shown at once. All come from the site's own page as
+// JSON with exactly the string keys their door names, and share one order of refusals, each the cheapest that
+// applies: no bot-check secret (503), another origin (403), no or too large a declared length (411, 413), a body that
+// isn't JSON (415; a browser form can't send JSON, so this also closes cross-site form posts), a malformed note or
+// answer (400), a failed bot check (403), and the daily limits (429, whose `limit` reason the page shows), which every
+// note counts against one budget and every answer against another (src/quota.ts). Bots are refused before the
+// limits, so they can't spend real visitors' allowance. Nothing personal is ever logged: a refusal's line holds its
+// status and reason only.
 
-import { networkOf, takeSend } from "./quota.ts";
+import { networkOf, take, type Budget } from "./quota.ts";
 import { verifyToken } from "./turnstile.ts";
 import { isJson, sameOrigin } from "./request.ts";
 import { refuse } from "./wire.ts";
 import type { Bindings } from "./bindings.ts";
 
-/** The longest note, in UTF-16 code units of the trimmed text; the page counts the same way. */
+/** The longest note or visitor's answer, in UTF-16 code units of the trimmed text; the page counts the same way. */
 export const MAX_NOTE = 4000;
 /**
  * The largest request: a note's 4,000 code units are at most 12,000 bytes of UTF-8, and JSON escapes at
@@ -25,6 +26,10 @@ const MAX_REQUEST_BYTES = 16 * 1024;
 const MAX_NAME = 80;
 const MAX_EMAIL = 200;
 const MAX_TOKEN = 2048;
+/** The id a page marks a question with, as the bridge and the threads' calls hold it (frame/bridge.js). */
+const QUESTION_SHAPE = /^[a-z0-9-]{1,40}$/;
+/** A visitor's key: 32 random bytes their browser made once, as hex. */
+export const VISITOR_KEY_SHAPE = /^[0-9a-f]{64}$/;
 /** The browser's own check for `type="email"` (the HTML standard's valid e-mail address), so both agree. */
 const EMAIL_SHAPE =
   /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
@@ -92,6 +97,35 @@ export function readNote(fields: Record<string, string>): Note | Response {
   return { body, name: name === "" ? null : name, email: email === "" ? null : email, token };
 }
 
+/** A visitor's answer as the checks read it: the question it answers, the words, the name and key, and the token. */
+export interface Answer {
+  readonly question: string;
+  readonly body: string;
+  readonly name: string;
+  readonly key: string;
+  readonly token: string;
+}
+
+/**
+ * The answer in the fields, or the refusal of its first field that is wrong: the words (`body`, as a note's), then
+ * the rest (`form`): a question id, a name (which an answer must have, because it is shown with it), the key and the
+ * token.
+ */
+export function readAnswer(fields: Record<string, string>): Answer | Response {
+  const body = (fields.body ?? "").trim();
+  if (body.length === 0 || body.length > MAX_NOTE || !body.isWellFormed() || BODY_CONTROL.test(body)) return refuse(400, "body");
+
+  const question = fields.question ?? "";
+  const name = (fields.name ?? "").trim();
+  const key = fields.key ?? "";
+  const token = (fields.token ?? "").trim();
+  if (!QUESTION_SHAPE.test(question)) return refuse(400, "form");
+  if (name === "" || name.length > MAX_NAME || CONTROL.test(name) || !name.isWellFormed()) return refuse(400, "form");
+  if (!VISITOR_KEY_SHAPE.test(key)) return refuse(400, "form");
+  if (token === "" || token.length > MAX_TOKEN) return refuse(400, "form");
+  return { question, body, name, key, token };
+}
+
 /** The sender's network once the bot check passes, or the refusal: no address (400), a failed check (403). */
 export async function checkBot(request: Request, secret: string, token: string): Promise<{ network: string } | Response> {
   const address = request.headers.get("CF-Connecting-IP") ?? "";
@@ -102,7 +136,7 @@ export async function checkBot(request: Request, secret: string, token: string):
   return { network };
 }
 
-/** Counts one note against the daily limits, or answers 429 `limit` when they are reached. */
-export async function takeLimit(env: Bindings, network: string): Promise<Response | null> {
-  return (await takeSend(env.DB, network)) ? null : refuse(429, "limit");
+/** Counts one note or answer against its budget's daily limits, or answers 429 `limit` when they are reached. */
+export async function takeLimit(env: Bindings, network: string, budget: Budget): Promise<Response | null> {
+  return (await take(env.DB, network, budget)) ? null : refuse(429, "limit");
 }

@@ -61,10 +61,13 @@
 // own (a site note, a told thread) is never published (409 `not-his-words`). Every reader's thread says when it was
 // made public (`publicAt`). A comment's audience is the writer's own choice: `public` (anyone, on a public thread
 // only, 409 `not-public` elsewhere) from the owner or an invited person, never from the sync, so nothing it
-// transcribes is published without him. A visitor's note on a public thread (src/public.ts) waits for his OK: he
-// shows it, drops it or sends it back to waiting at its own address, and the owner's list counts the notes waiting
-// on each thread (`pending`). An invited person never reads a note that isn't shown, and nobody but the owner and the
-// sync ever reads a visitor's email.
+// transcribes is published without him. A visitor's note on a public thread, and a visitor's answer to its page's
+// questions (src/public.ts), are shown at once: he drops either at its own address, shows it again (the page's Undo),
+// or sends it back to waiting, and the owner's list counts the notes waiting on each thread (`pending`) and says a
+// thread waits on him when a visitor wrote last. An invited person never reads words that aren't shown, and nobody but
+// the owner and the sync ever reads a visitor's email. A visitor's answer names the key it came from (`visitor`, the
+// first 16 hex characters of the key's hash), so the page shows each visitor's newest answer apart from another
+// visitor who typed the same name; it can't be used to answer as anyone.
 //
 // Everyone he deals with is a person with a number (src/people.ts holds their calls). To the owner and the sync, a
 // thread names the person it is from (`senderNumber`), a comment its writer's (`personNumber`), a thread's people
@@ -308,6 +311,7 @@ function commentView(row: CommentRow, reader: Reader): { readonly [key: string]:
         ? null
         : { text: row.quote, prefix: row.quote_prefix ?? "", suffix: row.quote_suffix ?? "", version: row.page_version },
     mine: isMine(row, reader),
+    ...(row.visitor_key === null ? {} : { visitor: row.visitor_key.slice(0, 16) }),
   };
   if (reader.caller === "member") return said;
   const owners = row.person_number === null ? said : { ...said, personNumber: row.person_number };
@@ -633,7 +637,7 @@ async function readPeople(number: number, env: Bindings, caller: Caller): Promis
   return peopleAnswer(row, env, caller);
 }
 
-/** His ruling on a visitor's note: shown on the thread, dropped, or back to waiting (Undo). The owner's alone. */
+/** His ruling on a visitor's note or answer: dropped, shown again (Undo), or back to waiting. The owner's alone. */
 async function judge(request: Request, number: number, noteId: string, env: Bindings, caller: Caller): Promise<Response> {
   const length = lengthRefusal(request, MAX_CHANGE_BYTES);
   if (length !== null) return length;
