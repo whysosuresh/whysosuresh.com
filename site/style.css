@@ -1181,7 +1181,6 @@ a.j-chip:hover { border-color: var(--ink); }
   .j-line > .j-pill { grid-row: 1; grid-column: 2; }
   .j-toc-when { width: 100%; }
   .j-page { font-size: 17px; }
-  .j-edit-box { font-size: 13px; }
   .j-grammar { grid-template-columns: minmax(0, 1fr); }
 }
 

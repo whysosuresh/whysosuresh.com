@@ -993,10 +993,10 @@ class Threads {
     this.journalFailed = false;
     /** Entries read whole (their text, versions and answers), by key. @type {Map<string, JournalRead>} */
     this.entries = new Map();
-    /** The key no entry has, as the page last found. @type {string | null} */
-    this.entryMissing = null;
-    /** His hand edit, kept while he goes elsewhere and comes back. @type {JournalEdit | null} */
-    this.journalEdit = null;
+    /** The keys no entry has, as the page last found. @type {Set<string>} */
+    this.entryMissing = new Set();
+    /** His hand edits, one per entry, each kept while he goes elsewhere and comes back; only Cancel or a save ends one. @type {Map<string, JournalEdit>} */
+    this.journalEdits = new Map();
     /** Answers to a day's question as typed so far, by day, kept across a redraw. @type {Map<string, string>} */
     this.answerDrafts = new Map();
     /** Days whose answer box is open again over a kept answer (Change). @type {Set<string>} */
@@ -2085,11 +2085,11 @@ class Threads {
   async loadEntry(key) {
     try {
       this.entries.set(key, await readJournal(key));
-      if (this.entryMissing === key) this.entryMissing = null;
+      this.entryMissing.delete(key);
     } catch (error) {
       if (!(error instanceof Missing)) throw error;
       this.entries.delete(key);
-      this.entryMissing = key;
+      this.entryMissing.add(key);
     }
   }
 
@@ -2192,7 +2192,8 @@ class Threads {
     const latest = this.latestDay();
     if (!this.journalLoaded || this.journalFailed || latest === null) return [];
     const today = this.today();
-    const label = latest.key === today ? "Today's page" : `${weekdayWords(latest.key)}'s page`;
+    const gap = daysBetween(latest.key, today);
+    const label = gap <= 0 ? "Today's page" : gap <= 6 ? `${weekdayWords(latest.key)}'s page` : `The page of ${longDay(latest.key)}`;
     const counts = this.countdowns();
     return [
       el('div', { class: 'j-card', role: 'region', 'aria-label': 'Journal' }, [
@@ -2284,9 +2285,10 @@ class Threads {
     if (this.route.view !== 'entry') return el('div');
     const key = this.route.key;
     const read = this.entries.get(key);
-    if (kindOf(key) === null || (this.entryMissing === key && read === undefined)) return this.journalMissing(JOURNAL_PATH, 'Back to the journal');
+    if (kindOf(key) === null || (this.entryMissing.has(key) && read === undefined)) return this.journalMissing(JOURNAL_PATH, 'Back to the journal');
     if (read === undefined) return el('div', { class: 't-wrap j-wrap' }, [el('div', { class: 't-empty' }, ['Loading…'])]);
-    if (this.journalEdit?.key === key) return this.journalEditor(read);
+    const editing = this.journalEdits.get(key);
+    if (editing !== undefined) return this.journalEditor(read, editing);
     const page = parsePage(read.text);
     const week = read.kind === 'week';
     const crumbs = el('div', { class: 'j-crumbs' }, [
@@ -2419,16 +2421,14 @@ class Threads {
     return el('nav', { class: 'j-pager', 'aria-label': 'Days' }, [link(older, '← Earlier'), link(newer, 'Later →')]);
   }
 
-  /** His hand edit: the entry's whole text in one box, saved on the version it was opened at. @param {JournalRead} read */
-  journalEditor(read) {
-    const editing = this.journalEdit;
-    if (editing === null) return el('div');
+  /** His hand edit: the entry's whole text in one box, saved on the version it was opened at. @param {JournalRead} read @param {JournalEdit} editing */
+  journalEditor(read, editing) {
     const box = el('textarea', { id: 'journal-edit', class: 'j-edit-box', spellcheck: 'true', 'aria-label': 'The page' });
     if (box instanceof HTMLTextAreaElement) box.value = editing.text;
     return el('div', { class: 't-wrap j-wrap' }, [
       el('form', { class: 'j-page', 'data-submit': 'journal-edit' }, [
         el('div', { class: 'j-crumbs' }, [
-          el('span', {}, [el('a', { href: entryPath(read.key), 'data-act': 'journal-cancel' }, ['← Back to the page'])]),
+          el('span', {}, [el('a', { href: JOURNAL_PATH, 'data-journal': JOURNAL_PATH, title: 'Your words stay here until you save or cancel' }, ['← Journal'])]),
           el('span', {}, [`Opened at version ${editing.base}`]),
         ]),
         el('h1', { class: 'j-edit-title' }, [`Editing ${parsePage(read.text)?.title ?? read.key}`]),
@@ -2443,7 +2443,7 @@ class Threads {
         ...(editing.problem === '' ? [] : [el('div', { class: 'j-stale', role: 'alert' }, [editing.problem])]),
         box,
         el('div', { class: 'j-edit-bar' }, [
-          el('span', { class: 't-hint' }, [kbd('⌘'), kbd('↵'), ' saves · ', kbd('Esc'), ' leaves the box']),
+          el('span', { class: 't-hint' }, [kbd('⌘'), kbd('↵'), ' saves · your words stay until you save or cancel']),
           el('span', { class: 'j-acts' }, [
             el('button', { type: 'button', class: 't-btn', 'data-act': 'journal-cancel' }, ['Cancel']),
             el('button', { type: 'submit', class: 't-btn t-btn-primary', ...(editing.busy ? { disabled: '' } : {}) }, [editing.busy ? 'Saving…' : 'Save']),
@@ -2533,7 +2533,7 @@ class Threads {
     if (this.route.view !== 'entry') return;
     const read = this.entries.get(this.route.key);
     if (read === undefined) return;
-    if (this.journalEdit?.key !== read.key) this.journalEdit = { key: read.key, base: read.newest, text: read.text, stale: false, busy: false, problem: '' };
+    if (!this.journalEdits.has(read.key)) this.journalEdits.set(read.key, { key: read.key, base: read.newest, text: read.text, stale: false, busy: false, problem: '' });
     this.render();
     const box = this.main.querySelector('#journal-edit');
     if (box instanceof HTMLTextAreaElement) box.focus();
@@ -2541,34 +2541,44 @@ class Threads {
 
   /** Saves his hand edit on the version it was opened at; a save the sync overtook keeps his words in the box. */
   async saveJournalEdit() {
-    const editing = this.journalEdit;
-    if (editing === null || editing.busy) return;
+    const editing = this.route.view === 'entry' ? this.journalEdits.get(this.route.key) : undefined;
+    if (editing === undefined || editing.busy) return;
     editing.busy = true;
     editing.stale = false;
     editing.problem = '';
     this.keepScroll = true;
     this.render();
+    /** @type {number} */
+    let version;
     try {
-      const version = await saveJournal(editing.key, editing.text, editing.base);
-      this.journalEdit = null;
-      await this.loadEntry(editing.key);
-      this.say(`Saved as version ${version}`, null);
-      void this.loadJournal();
+      version = await saveJournal(editing.key, editing.text, editing.base);
     } catch (error) {
       editing.busy = false;
       if (error instanceof Failed && error.message === 'stale') editing.stale = true;
       else if (error instanceof Failed && error.message === 'journal') editing.problem = 'This page needs a "## " title on its first line, and must be under 64,000 characters.';
       else if (error instanceof Failed && error.message === 'photo') editing.problem = "A photo on this page isn't one the sync uploaded. Keep each photo line as it was.";
       else this.fail(error, "The page wasn't saved. Your words are still in the box.");
+      this.keepScroll = true;
+      this.render();
+      return;
     }
+    // Saved: the draft ends here, whatever the read after it does.
+    this.journalEdits.delete(editing.key);
+    this.say(`Saved as version ${version}`, null);
+    try {
+      await this.loadEntry(editing.key);
+    } catch (error) {
+      this.fail(error, `Saved as version ${version}, but the page didn't load again.`);
+    }
+    void this.loadJournal();
     this.keepScroll = true;
     this.render();
   }
 
   /** After a refused save: the day as the sync left it, opened again in the box, once he has copied his change. */
   async reloadJournalEdit() {
-    const editing = this.journalEdit;
-    if (editing === null) return;
+    const editing = this.route.view === 'entry' ? this.journalEdits.get(this.route.key) : undefined;
+    if (editing === undefined) return;
     try {
       await this.loadEntry(editing.key);
     } catch (error) {
@@ -2576,7 +2586,8 @@ class Threads {
       return;
     }
     const read = this.entries.get(editing.key);
-    this.journalEdit = read === undefined ? null : { key: read.key, base: read.newest, text: read.text, stale: false, busy: false, problem: '' };
+    if (read === undefined) this.journalEdits.delete(editing.key);
+    else this.journalEdits.set(read.key, { key: read.key, base: read.newest, text: read.text, stale: false, busy: false, problem: '' });
     this.keepScroll = true;
     this.render();
   }
@@ -2602,6 +2613,7 @@ class Threads {
     } catch (error) {
       this.entries.set(key, read);
       this.answerDrafts.set(key, body);
+      this.answerOpen.add(key);
       this.keepScroll = true;
       this.render();
       this.fail(error, "Your answer wasn't kept.");
@@ -2610,8 +2622,13 @@ class Threads {
     this.keepScroll = true;
     this.render();
     this.say('Answer kept', async () => {
-      await answerJournal(key, before);
-      await this.loadEntry(key);
+      try {
+        await answerJournal(key, before);
+        await this.loadEntry(key);
+      } catch (error) {
+        this.fail(error, "The answer wasn't put back.");
+        return;
+      }
       this.keepScroll = true;
       this.render();
       this.say('Undone', null);
@@ -5654,8 +5671,7 @@ class Threads {
         this.startJournalEdit();
         break;
       case 'journal-cancel':
-        event.preventDefault();
-        this.journalEdit = null;
+        if (this.route.view === 'entry') this.journalEdits.delete(this.route.key);
         this.render();
         break;
       case 'journal-reload':
@@ -6009,7 +6025,10 @@ class Threads {
     }
     else if (target.id.startsWith('share-')) this.readShare();
     else if (target.id === 'person-note' && target instanceof HTMLTextAreaElement) this.personDraft = target.value;
-    else if (target.id === 'journal-edit' && target instanceof HTMLTextAreaElement && this.journalEdit !== null) this.journalEdit.text = target.value;
+    else if (target.id === 'journal-edit' && target instanceof HTMLTextAreaElement && this.route.view === 'entry') {
+      const editing = this.journalEdits.get(this.route.key);
+      if (editing !== undefined) editing.text = target.value;
+    }
     else if (target.id === 'journal-answer' && target instanceof HTMLTextAreaElement) this.answerDrafts.set(target.dataset.key ?? '', target.value);
     else if (target.id === 'person-email' && target instanceof HTMLInputElement) {
       this.personAddress = target.value;
@@ -6199,7 +6218,7 @@ class Threads {
         this.step(-1);
         break;
       case 'open':
-        if (this.route.view !== 'thread' && this.sel !== null) this.openThread(this.sel);
+        if (this.route.view !== 'thread' && !this.inJournal() && this.sel !== null) this.openThread(this.sel);
         break;
       case 'back':
         if (this.route.view === 'thread' || this.route.view === 'person' || this.route.view === 'entry' || this.route.view === 'storyline' || this.route.view === 'storylines') this.back();
@@ -6252,6 +6271,7 @@ class Threads {
       case 'edit':
         if (this.route.view === 'thread' && thread) this.startEdit(thread);
         if (this.route.view === 'person') this.startPersonEdit('name');
+        if (this.route.view === 'entry') this.startJournalEdit();
         break;
       case 'reply':
         if (this.route.view === 'thread' && thread && canReply(thread)) this.startReply(thread);
