@@ -8,7 +8,7 @@
 // refused once the thread is taken back, and counts against the note flow's daily limits. Only he shows, drops or
 // holds a note; members see shown notes and never a waiting or dropped one, an email, or the events that would
 // tell them one arrived. The sync never writes for anyone. Nobody replies under a public comment or a visitor's note,
-// and answers, comments on words and replies never reach a stranger. A public thread's address carries its title and preview
+// and answers, comments on words and replies never reach a stranger, nor does a meeting or anyone in it. A public thread's address carries its title and preview
 // tags, escaped, with no ETag; a private and a missing number get the shell byte for byte.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -244,6 +244,17 @@ describe("a public thread, as anyone reads it", () => {
     });
     const text = JSON.stringify(read);
     for (const word of ["example.com", "status", "ref", "people", "events", "activityAt", "\"id\"", "Meera"]) expect(text).not.toContain(word);
+  });
+
+  it("says nothing of a meeting, though the thread is one, with people in it", async () => {
+    const n = await published({ title: "A talk at the meetup" });
+    const plain = await answer<Record<string, unknown>>(await publicRead(String(n)));
+    await answer(await call(`/threads/${n}/meeting`, { body: { when: "2026-11-28T12:30:00+05:30", minutes: 20, where: "Bengaluru, the meetup's hall" } }));
+    await answer(await call(`/threads/${n}/attendees`, { body: { add: { name: "Leela" } } }));
+    const read = await answer<Record<string, unknown>>(await publicRead(String(n)));
+    expect(read).toEqual(plain);
+    const text = JSON.stringify(read);
+    for (const word of ["meeting", "2026-11-28", "Bengaluru", "Leela", "attendees", "minutes"]) expect(text).not.toContain(word);
   });
 
   it("shows only the comments written as Public that are shown, by name", async () => {

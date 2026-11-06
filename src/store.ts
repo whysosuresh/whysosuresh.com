@@ -48,6 +48,15 @@
 // reply), as an answer to a question of the thread's page, or on words of a version of the page. `comment` checks
 // the place in its own INSERT, under the same reader as the thread: a reader replies only under a comment they can
 // see, so an invited person never replies under "Only me", and a reply takes its parent's audience.
+//
+// Any thread may also be one meeting (migrations/0014_meetings.sql), once it has a when: a day, its time not set yet,
+// or an instant in UTC, with a length and a where if said, and the people who will be in the room (`attendees`).
+// Being in a meeting grants nothing: an attendee is not a member, so it never opens the thread or answers yes at
+// sign-in, and someone with no address can be one. Every row carries its meeting's people by number and name
+// (`meeting_people`), so a meeting reads the same in every list, search and answer. `setMeeting` sets or clears the
+// meeting, a change of time keeping where it moved from (`from`, as a move does), and clearing it takes its people
+// off with it; `attend` and `unattend` change who is in it. A name given to `attend` always makes a new person,
+// because both callers hold the people list already and say a number for anyone they know.
 
 /** Where a thread came from: the site's note flow, something told to him in person, or his own. */
 export type Source = "talk" | "told" | "self";
@@ -80,8 +89,10 @@ export function isTab(value: string): value is Tab {
 // The last activity reads the arrival time when it was never set: a thread the code before 0008 created between
 // that migration and its deploy. A plain expression, so it is safe in RETURNING.
 // Who a thread is from is read with their number, so a page can link the name; a subquery, which RETURNING allows.
+// So are a meeting's people, as one JSON array of their numbers and names (`[]` for none), in no promised order:
+// SQLite doesn't order an aggregate, so the door sorts them.
 export const COLUMNS =
-  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at, person_id, (SELECT people.number FROM people WHERE people.id = threads.person_id) AS sender_number";
+  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at, person_id, (SELECT people.number FROM people WHERE people.id = threads.person_id) AS sender_number, meeting_when, meeting_minutes, meeting_where, (SELECT json_group_array(json_object('number', people.number, 'name', people.name)) FROM attendees JOIN people ON people.id = attendees.person_id WHERE attendees.thread_id = threads.id) AS meeting_people";
 
 export interface ThreadRow {
   id: string;
@@ -111,6 +122,12 @@ export interface ThreadRow {
   /** The person a site note or told thread is from, and their number; null for his own and a note with no address. */
   person_id: string | null;
   sender_number: number | null;
+  /** Its meeting's when (a day `YYYY-MM-DD`, or an instant in UTC), null while it isn't one; its length in minutes and where. */
+  meeting_when: string | null;
+  meeting_minutes: number | null;
+  meeting_where: string | null;
+  /** Its meeting's people, as a JSON array of `{number, name}` in no promised order. */
+  meeting_people: string;
   /** On a list's rows only (`LIST_EXTRAS`): how many people the thread is shared with now. */
   shared?: number;
   /** On a list's rows only: 1 when the last word on it is an invited person's, else 0. */
@@ -949,6 +966,182 @@ export async function uninvite(db: D1Database, number: number, personId: string)
   return (await find(db, { number }, EVERY_THREAD)) === null ? "no-thread" : "not-invited";
 }
 
+/** A thread's meeting, as a door checked it: its when (a day `YYYY-MM-DD`, or an instant in UTC), its length in minutes and where, each null when not said. */
+export interface Meeting {
+  readonly when: string;
+  readonly minutes: number | null;
+  readonly where: string | null;
+}
+
+/** The meeting a row holds now, as a JSON object (null while it isn't one): what an event keeps as `from`. */
+const MEETING_NOW = "CASE WHEN meeting_when IS NULL THEN NULL ELSE json_object('when', meeting_when, 'minutes', meeting_minutes, 'where', meeting_where) END";
+
+/** The meeting on the thread numbered `number`, as a condition on `threads`. */
+function meetingOn(number: number, p: Params): string {
+  return `threads.number = ${p.add(number)} AND threads.meeting_when IS NOT NULL`;
+}
+
+/** An attendee event's data, on the row `people`: their number, which invited people never read, and their name. */
+const ATTENDEE_DATA = "json_object('person', people.number, 'name', people.name)";
+
+/**
+ * Sets a thread's meeting, or (null) clears it, with its event and the thread's last activity: one batch. A set
+ * writes `meeting-set` with the meeting it replaced (`from`, null when there was none) and the new one (`to`), each
+ * read by everyone in the thread, so the people in a meeting see where it moved from; setting it again to what it
+ * is still writes its event, as a link does, because it is what was asked. Clearing writes `meeting-cleared` with
+ * `from`, after taking everyone off the meeting, each with an `attendee-removed` event, because a thread that is no
+ * meeting has no one in it. `no-thread` when there is no such thread, `not-a-meeting` when clearing one that isn't;
+ * either way nothing is written. Not a move, so `moved_at` stays as it is.
+ */
+export async function setMeeting(db: D1Database, number: number, meeting: Meeting | null, actor: Author): Promise<ThreadRow | "no-thread" | "not-a-meeting"> {
+  const now = new Date().toISOString();
+  if (meeting !== null) {
+    const e = new Params();
+    const to = `json_object('when', ${e.add(meeting.when)}, 'minutes', ${e.add(meeting.minutes)}, 'where', ${e.add(meeting.where)})`;
+    const event = statement(
+      db,
+      `INSERT INTO events (thread_id, at, actor, type, data)
+       SELECT id, ${e.add(now)}, ${e.add(actor)}, 'meeting-set', json_object('from', ${MEETING_NOW}, 'to', ${to}) FROM threads WHERE number = ${e.add(number)}`,
+      e,
+    );
+    const u = new Params();
+    const update = statement(
+      db,
+      `UPDATE threads SET meeting_when = ${u.add(meeting.when)}, meeting_minutes = ${u.add(meeting.minutes)}, meeting_where = ${u.add(meeting.where)}, activity_at = ${u.add(now)}
+       WHERE number = ${u.add(number)} RETURNING ${COLUMNS}`,
+      u,
+    );
+    const [, updated] = await db.batch<ThreadRow>([event, update]);
+    return updated?.results[0] ?? "no-thread";
+  }
+  // Every statement holds the meeting's own condition, and the row is cleared last, so each reads the meeting as it was.
+  const r = new Params();
+  const removed = statement(
+    db,
+    `INSERT INTO events (thread_id, at, actor, type, data)
+     SELECT threads.id, ${r.add(now)}, ${r.add(actor)}, 'attendee-removed', ${ATTENDEE_DATA}
+     FROM attendees JOIN threads ON threads.id = attendees.thread_id JOIN people ON people.id = attendees.person_id
+     WHERE ${meetingOn(number, r)} ORDER BY people.number`,
+    r,
+  );
+  const e = new Params();
+  const cleared = statement(
+    db,
+    `INSERT INTO events (thread_id, at, actor, type, data)
+     SELECT id, ${e.add(now)}, ${e.add(actor)}, 'meeting-cleared', json_object('from', ${MEETING_NOW}) FROM threads WHERE ${meetingOn(number, e)}`,
+    e,
+  );
+  const d = new Params();
+  const off = statement(db, `DELETE FROM attendees WHERE thread_id = (SELECT id FROM threads WHERE ${meetingOn(number, d)})`, d);
+  const u = new Params();
+  const update = statement(
+    db,
+    `UPDATE threads SET meeting_when = NULL, meeting_minutes = NULL, meeting_where = NULL, activity_at = ${u.add(now)} WHERE ${meetingOn(number, u)} RETURNING ${COLUMNS}`,
+    u,
+  );
+  const [, , , updated] = await db.batch<ThreadRow>([removed, cleared, off, update]);
+  const row = updated?.results[0];
+  if (row !== undefined) return row;
+  return (await find(db, { number }, EVERY_THREAD)) === null ? "no-thread" : "not-a-meeting";
+}
+
+/** Who a door adds to a meeting: a person by their number, or someone new by the name given. */
+export type Attendee = { readonly person: number } | { readonly name: string };
+
+/**
+ * Adds a person to a thread's meeting, with the `attendee-added` event and the thread's last activity: one batch.
+ * A name always makes a new person, with no address, numbered after the largest, and only when the add is kept;
+ * someone already in the meeting changes nothing, and the thread is answered as it stands. `no-thread` when there is
+ * no such thread, `not-a-meeting` when it has no when, `no-person` when nobody has the number; then nothing is
+ * written. Being in a meeting grants nothing: this never touches `members`.
+ */
+export async function attend(db: D1Database, number: number, who: Attendee, actor: Author): Promise<ThreadRow | "no-thread" | "not-a-meeting" | "no-person"> {
+  const now = new Date().toISOString();
+  const made = "name" in who ? crypto.randomUUID() : null;
+  const person = (p: Params): string => ("person" in who ? `people.number = ${p.add(who.person)}` : `people.id = ${p.add(made)}`);
+  const absent = "NOT EXISTS (SELECT 1 FROM attendees WHERE attendees.thread_id = threads.id AND attendees.person_id = people.id)";
+  const statements: D1PreparedStatement[] = [];
+  if ("name" in who) {
+    const p = new Params();
+    statements.push(
+      statement(
+        db,
+        `INSERT INTO people (id, number, email, name, created_at) SELECT ${p.add(made)}, ${NEXT_PERSON}, NULL, ${p.list([who.name, now])}
+         WHERE EXISTS (SELECT 1 FROM threads WHERE ${meetingOn(number, p)})`,
+        p,
+      ),
+    );
+  }
+  const e = new Params();
+  statements.push(
+    statement(
+      db,
+      `INSERT INTO events (thread_id, at, actor, type, data)
+       SELECT threads.id, ${e.add(now)}, ${e.add(actor)}, 'attendee-added', ${ATTENDEE_DATA} FROM threads JOIN people ON ${person(e)} WHERE ${meetingOn(number, e)} AND ${absent}`,
+      e,
+    ),
+  );
+  // The touch runs before the person is added, in the same batch, because its guard reads whether they were in it.
+  const t = new Params();
+  statements.push(
+    statement(db, `UPDATE threads SET activity_at = ${t.add(now)} WHERE ${meetingOn(number, t)} AND EXISTS (SELECT 1 FROM people WHERE ${person(t)} AND ${absent})`, t),
+  );
+  const m = new Params();
+  statements.push(
+    statement(
+      db,
+      `INSERT INTO attendees (thread_id, person_id, added_at) SELECT threads.id, people.id, ${m.add(now)} FROM threads JOIN people ON ${person(m)} WHERE ${meetingOn(number, m)}
+       ON CONFLICT (thread_id, person_id) DO NOTHING`,
+      m,
+    ),
+  );
+  const r = new Params();
+  statements.push(statement(db, `SELECT ${COLUMNS} FROM threads WHERE number = ${r.add(number)}`, r));
+  const k = new Params();
+  statements.push(statement(db, `SELECT 1 AS yes FROM people WHERE ${person(k)}`, k));
+  const results = await db.batch<ThreadRow | { yes: number }>(statements);
+  const row = results[results.length - 2]?.results[0] as ThreadRow | undefined;
+  if (row === undefined) return "no-thread";
+  if (row.meeting_when === null) return "not-a-meeting";
+  return (results[results.length - 1]?.results.length ?? 0) === 0 ? "no-person" : row;
+}
+
+/**
+ * Takes a person off a thread's meeting, with the `attendee-removed` event and the thread's last activity: one
+ * batch. `no-thread` when there is no such thread, `not-a-meeting` when it has no when, `not-attending` when the
+ * person isn't in it; either way nothing is written.
+ */
+export async function unattend(db: D1Database, number: number, personNumber: number, actor: Author): Promise<ThreadRow | "no-thread" | "not-a-meeting" | "not-attending"> {
+  const now = new Date().toISOString();
+  const attending = (p: Params): string =>
+    `threads.number = ${p.add(number)} AND EXISTS (SELECT 1 FROM attendees JOIN people ON people.id = attendees.person_id
+       WHERE attendees.thread_id = threads.id AND people.number = ${p.add(personNumber)})`;
+  const e = new Params();
+  const event = statement(
+    db,
+    `INSERT INTO events (thread_id, at, actor, type, data)
+     SELECT threads.id, ${e.add(now)}, ${e.add(actor)}, 'attendee-removed', ${ATTENDEE_DATA} FROM threads JOIN people ON people.number = ${e.add(personNumber)} WHERE ${attending(e)}`,
+    e,
+  );
+  // The touch runs before the person is taken off, in the same batch, because its guard reads that they are in it.
+  const t = new Params();
+  const touch = statement(db, `UPDATE threads SET activity_at = ${t.add(now)} WHERE ${attending(t)}`, t);
+  const d = new Params();
+  const off = statement(
+    db,
+    `DELETE FROM attendees WHERE thread_id = (SELECT id FROM threads WHERE number = ${d.add(number)}) AND person_id = (SELECT id FROM people WHERE number = ${d.add(personNumber)})
+     RETURNING person_id`,
+    d,
+  );
+  const r = new Params();
+  const read = statement(db, `SELECT ${COLUMNS} FROM threads WHERE number = ${r.add(number)}`, r);
+  const [, , taken, after] = await db.batch<ThreadRow | { person_id: string }>([event, touch, off, read]);
+  const row = after?.results[0] as ThreadRow | undefined;
+  if (row === undefined) return "no-thread";
+  if ((taken?.results.length ?? 0) > 0) return row;
+  return row.meeting_when === null ? "not-a-meeting" : "not-attending";
+}
+
 /** A public thread by its number: one of his own he made public; null for any other number. */
 export async function findPublic(db: D1Database, number: number): Promise<ThreadRow | null> {
   return db.prepare(`SELECT ${COLUMNS} FROM threads WHERE number = ?1 AND ${PUBLIC}`).bind(number).first<ThreadRow>();
@@ -1093,24 +1286,33 @@ export interface PeopleRow {
   name: string | null;
   note: string | null;
   created_at: string;
-  /** Site notes they sent, things they told him, threads shared with them now and taken back, their comments and notes. */
+  /**
+   * Site notes they sent, things they told him, threads shared with them now and taken back, their comments and
+   * notes, and the meetings they are in.
+   */
   sent: number;
   told: number;
   invited: number;
   removed: number;
   commented: number;
   noted: number;
-  /** The latest of when they appeared, their threads and notes, and their invitations. */
+  met: number;
+  /** The latest of when they appeared, their threads and notes, their invitations, and their meetings that have begun. */
   last_contact: string;
   /**
    * 1 while anything of theirs is live: a thread from them that isn't dropped, an invitation that stands or one to a
-   * thread that isn't dropped, or a comment or note of theirs that isn't dropped on such a thread. A person with
-   * none was only ever in threads he dropped, which the page folds away.
+   * thread that isn't dropped, a comment or note of theirs that isn't dropped on such a thread, or a meeting on one.
+   * A person with none was only ever in threads he dropped, which the page folds away.
    */
   live: number;
 }
 
-/** The person columns every people read uses, on `people`, with what is derived from the rows that name them. */
+/**
+ * The person columns every people read uses, on `people`, with what is derived from the rows that name them. A
+ * meeting counts toward their last contact once its when is not after now, compared as the ISO strings every writer
+ * stamps: a day counts from its start in UTC, a few hours early or late in another zone, close enough for when they
+ * were last in touch.
+ */
 const PEOPLE_COLUMNS = `people.id, people.number, people.email, people.name, people.note, people.created_at,
   (SELECT COUNT(*) FROM threads WHERE threads.person_id = people.id AND threads.source = 'talk') AS sent,
   (SELECT COUNT(*) FROM threads WHERE threads.person_id = people.id AND threads.source = 'told') AS told,
@@ -1118,15 +1320,20 @@ const PEOPLE_COLUMNS = `people.id, people.number, people.email, people.name, peo
   (SELECT COUNT(*) FROM members WHERE members.person_id = people.id AND members.removed_at IS NOT NULL) AS removed,
   (SELECT COUNT(*) FROM comments WHERE comments.person_id = people.id AND comments.author = 'member') AS commented,
   (SELECT COUNT(*) FROM comments WHERE comments.person_id = people.id AND comments.author = 'visitor') AS noted,
+  (SELECT COUNT(*) FROM attendees WHERE attendees.person_id = people.id) AS met,
   MAX(people.created_at,
     COALESCE((SELECT MAX(created_at) FROM threads WHERE threads.person_id = people.id), ''),
     COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.person_id = people.id), ''),
-    COALESCE((SELECT MAX(added_at) FROM members WHERE members.person_id = people.id), '')) AS last_contact,
+    COALESCE((SELECT MAX(added_at) FROM members WHERE members.person_id = people.id), ''),
+    COALESCE((SELECT MAX(threads.meeting_when) FROM attendees JOIN threads ON threads.id = attendees.thread_id
+              WHERE attendees.person_id = people.id AND threads.meeting_when <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), '')) AS last_contact,
   (EXISTS (SELECT 1 FROM threads WHERE threads.person_id = people.id AND threads.status <> 'dropped')
     OR EXISTS (SELECT 1 FROM members JOIN threads ON threads.id = members.thread_id
                WHERE members.person_id = people.id AND (members.removed_at IS NULL OR threads.status <> 'dropped'))
     OR EXISTS (SELECT 1 FROM comments JOIN threads ON threads.id = comments.thread_id
-               WHERE comments.person_id = people.id AND comments.state <> 'dropped' AND threads.status <> 'dropped')) AS live`;
+               WHERE comments.person_id = people.id AND comments.state <> 'dropped' AND threads.status <> 'dropped')
+    OR EXISTS (SELECT 1 FROM attendees JOIN threads ON threads.id = attendees.thread_id
+               WHERE attendees.person_id = people.id AND threads.status <> 'dropped')) AS live`;
 
 /** The people order: whoever was last in touch first. */
 const PEOPLE_ORDER = "ORDER BY last_contact DESC, people.number DESC";
@@ -1158,14 +1365,18 @@ export async function searchPeople(db: D1Database, words: string): Promise<Peopl
   ).results;
 }
 
-/** A thread a person is in, with how: it is from them (`mine`), their invitation to it, and how many comments or notes of theirs it holds. */
+/**
+ * A thread a person is in, with how: it is from them (`mine`), their invitation to it, how many comments or notes of
+ * theirs it holds, and whether they are in its meeting (`attends`).
+ */
 export interface PersonThreadRow extends ThreadRow {
   mine: number;
   membership: "invited" | "removed" | null;
   wrote: number;
+  attends: number;
 }
 
-/** Up to `limit` of the threads a person is in, most recently active first: from them, shared with them, or written on. */
+/** Up to `limit` of the threads a person is in, most recently active first: from them, shared with them, written on, or met on. */
 export async function threadsOfPerson(db: D1Database, personId: string, limit: number): Promise<PersonThreadRow[]> {
   return (
     await db
@@ -1173,11 +1384,13 @@ export async function threadsOfPerson(db: D1Database, personId: string, limit: n
         `SELECT ${COLUMNS}, (threads.person_id IS ?1) AS mine,
            (SELECT CASE WHEN members.removed_at IS NULL THEN 'invited' ELSE 'removed' END FROM members
             WHERE members.thread_id = threads.id AND members.person_id = ?1) AS membership,
-           (SELECT COUNT(*) FROM comments WHERE comments.thread_id = threads.id AND comments.person_id = ?1) AS wrote
+           (SELECT COUNT(*) FROM comments WHERE comments.thread_id = threads.id AND comments.person_id = ?1) AS wrote,
+           EXISTS (SELECT 1 FROM attendees WHERE attendees.thread_id = threads.id AND attendees.person_id = ?1) AS attends
          FROM threads
          WHERE threads.person_id = ?1
            OR EXISTS (SELECT 1 FROM members WHERE members.thread_id = threads.id AND members.person_id = ?1)
            OR EXISTS (SELECT 1 FROM comments WHERE comments.thread_id = threads.id AND comments.person_id = ?1)
+           OR EXISTS (SELECT 1 FROM attendees WHERE attendees.thread_id = threads.id AND attendees.person_id = ?1)
          ORDER BY COALESCE(activity_at, created_at) DESC, number DESC LIMIT ${limit}`,
       )
       .bind(personId)

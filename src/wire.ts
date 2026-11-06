@@ -1,12 +1,13 @@
 // What the threads' calls (src/threads.ts) read from a request before the store sees it: the size and type
 // checks, and an add or a move as the store's own intent (src/store.ts). What a thread is about is its `space`,
 // any of site/spaces.js. The sync's add and the owner's own add, from the threads page, have their own shapes
-// (`readAdd`, `readOwnAdd`). Every refusal logs its status and reason only, nothing personal.
+// (`readAdd`, `readOwnAdd`). A meeting and its people have theirs too (`readMeeting`, `readAttendee`). Every refusal
+// logs its status and reason only, nothing personal.
 
 import { isSpace } from "../site/spaces.js";
 import { json } from "./json.ts";
 import { isJson } from "./request.ts";
-import type { Move, NewThread } from "./store.ts";
+import type { Attendee, Meeting, Move, NewThread } from "./store.ts";
 
 /** A move is one small JSON object; anything larger is refused before it is read. */
 export const MAX_CHANGE_BYTES = 1024;
@@ -207,4 +208,89 @@ export function readOwnAdd(value: unknown): NewThread | string {
   const status = value.status;
   if (status !== "received" && status !== "act" && status !== "discuss") return "status";
   return { source: "self", space: given, title, body, senderName: null, senderEmail: null, status, originRef: null, person: null };
+}
+
+/** A meeting's day: the same day for every reader, its time not set yet. */
+const DAY_SHAPE = /^(\d{4})-(\d{2})-(\d{2})$/;
+/**
+ * A meeting's moment: a day, a time to the minute (seconds and milliseconds allowed), and always its zone, `Z` or an
+ * offset, because a time with none would be read in whatever zone the reader's machine is in.
+ */
+const INSTANT_SHAPE = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(?:Z|[+-](\d{2}):(\d{2}))$/;
+/** The years a meeting may be in: wide enough for anything real, narrow enough that a slip of the keyboard is refused. */
+const FIRST_YEAR = 2000;
+const LAST_YEAR = 2100;
+/** The widest offset from UTC any zone keeps (Kiribati's +14:00). */
+const MAX_OFFSET_HOURS = 14;
+/** A meeting's length in minutes: at least five, at most a day. */
+const MIN_MINUTES = 5;
+const MAX_MINUTES = 1440;
+/** The longest where, in UTF-16 code units of the trimmed text. */
+export const MAX_WHERE = 200;
+
+/**
+ * A day as `YYYY-MM-DD` when it is one on the calendar, in the years a meeting may be in; null otherwise. Date
+ * itself would take 30 February as 2 March without a word, so the day must come back from Date unchanged.
+ */
+function calendarDay(value: string): string | null {
+  const day = DAY_SHAPE.exec(value);
+  if (day === null) return null;
+  const year = Number(day[1]);
+  if (year < FIRST_YEAR || year > LAST_YEAR) return null;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value ? value : null;
+}
+
+/**
+ * A meeting's when as the store keeps it: a day as given, or a moment as its instant in UTC
+ * (`YYYY-MM-DDTHH:MM:SS.sssZ`); null for anything else. The shape is checked before Date reads it, because Date
+ * reads a wrong shape silently: a time with no zone in the machine's own zone, and a day that isn't one as another.
+ */
+function meetingWhen(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  if (DAY_SHAPE.test(value)) return calendarDay(value);
+  const moment = INSTANT_SHAPE.exec(value);
+  if (moment === null) return null;
+  const [, day = "", hours = "", minutes = "", seconds = "0", offsetHours = "0", offsetMinutes = "0"] = moment;
+  if (calendarDay(day) === null || Number(hours) > 23 || Number(minutes) > 59 || Number(seconds) > 59) return null;
+  if (Number(offsetHours) > MAX_OFFSET_HOURS || Number(offsetMinutes) > 59) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const year = parsed.getUTCFullYear();
+  return year < FIRST_YEAR || year > LAST_YEAR ? null : parsed.toISOString();
+}
+
+/**
+ * A meeting as the call asks for it, every key present: `{"when", "minutes", "where"}`, the when a day or a moment
+ * with its zone, the length null or a whole number of minutes from 5 to 1440, the where null or one line of at most
+ * 200 code units. `when` null clears the meeting, and then the other two must be null too. Null for anything else.
+ */
+export function readMeeting(value: unknown): { readonly meeting: Meeting | null } | null {
+  const fields = exactly(value, ["minutes", "when", "where"]);
+  if (fields === null) return null;
+  if (fields.when === null) return fields.minutes === null && fields.where === null ? { meeting: null } : null;
+  const when = meetingWhen(fields.when);
+  if (when === null) return null;
+  const minutes = fields.minutes;
+  if (minutes !== null && (typeof minutes !== "number" || !Number.isInteger(minutes) || minutes < MIN_MINUTES || minutes > MAX_MINUTES)) return null;
+  const where = fields.where === null ? null : line(fields.where, MAX_WHERE);
+  if (fields.where !== null && where === null) return null;
+  return { meeting: { when, minutes, where } };
+}
+
+/**
+ * A change to a meeting's people as the call asks for it: `{"add": {"person": <number>}}` for someone the caller
+ * knows, `{"add": {"name": <text>}}` for someone new, or `{"remove": <number>}`; null for anything else.
+ */
+export function readAttendee(value: unknown): { readonly add: Attendee } | { readonly remove: number } | null {
+  const adding = exactly(value, ["add"]);
+  if (adding !== null) {
+    const known = exactly(adding.add, ["person"]);
+    if (known !== null) return isPersonNumber(known.person) ? { add: { person: known.person } } : null;
+    const named = exactly(adding.add, ["name"]);
+    const name = named === null ? null : line(named.name, MAX_PERSON_NAME);
+    return name === null ? null : { add: { name } };
+  }
+  const removing = exactly(value, ["remove"]);
+  return removing !== null && isPersonNumber(removing.remove) ? { remove: removing.remove } : null;
 }

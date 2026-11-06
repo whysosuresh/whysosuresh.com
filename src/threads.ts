@@ -22,13 +22,15 @@
 //   POST /threads/api/threads/<n>/link        {"url": ..., "title": ...}       owner and sync
 //   GET  /threads/api/threads/<n>/people                                      owner
 //   POST /threads/api/threads/<n>/people      {"add": {"email", "name"}} | {"remove": <person id>}   owner
+//   POST /threads/api/threads/<n>/meeting     {"when", "minutes", "where"}     owner and sync
+//   POST /threads/api/threads/<n>/attendees   {"add": {"person": <n>}} | {"add": {"name"}} | {"remove": <n>}   owner and sync
 //   GET  /threads/api/search?q=<words or a number>                            everyone
 //   GET  /threads/api/sign-in?next=<a threads page>                           everyone
 //   GET  /threads/api/people[/<n>], POST /threads/api/people/<n>               owner and sync read; owner writes (src/people.ts)
 //
 // An invited person reads only the threads they are in: every read takes the caller as its reader, and the
 // store's queries see no other thread, so one they aren't in answers 404 `no-thread`, exactly as a number never
-// used. Every call that isn't theirs (a move, a text, a link, a page, an add, a tab's list, the people) is refused
+// used. Every call that isn't theirs (a move, a text, a link, a page, a meeting, an add, a tab's list, the people) is refused
 // with 403 `owner-only` before anything is read, so the refusal says nothing about a number. What they see of a
 // thread is shaped here (`thread`, `commentView`, `eventView`): never a visitor's email, the origin, the issue
 // link, a drop reason, the owner's mail opening or an earlier version of any text, and never an "Only me"
@@ -70,6 +72,17 @@
 // (`people`), so a name on his page opens that person. An invited person's shapes gain none of these, and every
 // people call refuses them. The sync's add may name a told thread's teller by number (`person`); a number nobody
 // has is refused 404 `no-person`, and nothing is written.
+//
+// Any thread may be one meeting, and every thread says so (`meeting`, null while it isn't one): its when, a day
+// (`2026-11-09`, its time not set) or an instant in UTC that each reader shows in their own zone, its length and
+// where, and the people who will be in the room (`attendees`), in one order for every reader, by name. The owner
+// and the sync set and clear it, and add and remove its people: being in a meeting grants nothing, so an attendee
+// is never invited, can't sign in for it, and may be someone with no address, added by name as someone new
+// (`{"name"}` always makes a new person; a person already known is added by number). Clearing a meeting takes its
+// people off with it. Invited people read the meeting of a thread they are in, its people by name only, and its
+// history's events with where a meeting moved from; strangers on a public thread never read it (src/public.ts).
+// Refusals: 400 `meeting` or `attendee` for a malformed call; 404 `no-thread`, `no-person`; 409 `not-a-meeting` for
+// a thread with no when, `not-attending` for removing someone who isn't in it.
 
 import { identify, type Caller, type Refusal } from "./access.ts";
 import type { Bindings } from "./bindings.ts";
@@ -78,6 +91,7 @@ import { servePage, withSkeleton } from "./page.ts";
 import { handlePeople, personView } from "./people.ts";
 import { sameOrigin } from "./request.ts";
 import {
+  attend,
   comment,
   create,
   edit,
@@ -98,6 +112,8 @@ import {
   search,
   searchPeople,
   setLink,
+  setMeeting,
+  unattend,
   uninvite,
   judgeNote,
   type Anchor,
@@ -125,6 +141,8 @@ import {
   readMove,
   readOwnAdd,
   quoted,
+  readAttendee,
+  readMeeting,
   refuse,
   text,
 } from "./wire.ts";
@@ -191,6 +209,7 @@ function thread(row: ThreadRow, reader: Reader): { readonly [key: string]: JsonV
     main: row.main,
     link: row.link_url === null ? null : { url: row.link_url, title: row.link_title },
     publicAt: row.public_at,
+    meeting: meetingView(row, reader),
   };
   if (reader.caller === "member") return said;
   return {
@@ -201,6 +220,34 @@ function thread(row: ThreadRow, reader: Reader): { readonly [key: string]: JsonV
     replyOpenedAt: row.reply_opened_at,
     ref: row.origin_ref,
     filedLink: row.filed_link,
+  };
+}
+
+/** A meeting's person as every row carries them. */
+interface MeetingPerson {
+  readonly number: number;
+  readonly name: string | null;
+}
+
+/** Names compared ignoring case, someone with no name after everyone named, then by number: one order for every reader. */
+function byName(a: MeetingPerson, b: MeetingPerson): number {
+  if (a.name === null || b.name === null) return a.name === b.name ? a.number - b.number : a.name === null ? 1 : -1;
+  const [x, y] = [a.name.toLowerCase(), b.name.toLowerCase()];
+  return x < y ? -1 : x > y ? 1 : a.number - b.number;
+}
+
+/**
+ * A thread's meeting as its reader sees it, or null while it isn't one: its when, length and where, and its people
+ * in name order, by number and name to the owner and the sync, by name only to invited people.
+ */
+function meetingView(row: ThreadRow, reader: Reader): JsonValue {
+  if (row.meeting_when === null) return null;
+  const people = (JSON.parse(row.meeting_people) as MeetingPerson[]).sort(byName);
+  return {
+    when: row.meeting_when,
+    minutes: row.meeting_minutes,
+    where: row.meeting_where,
+    attendees: reader.caller === "member" ? people.map((person) => ({ name: person.name })) : people.map((person) => ({ number: person.number, name: person.name })),
   };
 }
 
@@ -548,6 +595,30 @@ async function changePeople(request: Request, number: number, env: Bindings, cal
   return peopleAnswer(row, env, caller);
 }
 
+/** Sets a thread's meeting, or clears it with `when` null: the owner's and the sync's. Answers the thread. */
+async function replaceMeeting(request: Request, number: number, env: Bindings, caller: Writer): Promise<Response> {
+  const length = lengthRefusal(request, MAX_CHANGE_BYTES);
+  if (length !== null) return length;
+  const asked = readMeeting(await readJson(request));
+  if (asked === null) return refuse(400, "meeting");
+  const set = await setMeeting(env.DB, number, asked.meeting, caller.caller);
+  if (set === "no-thread") return refuse(404, "no-thread");
+  if (set === "not-a-meeting") return refuse(409, "not-a-meeting");
+  return json(200, { thread: thread(set, caller) });
+}
+
+/** Adds a person to a thread's meeting, by number or as someone new by name, or takes one off: the owner's and the sync's. Answers the thread. */
+async function changeAttendees(request: Request, number: number, env: Bindings, caller: Writer): Promise<Response> {
+  const length = lengthRefusal(request, MAX_CHANGE_BYTES);
+  if (length !== null) return length;
+  const asked = readAttendee(await readJson(request));
+  if (asked === null) return refuse(400, "attendee");
+  const changed = "add" in asked ? await attend(env.DB, number, asked.add, caller.caller) : await unattend(env.DB, number, asked.remove, caller.caller);
+  if (changed === "no-thread" || changed === "no-person") return refuse(404, changed);
+  if (changed === "not-a-meeting" || changed === "not-attending") return refuse(409, changed);
+  return json(200, { thread: thread(changed, caller) });
+}
+
 /** A thread's people, for the owner's Share. */
 async function readPeople(number: number, env: Bindings, caller: Caller): Promise<Response> {
   const row = await find(env.DB, { number }, caller);
@@ -621,7 +692,7 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
     const [, number = "", noteId = ""] = ruling;
     return NUMBER_SHAPE.test(number) ? judge(request, Number(number), noteId, env, who) : refuse(404, "no-thread");
   }
-  const route = /^\/threads\/api\/threads\/([^/]+)(?:\/(comments|text|pages|link|people))?$/.exec(url.pathname);
+  const route = /^\/threads\/api\/threads\/([^/]+)(?:\/(comments|text|pages|link|people|meeting|attendees))?$/.exec(url.pathname);
   if (route === null) return json(404, { reason: "not-found" });
   const [, given = "", part] = route;
   const readable = part === undefined || part === "people";
@@ -646,5 +717,7 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
   if (part === "text") return replaceText(request, number, env, who);
   if (part === "pages") return addPage(request, url, number, env, who);
   if (part === "link") return replaceLink(request, number, env, who);
+  if (part === "meeting") return replaceMeeting(request, number, env, who);
+  if (part === "attendees") return changeAttendees(request, number, env, who);
   return move(request, number, env, who);
 }

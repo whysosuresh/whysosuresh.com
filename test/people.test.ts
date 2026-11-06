@@ -10,7 +10,8 @@
 // is refused every call before anything is read, and signed out nobody gets in. Someone only ever in threads he
 // dropped is marked so. A search answers people beside threads for the owner and the sync, never for an invited
 // person; a thread names who it is from by number, a comment its writer, a thread's people theirs, for the owner
-// and the sync only.
+// and the sync only. A person in a meeting counts it (`met`) with the role `met` on its thread, is in touch once it has
+// begun, and is live while it is on a thread he hasn't dropped; a name given to a meeting is someone new.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { OWNER, SITE, startHarness, type Harness } from "./harness.ts";
@@ -150,7 +151,7 @@ describe("who is a person", () => {
     await noteOn(open, "A.", "ASHA@example.COM");
     const people = await everyone();
     expect(people.map((one) => [one.number, one.name, one.email])).toEqual([[1, "Asha", "asha@example.com"]]);
-    expect(people[0]?.counts).toEqual({ sent: 2, told: 0, invited: 0, removed: 0, commented: 0, noted: 1 });
+    expect(people[0]?.counts).toEqual({ sent: 2, told: 0, invited: 0, removed: 0, commented: 0, noted: 1, met: 0 });
     // A visitor's typing never renames anyone, and what they typed stays as typed on their note.
     const shown = await answer<{ thread: { senderName: string; senderEmail: string; senderNumber: number } }>(await call(`/threads/${second}`));
     expect([shown.thread.senderName, shown.thread.senderEmail, shown.thread.senderNumber]).toEqual(["Asha S.", "asha@example.com", 1]);
@@ -247,7 +248,7 @@ describe("the people calls", () => {
         lastContact: expect.any(String),
         invited: true,
         dropped: false,
-        counts: { sent: 0, told: 0, invited: 1, removed: 0, commented: 0, noted: 0 },
+        counts: { sent: 0, told: 0, invited: 1, removed: 0, commented: 0, noted: 0, met: 0 },
       });
     }
   });
@@ -268,7 +269,7 @@ describe("the people calls", () => {
 
     const one = await person(1);
     expect(one.person).toMatchObject({ number: 1, name: "Meera", email: MEERA, invited: true, dropped: false, note: null });
-    expect(one.person.counts).toEqual({ sent: 1, told: 1, invited: 1, removed: 1, commented: 1, noted: 1 });
+    expect(one.person.counts).toEqual({ sent: 1, told: 1, invited: 1, removed: 1, commented: 1, noted: 1, met: 0 });
     const roles = Object.fromEntries(one.threads.map((row) => [row.number, row.roles]));
     expect(roles).toEqual({ [sent]: ["sent"], [shared]: ["invited", "wrote"], [other]: ["wrote"], [taken]: ["removed"], [taken + 1]: ["told"] });
     expect(one.threads[0]).toMatchObject({ number: taken + 1, source: "told", senderNumber: 1, ref: expect.any(String) });
@@ -350,6 +351,72 @@ describe("the people calls", () => {
     const note = (await answer<{ comments: { id: string }[] }>(await call(`/threads/${open}`))).comments[0];
     await answer(await call(`/threads/${open}/comments/${note?.id ?? ""}`, { body: { action: "drop" } }));
     expect((await everyone()).find((one) => one.name === "Lin")?.dropped).toBe(true);
+  });
+});
+
+describe("a person in meetings", () => {
+  /** A meeting on a new thread with the person numbered `who` in it; answers the thread's number. */
+  async function meetingWith(who: number, when: string, fields: Record<string, unknown> = {}): Promise<number> {
+    const n = await thread(fields);
+    await answer(await call(`/threads/${n}/meeting`, { as: "sync", body: { when, minutes: null, where: null } }));
+    await answer(await call(`/threads/${n}/attendees`, { as: "sync", body: { add: { person: who } } }));
+    return n;
+  }
+
+  it("counts the meetings they are in, and names the role on each thread", async () => {
+    const dev = await told("Dev");
+    const [a, b] = [await meetingWith(dev, "2026-11-09"), await meetingWith(dev, "2026-11-10T09:30Z")];
+    expect((await everyone()).find((one) => one.number === dev)?.counts.met).toBe(2);
+    const one = await person(dev);
+    expect(one.person.counts.met).toBe(2);
+    expect(one.threads.filter((row) => row.number === a || row.number === b).map((row) => row.roles)).toEqual([["met"], ["met"]]);
+    // Taken off one, they are in one, and that thread is no longer theirs.
+    await answer(await call(`/threads/${a}/attendees`, { as: "sync", body: { remove: dev } }));
+    const after = await person(dev);
+    expect([after.person.counts.met, after.threads.some((row) => row.number === a)]).toEqual([1, false]);
+  });
+
+  it("are in touch at a meeting once it has begun, never at one still to come", async () => {
+    const [dev, lin] = [await told("Dev"), await told("Lin")];
+    // Everything else about them is long ago, so only a meeting can be their last contact.
+    const long = "2026-01-01T00:00:00.000Z";
+    const database = await harness.db();
+    await database.batch([database.prepare("UPDATE people SET created_at = ?1").bind(long), database.prepare("UPDATE threads SET created_at = ?1").bind(long)]);
+    expect((await person(dev)).person.lastContact).toBe(long);
+    const hour = 3600 * 1000;
+    const past = new Date(Date.now() - hour).toISOString();
+    await meetingWith(dev, past);
+    await meetingWith(dev, new Date(Date.now() + 24 * hour).toISOString());
+    await meetingWith(dev, "2099-01-01");
+    expect((await person(dev)).person.lastContact).toBe(past);
+    // A day counts from its start in UTC: today has begun, tomorrow hasn't.
+    const today = new Date().toISOString().slice(0, 10);
+    await meetingWith(lin, new Date(Date.now() + 24 * hour).toISOString().slice(0, 10));
+    expect((await person(lin)).person.lastContact).toBe(long);
+    await meetingWith(lin, today);
+    expect((await person(lin)).person.lastContact).toBe(today);
+  });
+
+  it("are live while a meeting of theirs is on a thread he hasn't dropped", async () => {
+    const dev = await told("Dev");
+    const [toldThread] = (await person(dev)).threads.map((row) => row.number);
+    await answer(await call(`/threads/${toldThread ?? 0}`, { body: { action: "drop", reason: "" } }));
+    expect((await everyone()).find((one) => one.number === dev)?.dropped).toBe(true);
+    const n = await meetingWith(dev, "2026-11-09");
+    expect((await everyone()).find((one) => one.number === dev)?.dropped).toBe(false);
+    await answer(await call(`/threads/${n}`, { body: { action: "drop", reason: "" } }));
+    expect((await everyone()).find((one) => one.number === dev)?.dropped).toBe(true);
+  });
+
+  it("is someone new for a name given to a meeting, with no address, and on no other thread", async () => {
+    const n = await thread();
+    await answer(await call(`/threads/${n}/meeting`, { as: "sync", body: { when: "2026-11-09", minutes: null, where: null } }));
+    const added = await answer<{ thread: { meeting: { attendees: { number: number }[] } } }>(await call(`/threads/${n}/attendees`, { as: "sync", body: { add: { name: "Asha's manager" } } }));
+    const number = added.thread.meeting.attendees[0]?.number ?? 0;
+    const one = await person(number);
+    expect(one.person).toMatchObject({ name: "Asha's manager", email: null, invited: false, dropped: false });
+    expect(one.person.counts).toEqual({ sent: 0, told: 0, invited: 0, removed: 0, commented: 0, noted: 0, met: 1 });
+    expect(one.threads.map((row) => [row.number, row.roles])).toEqual([[n, ["met"]]]);
   });
 });
 

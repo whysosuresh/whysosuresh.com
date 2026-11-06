@@ -13,7 +13,9 @@
 // a person: every person keeps their id, each address on a site note or visitor's note and each told name becomes
 // one person, all numbered by age; each thread and note is linked to its person, one with no address to nobody; and
 // the invitations stay joined, the foreign keys enforced, and the invited person signs in. For 0013, where a comment
-// sits: every earlier comment is a general one, and a reply's parent is a comment that is there.
+// sits: every earlier comment is a general one, and a reply's parent is a comment that is there. For 0014, meetings:
+// every earlier thread is no meeting and no one attends, an attendee names a thread and a person that are there, and
+// is kept once per thread and person.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -253,8 +255,13 @@ describe("0007, the inbox retired a deploy later", () => {
     expect((await database.prepare("SELECT COUNT(*) AS n FROM threads WHERE origin_ref = 'chat:twice'").first<{ n: number }>())?.n).toBe(1);
     expect(await thread(harness, "00000000-0000-4000-8000-000000000007")).toBeNull();
     const after = (await database.prepare("SELECT * FROM threads WHERE id NOT IN (?1, ?2, ?3) ORDER BY number").bind("00000000-0000-4000-8000-000000000003", "00000000-0000-4000-8000-000000000005", "00000000-0000-4000-8000-000000000006").all<Record<string, unknown>>()).results;
-    // Later migrations add a thread's last activity, its main section and who it is from; everything 0007 found stays as it was.
-    expect(after.map(({ activity_at: _activity, main: _main, link_url: _url, link_title: _title, public_at: _public, person_id: _person, ...rest }) => rest)).toEqual(before);
+    // Later migrations add a thread's last activity, its main section, who it is from and its meeting; everything 0007 found stays as it was.
+    expect(
+      after.map(
+        ({ activity_at: _activity, main: _main, link_url: _url, link_title: _title, public_at: _public, person_id: _person, meeting_when: _when, meeting_minutes: _minutes, meeting_where: _where, ...rest }) =>
+          rest,
+      ),
+    ).toEqual(before);
   });
 
   it("drops the inbox's table", async () => {
@@ -463,5 +470,25 @@ describe("0013, where a comment sits", () => {
     await expect(
       database.prepare("INSERT INTO comments (id, thread_id, author, body, created_at, parent_id) VALUES ('c3', 't1', 'owner', 'Re.', '2026-11-04T00:00:00.000Z', 'c-nobody')").run(),
     ).rejects.toThrow(/FOREIGN KEY/);
+  });
+});
+
+describe("0014, meetings", () => {
+  it("leaves every earlier thread no meeting, and keeps an attendee once, only of a thread and a person that are there", async () => {
+    harness = await startHarness({ through: "0013" });
+    const database = await harness.db();
+    await database.batch([
+      database.prepare("INSERT INTO threads (id, number, created_at, source, body, status) VALUES ('t1', 1, '2026-11-01T00:00:00.000Z', 'self', 'x', 'act')"),
+      database.prepare("INSERT INTO people (id, number, email, name, created_at) VALUES ('p1', 1, NULL, 'Dev', '2026-11-01T00:00:00.000Z')"),
+    ]);
+    await harness.migrate();
+    expect(await database.prepare("SELECT meeting_when, meeting_minutes, meeting_where FROM threads").all().then((r) => r.results)).toEqual([
+      { meeting_when: null, meeting_minutes: null, meeting_where: null },
+    ]);
+    expect((await threadsTab(harness, "act")).threads.map((row) => row.meeting)).toEqual([null]);
+    await database.prepare("INSERT INTO attendees (thread_id, person_id, added_at) VALUES ('t1', 'p1', '2026-11-02T00:00:00.000Z')").run();
+    await expect(database.prepare("INSERT INTO attendees (thread_id, person_id, added_at) VALUES ('t1', 'p1', '2026-11-03T00:00:00.000Z')").run()).rejects.toThrow(/UNIQUE|PRIMARY/);
+    await expect(database.prepare("INSERT INTO attendees (thread_id, person_id, added_at) VALUES ('t1', 'p-nobody', '2026-11-03T00:00:00.000Z')").run()).rejects.toThrow(/FOREIGN KEY/);
+    await expect(database.prepare("INSERT INTO attendees (thread_id, person_id, added_at) VALUES ('t-nobody', 'p1', '2026-11-03T00:00:00.000Z')").run()).rejects.toThrow(/FOREIGN KEY/);
   });
 });

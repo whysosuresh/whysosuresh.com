@@ -3,7 +3,8 @@
 // wrangler.jsonc names; everyone, and one person by their number, read through the people calls; a told thread's
 // person passed through an add; a thread shown with each comment's place passed through whole; a list followed through every page; an add answered line by line; a comment (for everyone
 // in the thread, or with --only-me for the owner alone) and an edit taking their words from stdin as they are; a page sent from a file as HTML, refused here past 16 MiB; a link set
-// and cleared; the Worker's refusals and the edge's passed through with a
+// and cleared; a meeting set by a day or a moment and cleared, and its people changed one call per flag, stopping at
+// the first refusal; the Worker's refusals and the edge's passed through with a
 // non-zero exit; usage errors; and the secret in no line it prints. One run of the real entry point as a child
 // process proves Node runs the TypeScript as it is.
 
@@ -348,6 +349,80 @@ describe("link", () => {
     expect(await run(argv, io)).toBe(2);
     expect(sent).toEqual([]);
   });
+});
+
+describe("meeting", () => {
+  const meeting = { when: "2026-11-09T09:30:00.000Z", minutes: 45, where: "Meet", attendees: [] };
+
+  it("sets a day, a moment with its length and where, and clears it, printing the thread with its meeting", async () => {
+    const { io, sent, out } = client([
+      { status: 200, body: { thread: { ...THREAD, meeting: { ...meeting, when: "2026-11-09", minutes: null, where: null } } } },
+      { status: 200, body: { thread: { ...THREAD, meeting } } },
+      { status: 200, body: { thread: { ...THREAD, meeting: null } } },
+    ]);
+    expect(await run(["meeting", "42", "--when", "2026-11-09"], io)).toBe(0);
+    expect(await run(["meeting", "42", "--where", "Meet", "--when", "2026-11-09T15:00+05:30", "--minutes", "45"], io)).toBe(0);
+    expect(await run(["meeting", "42", "--clear"], io)).toBe(0);
+    expect(sent.map((one) => [one.method, one.url, one.body && JSON.parse(one.body)])).toEqual([
+      ["POST", `${THREADS}/42/meeting`, { when: "2026-11-09", minutes: null, where: null }],
+      ["POST", `${THREADS}/42/meeting`, { when: "2026-11-09T15:00+05:30", minutes: 45, where: "Meet" }],
+      ["POST", `${THREADS}/42/meeting`, { when: null, minutes: null, where: null }],
+    ]);
+    expect(out.map((line) => JSON.parse(line).meeting?.when ?? null)).toEqual(["2026-11-09", "2026-11-09T09:30:00.000Z", null]);
+  });
+
+  it("passes the Worker's refusal through with exit 1", async () => {
+    const { io, err } = client([{ status: 400, body: { reason: "meeting" } }]);
+    expect(await run(["meeting", "42", "--when", "2026-02-30"], io)).toBe(1);
+    expect(err).toEqual(["inbox: meeting refused (400 meeting)"]);
+  });
+
+  it.each([
+    [["meeting", "42"]],
+    [["meeting", "42", "--minutes", "30"]],
+    [["meeting", "42", "--when"]],
+    [["meeting", "42", "--when", "2026-11-09", "--when", "2026-11-10"]],
+    [["meeting", "42", "--when", "2026-11-09", "--minutes", "half an hour"]],
+    [["meeting", "42", "--when", "2026-11-09", "--with", "5"]],
+    [["meeting", "42", "--clear", "--when", "2026-11-09"]],
+    [["meeting", "x", "--clear"]],
+  ])("is a usage error for %j, sending nothing", async (argv) => {
+    const { io, sent } = client([]);
+    expect(await run(argv, io)).toBe(2);
+    expect(sent).toEqual([]);
+  });
+});
+
+describe("attendees", () => {
+  it("sends one change per flag in the order given, and prints the thread after the last", async () => {
+    const after = { ...THREAD, meeting: { when: "2026-11-09", minutes: null, where: null, attendees: [{ number: 4, name: "Dev" }, { number: 9, name: "Leela" }] } };
+    const { io, sent, out } = client([{ status: 200, body: { thread: THREAD } }, { status: 200, body: { thread: THREAD } }, { status: 200, body: { thread: THREAD } }, { status: 200, body: { thread: after } }]);
+    expect(await run(["attendees", "42", "--add", "5", "--add", "4", "--new", "Leela", "--remove", "5"], io)).toBe(0);
+    expect(sent.map((one) => [one.url, one.body && JSON.parse(one.body)])).toEqual([
+      [`${THREADS}/42/attendees`, { add: { person: 5 } }],
+      [`${THREADS}/42/attendees`, { add: { person: 4 } }],
+      [`${THREADS}/42/attendees`, { add: { name: "Leela" } }],
+      [`${THREADS}/42/attendees`, { remove: 5 }],
+    ]);
+    expect(out.map((line) => JSON.parse(line))).toEqual([after]);
+  });
+
+  it("stops at the first refusal, saying which, and that the changes before it were kept", async () => {
+    const { io, sent, out, err } = client([{ status: 200, body: { thread: THREAD } }, { status: 409, body: { reason: "not-attending" } }]);
+    expect(await run(["attendees", "42", "--add", "5", "--remove", "7", "--add", "4"], io)).toBe(1);
+    expect(sent).toHaveLength(2);
+    expect(out).toEqual([]);
+    expect(err).toEqual(["inbox: attendees refused at change 2 of 3 (409 not-attending); the changes before it were kept"]);
+  });
+
+  it.each([[["attendees", "42"]], [["attendees", "42", "--add"]], [["attendees", "42", "--add", "Asha"]], [["attendees", "42", "--remove", "05"]], [["attendees", "42", "--invite", "5"]]])(
+    "is a usage error for %j, sending nothing",
+    async (argv) => {
+      const { io, sent } = client([]);
+      expect(await run(argv, io)).toBe(2);
+      expect(sent).toEqual([]);
+    },
+  );
 });
 
 describe("people", () => {

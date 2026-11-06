@@ -12,7 +12,11 @@
 // not shared, so the invited person reads it in the public view too. Everyone in the seed is a person: Asha wrote
 // from the site and was then invited to the meetup thread, Dev K. told him something in person, Meera is invited
 // (with his own notes on her), Tomás wrote on the public thread with an address (Priya gave none, so she is no
-// person), and Rex's only note was junk he dropped, so Rex sits under the people only in dropped threads. Pages are seeded the way the sync saves them, through the threads' call with its
+// person), and Rex's only note was junk he dropped, so Rex sits under the people only in dropped threads. Four
+// threads are meetings, set as the sync sets them, relative to now so Today always has some coming up: "Who owns
+// what" later today (with Meera, who is invited, and Dev K., who has no address), the review next Wednesday (with
+// Meera and Asha), the meetup a few days out as a day with no time (with Asha and Leela, someone new added by name),
+// and pricing for small teams three days ago (with Asha). Pages are seeded the way the sync saves them, through the threads' call with its
 // played token: the sealed probe (test/fixtures/sealed-probe.html, every line of which should read "blocked" in the
 // browser), a made-up page that asks questions ("The review on Wednesday", shared with the guest and Asha), with
 // answers, a discussion on its words, one on words its second version cut, and replies, and each file given with
@@ -225,6 +229,30 @@ async function seed(): Promise<void> {
   const okd = await database.prepare("SELECT id FROM comments WHERE author = 'visitor' ORDER BY created_at LIMIT 1").first<{ id: string }>();
   await asPerson(owner, `/${shipping}/comments/${okd?.id ?? ""}`, { action: "show" });
   await note("Loved the install video. **not bold**\n[a link that stays text](https://example.com/should-not-link)\nWhen does Windows land?", "Tomás", "tomas@example.com");
+
+  // Meetings, set as the sync sets them, relative to now: later today, next Wednesday (at least two days out), a day
+  // four days out with no time, and one three days ago. Times are on the hour or half hour in UTC, as people book them.
+  const personNamed = async (name: string): Promise<number> =>
+    (await database.prepare("SELECT number FROM people WHERE name = ?1").bind(name).first<{ number: number }>())?.number ?? 0;
+  const hour = 3600 * 1000;
+  const onTheHour = (at: number): string => new Date(Math.ceil(at / hour) * hour).toISOString();
+  const dayOf = (at: number): string => new Date(at).toISOString().slice(0, 10);
+  const now = Date.now();
+  const untilWednesday = (3 - new Date(now).getUTCDay() + 7) % 7;
+  const wednesday = `${dayOf(now + (untilWednesday < 2 ? untilWednesday + 7 : untilWednesday) * 24 * hour)}T09:30:00.000Z`;
+  const pricingTeams = (await database.prepare("SELECT number FROM threads WHERE origin_ref = 'chat:seed-3'").first<{ number: number }>())?.number ?? 0;
+  const [meeraNumber, devNumber, ashaNumber] = [await personNamed("Meera"), await personNamed("Dev K."), await personNamed("Asha")];
+  await asSync(`/${who}/meeting`, { when: onTheHour(now + 2 * hour), minutes: 45, where: "Google Meet" });
+  await asSync(`/${who}/attendees`, { add: { person: meeraNumber } });
+  await asSync(`/${who}/attendees`, { add: { person: devNumber } });
+  await asSync(`/${review}/meeting`, { when: wednesday, minutes: 30, where: "Asha's office" });
+  await asSync(`/${review}/attendees`, { add: { person: ashaNumber } });
+  await asSync(`/${review}/attendees`, { add: { person: meeraNumber } });
+  await asSync(`/${meetup}/meeting`, { when: dayOf(now + 4 * 24 * hour), minutes: null, where: null });
+  await asSync(`/${meetup}/attendees`, { add: { person: ashaNumber } });
+  await asSync(`/${meetup}/attendees`, { add: { name: "Leela" } });
+  await asSync(`/${pricingTeams}/meeting`, { when: onTheHour(now - 3 * 24 * hour), minutes: 60, where: "Zoom" });
+  await asSync(`/${pricingTeams}/attendees`, { add: { person: ashaNumber } });
 
   // One thread untouched for ten days, so Today has something that sat a week.
   const old = new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString();
