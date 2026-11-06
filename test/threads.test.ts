@@ -242,7 +242,7 @@ describe("a list", () => {
     const first = await call("?tab=look");
     expect(first.status).toBe(200);
     const page = (await first.json()) as { threads: Thread[]; counts: Record<string, number>; next: number | null };
-    expect(page.counts).toEqual({ look: PAGE + 3, act: 1, discuss: 1, done: 0 });
+    expect(page.counts).toEqual({ pending: PAGE + 5, look: PAGE + 3, act: 1, discuss: 1, done: 0 });
     const newest = look.map((thread) => thread.number).reverse();
     expect(page.threads.map((thread) => thread.number)).toEqual(newest.slice(0, PAGE));
     expect(page.next).toBe(newest[PAGE - 1]);

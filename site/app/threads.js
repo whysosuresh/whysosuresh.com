@@ -11,8 +11,9 @@
 // and on Today the latest day's card, its countdowns from today in his own zone, and its question with a box to
 // answer it, kept with Undo. The views, each at its own address: Today
 // (/me: the next meeting as a card, then threads waiting on him, new ones, and open threads
-// that sat a week untouched), the Threads room (/threads/, or
-// /threads/?tab=act&space=company: four tabs by where a thread stands, and the five spaces), and a thread
+// that sat a week untouched), the Threads room (/threads/, or /threads/?only=act&space=company: two tabs, Pending
+// and Done, by where a thread stands (site/app/standing.js), Pending with a line of counts that shows one open status
+// at a time and a tag on every row, and the five spaces), and a thread
 // (/threads/42-who-owns-what): its living
 // summary on top, then its main section, then its comments and its history in the order they happened. The main
 // section is the thread's text, a page or a link: a page is a Claude artifact's own HTML, shown in a sealed frame
@@ -25,8 +26,8 @@
 // it, and one the server refuses is put back with a line that says so. Reply drafts an email in the thread and
 // opens it in Gmail as the address he signed in with, for him to send. On top of that: comments (M), editing the
 // title, summary and main text with a preview (W; a visitor's own words are never editable), new threads (N), and
-// ⌘K, a search over numbers, titles, summaries and text. On a list the next thread is selected after a move; on a
-// thread the page stays, so its history shows the move.
+// ⌘K, a search over numbers, titles, summaries and text. On a list the next thread is selected after a move that
+// changes where it stands, whether or not it stays listed; on a thread the page stays, so its history shows the move.
 //
 // A thread can be shared. The owner's Share (S) invites a person by address and name, lists who is in the thread
 // and takes an invitation back; his Gmail opens a draft with the thread's `?invite` link for him to send (share.js
@@ -106,6 +107,7 @@
 
 import { SPACES } from '../spaces.js';
 import { MEMBER_COMMANDS, MEMBER_SHEET, SHEET, commandFor } from './keys.js';
+import { STATUS_NAMES, TAB_NAMES, TABS, breakdown, countWords, listPath, ordered, routeTab, shows, tabOf, tagOf } from './standing.js';
 import { parse, summaryLines } from './markdown.js';
 import { cardLines, chipWords, dayWords, isDay, leadWords, lengthWords, momentWords, partsOf, peopleChanges, split, stateOf, todayKey, whenLine, whenOf, withLine } from './meetings.js';
 import {
@@ -176,7 +178,8 @@ import {
  * @typedef {import('./threads-store.js').Page} Page
  * @typedef {import('./threads-store.js').Event} ThreadEvent
  * @typedef {import('./threads-store.js').Comment} ThreadComment
- * @typedef {import('./threads-store.js').Tab} Tab
+ * @typedef {import('./standing.js').Tab} Tab
+ * @typedef {import('./standing.js').Open} Open
  * @typedef {import('./threads-store.js').Status} Status
  * @typedef {import('./threads-store.js').Action} Action
  * @typedef {import('./threads-store.js').Field} Field
@@ -206,7 +209,7 @@ import {
  *   hello: 'member' | 'visitor' | 'private' | 'read' | null }} Talk
  * @typedef {import('./markdown.js').Inline} Inline
  * @typedef {import('./keys.js').Command} Command
- * @typedef {{ view: 'today' } | { view: 'list', tab: Tab, space: string | null } | { view: 'thread', number: number } | { view: 'people' }
+ * @typedef {{ view: 'today' } | { view: 'list', tab: Tab, only: Open | null, space: string | null } | { view: 'thread', number: number } | { view: 'people' }
  *   | { view: 'person', number: number } | { view: 'meetings' } | { view: 'asks' } | { view: 'ask', slug: string }
  *   | { view: 'journal' } | { view: 'entry', key: string } | { view: 'storylines' } | { view: 'storyline', slug: string }} Route
  * @typedef {{ to: string, subject: string, body: string }} Draft
@@ -222,18 +225,6 @@ import {
  *   Who answers a public page from this browser: the name they gave, their key, whether the browser keeps both,
  *   whether the name is being typed, and whether a save just asked for it.
  */
-
-/** @type {readonly Tab[]} */
-const TABS = ['look', 'act', 'discuss', 'done'];
-
-/** @type {Record<Tab, string>} */
-const TAB_NAMES = { look: 'To look at', act: 'To act on', discuss: 'To discuss', done: 'Done' };
-
-/** @type {Record<Tab, readonly Status[]>} */
-const TAB_STATUSES = { look: ['received'], act: ['act'], discuss: ['discuss'], done: ['done', 'dropped', 'filed'] };
-
-/** @type {Record<Status, string>} */
-const STATUS_NAMES = { received: 'To look at', act: 'To act on', discuss: 'To discuss', done: 'Done', dropped: 'Dropped', filed: 'Filed' };
 
 /** @type {readonly Status[]} */
 const OPEN = ['received', 'act', 'discuss'];
@@ -383,13 +374,6 @@ function isTab(value) {
 /** @param {string} value */
 function isSpace(value) {
   return SPACES.some((space) => space.slug === value);
-}
-
-/** @param {Status} status @returns {Tab} */
-function tabOf(status) {
-  if (status === 'received') return 'look';
-  if (status === 'act' || status === 'discuss') return status;
-  return 'done';
 }
 
 /** @param {Thread} thread */
@@ -738,9 +722,9 @@ function routeOf(at) {
   const ask = ASK_PATH.exec(at.pathname);
   if (ask) return { view: 'ask', slug: ask[1] ?? '' };
   const query = new URLSearchParams(at.search);
-  const tab = query.get('tab') ?? '';
   const space = query.get('space') ?? '';
-  return { view: 'list', tab: isTab(tab) ? tab : 'look', space: isSpace(space) ? space : null };
+  // An old tab (?tab=discuss) opens Pending showing what it showed, so a bookmark keeps its meaning.
+  return { view: 'list', ...routeTab(query), space: isSpace(space) ? space : null };
 }
 
 /** @param {Route} route @param {Map<number, Thread>} threads @param {readonly Someone[]} [people] */
@@ -758,12 +742,7 @@ function pathOf(route, threads, people = []) {
     const someone = people.find((one) => one.number === route.number);
     return someone ? personPath(someone) : `${PEOPLE}/${route.number}`;
   }
-  if (route.view === 'list') {
-    if (route.tab === 'look' && route.space === null) return THREADS;
-    const query = new URLSearchParams({ tab: route.tab });
-    if (route.space !== null) query.set('space', route.space);
-    return `/threads/?${query.toString()}`;
-  }
+  if (route.view === 'list') return listPath(route.tab, route.only, route.space);
   const thread = threads.get(route.number);
   return thread ? threadPath(thread) : `/threads/${route.number}`;
 }
@@ -980,8 +959,10 @@ class Threads {
     this.personProblem = null;
     /** Bumped on every person load, so an answer for a person no longer shown is dropped. */
     this.personLoading = 0;
-    /** The list's tab and space, kept while a thread is open. @type {Tab} */
-    this.tab = 'look';
+    /** The list's tab, the open status Pending is narrowed to, and the space, kept while a thread is open. @type {Tab} */
+    this.tab = 'pending';
+    /** @type {Open | null} */
+    this.only = null;
     /** @type {string | null} */
     this.space = null;
     /** @type {Map<number, Thread>} */
@@ -1147,6 +1128,7 @@ class Threads {
     const inviting = route.view === 'thread' && new URLSearchParams(location.search).has('invite');
     if (route.view === 'list') {
       this.tab = route.tab;
+      this.only = route.only;
       this.space = route.space;
       this.from = 'list';
     }
@@ -1413,6 +1395,7 @@ class Threads {
     this.commentPreview = false;
     if (route.view === 'list') {
       this.tab = route.tab;
+      this.only = route.only;
       this.space = route.space;
       this.from = 'list';
     }
@@ -1509,14 +1492,19 @@ class Threads {
     else if (this.from === 'person' && this.fromPerson !== null) void this.go({ view: 'person', number: this.fromPerson });
     else if (this.from === 'meetings') void this.go({ view: 'meetings' });
     else if (this.from === 'asks') void this.go({ view: 'asks' });
-    else void this.go(this.from === 'today' ? { view: 'today' } : { view: 'list', tab: this.tab, space: this.space });
+    else void this.go(this.from === 'today' ? { view: 'today' } : { view: 'list', tab: this.tab, only: this.only, space: this.space });
   }
 
-  /** Threads in a tab, in the chosen space, newest number first. @param {Tab} tab */
-  inTab(tab) {
-    return [...this.threads.values()]
-      .filter((thread) => TAB_STATUSES[tab].includes(thread.status) && (this.space === null || thread.space === this.space))
-      .sort((a, b) => b.number - a.number);
+  /**
+   * Threads in a tab, in the chosen space, narrowed to one open status by `only`, in the tab's order (standing.js).
+   * @param {Tab} tab
+   * @param {Open | null} [only]
+   */
+  inTab(tab, only = null) {
+    return ordered(
+      tab,
+      [...this.threads.values()].filter((thread) => shows(tab, only, thread.status) && (this.space === null || thread.space === this.space)),
+    );
   }
 
   /** Threads where someone else had the last word (a person he invited, or a visitor), the most recent first. */
@@ -1568,7 +1556,7 @@ class Threads {
     }
     if (this.member) return this.mine().map((thread) => thread.number);
     if (this.from === 'person' && this.person) return this.person.threads.map((thread) => thread.number);
-    if (this.from !== 'today') return this.inTab(this.tab).map((thread) => thread.number);
+    if (this.from !== 'today') return this.inTab(this.tab, this.only).map((thread) => thread.number);
     const seen = new Set();
     // Today's rows as drawn: a folded group of new answers is its ask, so the walk never lands on a thread with no row.
     return [...this.folded().map((entry) => entry.number), ...this.fresh().map((thread) => thread.number), ...this.sat().map((thread) => thread.number)].filter((number) =>
@@ -1725,7 +1713,7 @@ class Threads {
     if (view === 'today') todayItem.setAttribute('aria-current', 'page');
     if (view === 'list' && this.space === null) allItem.setAttribute('aria-current', 'page');
     const spaces = SPACES.map((space) => {
-      const item = el('a', { class: 't-nav-item t-nav-sub', href: `/threads/?tab=${this.tab}&space=${space.slug}`, 'data-space': space.slug }, [
+      const item = el('a', { class: 't-nav-item t-nav-sub', href: listPath(this.tab, this.only, space.slug), 'data-space': space.slug }, [
         el('span', { class: 't-nav-pad' }),
         space.label,
         el('span', { class: 't-nav-count' }, [String(counts.get(space.slug) ?? 0)]),
@@ -1761,14 +1749,17 @@ class Threads {
   }
 
   /**
-   * One thread as a row: its number, title, the line under it, its space, where it stands and when it last moved.
+   * One thread as a row: its number, title, the line under it, its space, a tag saying where it stands (standing.js)
+   * and when it last moved.
    * @param {Thread} thread
    * @param {string | Node} sub
-   * @param {boolean} [selectable] whether the row may show as selected; a person's page selects none
+   * @param {{ selectable?: boolean, quiet?: readonly Status[] }} [options] whether the row may show as selected (a
+   *   person's page selects none), and the statuses whose tag the list around it already says, so it shows none
    */
-  row(thread, sub, selectable = true) {
+  row(thread, sub, { selectable = true, quiet = [] } = {}) {
     const meta = el('span', { class: 't-row-meta' }, [...this.meetingChip(thread), el('span', { class: 't-chip' }, [spaceLabel(thread.space)])]);
-    if (thread.status !== 'received') meta.append(el('span', {}, [STATUS_NAMES[thread.status]]));
+    const tag = tagOf(thread, quiet);
+    if (tag) meta.append(el('span', { class: 't-chip t-chip-status', 'data-status': tag.status }, [tag.words]));
     if ((thread.shared ?? 0) > 0) meta.append(el('span', { class: 't-people-mark', title: `Shared with ${thread.shared}` }, [icon('people'), String(thread.shared)]));
     meta.append(el('span', {}, [ago(thread.activityAt)]));
     const row = el('a', { class: 't-row', href: threadPath(thread), 'data-thread': String(thread.number), 'aria-selected': String(selectable && this.sel === thread.number) }, [
@@ -1983,8 +1974,7 @@ class Threads {
   /** @param {Thread} thread */
   rowLine(thread) {
     const line = firstLine(thread);
-    const dropped = thread.status === 'dropped' ? ` · dropped${thread.dropReason ? `: ${thread.dropReason}` : ''}` : '';
-    return `${fromWords(thread)}${line ? ` · ${line}` : ''}${dropped}`;
+    return `${fromWords(thread)}${line ? ` · ${line}` : ''}`;
   }
 
   /**
@@ -2043,11 +2033,12 @@ class Threads {
      * @param {(Node | string)[]} hint
      * @param {(thread: Thread) => string} sub
      * @param {string} empty
+     * @param {readonly Status[]} quiet the statuses the section already says, so its rows carry no tag for them
      */
-    const section = (title, list, hint, sub, empty) =>
+    const section = (title, list, hint, sub, empty, quiet) =>
       el('section', { class: 't-section' }, [
         el('div', { class: 't-section-head' }, [el('h2', {}, [title]), el('span', { class: 't-n' }, [String(list.length)]), el('span', { class: 't-hint' }, hint)]),
-        el('div', { class: 't-list' }, list.length > 0 ? list.map((thread) => this.row(thread, sub(thread))) : [el('div', { class: 't-empty' }, [empty])]),
+        el('div', { class: 't-list' }, list.length > 0 ? list.map((thread) => this.row(thread, sub(thread), { quiet })) : [el('div', { class: 't-empty' }, [empty])]),
       ]);
     return el('div', { class: 't-wrap' }, [
       el('div', { class: 't-head' }, [
@@ -2072,8 +2063,11 @@ class Threads {
             ]),
           ]
         : []),
-      section('New', fresh, [el('span', { class: 't-keys-hint' }, [kbd('A'), ' act · ', kbd('T'), ' talk · ', kbd('D'), ' drop'])], (thread) => this.rowLine(thread), 'All sorted.'),
-      section('Sat a week', sat, ['still open, untouched for 7 days'], (thread) => `${ago(thread.activityAt)} in ${STATUS_NAMES[thread.status]}. Move it, or drop it.`, 'Nothing has sat a week.'),
+      section('New', fresh, [el('span', { class: 't-keys-hint' }, [kbd('A'), ' act · ', kbd('T'), ' talk · ', kbd('D'), ' drop'])], (thread) => this.rowLine(thread), 'All sorted.', ['received']),
+      section('Sat a week', sat, ['still open, untouched for 7 days'], (thread) => `${ago(thread.activityAt)} in ${STATUS_NAMES[thread.status]}. Move it, or drop it.`, 'Nothing has sat a week.', [
+        'act',
+        'discuss',
+      ]),
     ]);
   }
 
@@ -2754,45 +2748,63 @@ class Threads {
     return el('div', { class: 't-wrap' }, [
       el('div', { class: 't-head' }, [el('div', {}, [el('h1', {}, ['Shared with you']), el('p', {}, ['The threads Suresh shared with you, newest activity first.'])])]),
       ...this.nextMeetingCard('Your next meeting'),
-      el('div', { class: 't-list' }, mine.length > 0 ? mine.map((thread) => this.row(thread, firstLine(thread))) : [el('div', { class: 't-empty' }, ['Nothing is shared with you yet.'])]),
+      el('div', { class: 't-list' }, mine.length > 0 ? mine.map((thread) => this.row(thread, firstLine(thread), { quiet: ['received'] })) : [el('div', { class: 't-empty' }, ['Nothing is shared with you yet.'])]),
       el('p', { class: 't-note' }, ['Only the threads Suresh invites you to show here.']),
     ]);
   }
 
   listView() {
-    const list = this.inTab(this.tab);
+    const list = this.inTab(this.tab, this.only);
     const filters = el('div', { class: 't-filters', role: 'group', 'aria-label': 'Space' }, [
-      el('a', { class: 't-filter', href: `/threads/?tab=${this.tab}`, 'data-space': '', 'aria-current': String(this.space === null) }, ['All spaces']),
+      el('a', { class: 't-filter', href: listPath(this.tab, this.only, null), 'data-space': '', 'aria-current': String(this.space === null) }, ['All spaces']),
       ...SPACES.map((space) =>
-        el('a', { class: 't-filter', href: `/threads/?tab=${this.tab}&space=${space.slug}`, 'data-space': space.slug, 'aria-current': String(this.space === space.slug) }, [space.label]),
+        el('a', { class: 't-filter', href: listPath(this.tab, this.only, space.slug), 'data-space': space.slug, 'aria-current': String(this.space === space.slug) }, [space.label]),
       ),
     ]);
     const tabs = el(
       'div',
       { class: 't-tabs', role: 'tablist', 'aria-label': 'Where it stands' },
-      // The keys 1 to 4 still open each tab (keys.js, and the keys sheet lists them); the tabs show only their counts.
+      // The keys 1 and 2 also open each tab (keys.js, and the keys sheet lists them); the tabs show only their counts.
       TABS.map((tab) =>
-        el('a', { class: 't-tab', role: 'tab', href: pathOf({ view: 'list', tab, space: this.space }, this.threads), 'data-tab': tab, 'aria-selected': String(this.tab === tab) }, [
+        el('a', { class: 't-tab', role: 'tab', href: listPath(tab, null, this.space), 'data-tab': tab, 'aria-selected': String(this.tab === tab) }, [
           TAB_NAMES[tab],
           el('span', { class: 't-nav-count' }, [String(this.inTab(tab).length)]),
         ]),
       ),
     );
+    // Pending's counts, in the space shown: each shows only its own status, and pressed again shows them all.
+    const counts =
+      this.tab === 'pending'
+        ? [
+            el(
+              'div',
+              { class: 't-counts', role: 'group', 'aria-label': 'Show only' },
+              countWords(breakdown(this.inTab('pending'))).flatMap(({ status, words }, at) => [
+                ...(at > 0 ? [el('span', { class: 't-counts-dot', 'aria-hidden': 'true' }, ['·'])] : []),
+                el('button', { type: 'button', class: 't-count', 'data-act': 'only', 'data-only': status, 'aria-pressed': String(this.only === status) }, [words]),
+              ]),
+            ),
+          ]
+        : [];
+    const empty = this.tab === 'done' ? 'Nothing done yet.' : this.only === 'received' ? 'All sorted.' : 'Nothing pending.';
     return el('div', { class: 't-wrap' }, [
       el('div', { class: 't-head' }, [
         el('div', {}, [
           el('h1', {}, [this.space === null ? 'Threads' : spaceLabel(this.space)]),
-          el('p', {}, [this.space === null ? 'Every thread, by where it stands. Newest number first.' : `Threads in ${spaceLabel(this.space)}, newest number first.`]),
+          el('p', {}, [this.space === null ? "What's still open, and what's done." : `Threads in ${spaceLabel(this.space)}: what's still open, and what's done.`]),
         ]),
         el('button', { type: 'button', class: 't-btn', 'data-act': 'new' }, [icon('plus'), 'New thread']),
       ]),
       filters,
       el('div', {}, [
         tabs,
+        ...counts,
         el(
           'div',
           { class: 't-list t-list-tabbed', role: 'tabpanel' },
-          list.length > 0 ? list.map((thread) => this.row(thread, this.rowLine(thread))) : [el('div', { class: 't-empty' }, [this.tab === 'look' ? 'All sorted.' : 'No threads here.'])],
+          list.length > 0
+            ? list.map((thread) => this.row(thread, this.rowLine(thread), { quiet: this.tab === 'done' ? ['done'] : [] }))
+            : [el('div', { class: 't-empty' }, [empty])],
         ),
       ]),
     ]);
@@ -2821,7 +2833,7 @@ class Threads {
     const crumbs = el('div', { class: 't-crumbs' }, [
       thread.space === null || this.member
         ? el('span', {}, [spaceLabel(thread.space)])
-        : el('a', { href: `/threads/?tab=${tabOf(thread.status)}&space=${thread.space}`, 'data-space': thread.space }, [spaceLabel(thread.space)]),
+        : el('a', { href: listPath(tabOf(thread.status), null, thread.space), 'data-space': thread.space }, [spaceLabel(thread.space)]),
       el('span', {}, ['/']),
       el('span', {}, [`#${thread.number}`]),
       el('span', { class: 't-chip' }, [STATUS_NAMES[thread.status]]),
@@ -4194,7 +4206,7 @@ class Threads {
         el('div', {}, [title, el('div', { class: 't-person-sub' }, [el('span', {}, [addressLine(person)]), el('span', {}, [howLine(person.counts)])])]),
       ]),
     ]);
-    const rows = threads.map((thread) => this.row(thread, roleLine(thread.roles), false));
+    const rows = threads.map((thread) => this.row(thread, roleLine(thread.roles), { selectable: false }));
     const met = split(
       threads.filter((thread) => thread.roles.includes('met')),
       (thread) => thread.meeting ?? null,
@@ -4602,9 +4614,9 @@ class Threads {
     const draft = this.newDraft;
     if (draft === null) return;
     const statuses = /** @type {const} */ ([
-      ['received', 'To look at'],
-      ['act', 'To act on'],
-      ['discuss', 'To discuss'],
+      ['received', STATUS_NAMES.received],
+      ['act', STATUS_NAMES.act],
+      ['discuss', STATUS_NAMES.discuss],
     ]);
     const text = this.newPreview
       ? el('div', { class: 't-preview-pane', id: 'new-preview' }, [draft.body.trim() === '' ? el('span', { class: 't-note' }, ['Nothing to preview.']) : prose(draft.body)])
@@ -4693,7 +4705,7 @@ class Threads {
         ]
       : [
           { label: 'Go to Today', hay: 'today', key: '', run: () => void this.go({ view: 'today' }) },
-          { label: 'Go to Threads', hay: 'threads all list', key: '', run: () => void this.go({ view: 'list', tab: this.tab, space: null }) },
+          { label: 'Go to Threads', hay: 'threads all list', key: '', run: () => void this.go({ view: 'list', tab: this.tab, only: this.only, space: null }) },
           { label: 'Go to people', hay: 'people person everyone who', key: '', run: () => void this.go({ view: 'people' }) },
           { label: 'Go to Meetings', hay: 'meetings calendar when', key: '', run: () => void this.go({ view: 'meetings' }) },
           { label: 'Go to Asks', hay: 'asks forms questions links answers', key: '', run: () => void this.go({ view: 'asks' }) },
@@ -4868,7 +4880,11 @@ class Threads {
     this.reply = null;
     if (this.route.view !== 'thread') {
       const after = this.walk();
-      this.sel = after.includes(thread.number) ? thread.number : (after[Math.min(Math.max(at, 0), after.length - 1)] ?? null);
+      // A move that changes where it stands is done with this thread, so the next row below is selected even when the
+      // thread stays listed (Pending lists every open status): sorting down a list is A, T, D, and Z comes back to it.
+      // A reply or a change of space keeps it selected while it is listed.
+      const below = predicted.status !== thread.status && at >= 0 ? list.slice(at + 1).find((number) => after.includes(number)) : undefined;
+      this.sel = below ?? (after.includes(thread.number) ? thread.number : (after[Math.min(Math.max(at, 0), after.length - 1)] ?? null));
     }
     this.keepScroll = true;
     this.render();
@@ -5723,6 +5739,7 @@ class Threads {
     this.clearProblem();
     this.threads.set(thread.number, thread);
     this.tab = tabOf(thread.status);
+    this.only = null;
     this.from = 'list';
     this.openThread(thread.number);
     this.say(`Started #${thread.number}`, null);
@@ -5781,13 +5798,20 @@ class Threads {
       else if (link.dataset.go === 'meetings') void this.go({ view: 'meetings' });
       else if (link.dataset.go === 'asks') void this.go({ view: 'asks' });
       else if (link.dataset.go === 'today') void this.go({ view: 'today' });
-      else if (link.dataset.go === 'list') void this.go({ view: 'list', tab: this.tab, space: null });
+      else if (link.dataset.go === 'list') void this.go({ view: 'list', tab: this.tab, only: this.only, space: null });
       else if (link.dataset.tab !== undefined && isTab(link.dataset.tab)) {
         this.sel = null;
-        void this.go({ view: 'list', tab: link.dataset.tab, space: this.space });
+        void this.go({ view: 'list', tab: link.dataset.tab, only: null, space: this.space });
       } else if (link.dataset.space !== undefined) {
         this.sel = null;
-        void this.go({ view: 'list', tab: this.route.view === 'thread' && this.shown ? tabOf(this.shown.thread.status) : this.tab, space: link.dataset.space === '' ? null : link.dataset.space });
+        // A thread's crumb opens the tab its thread is in; a space anywhere else keeps the tab and its filter.
+        const crumb = this.route.view === 'thread' && this.shown !== null;
+        void this.go({
+          view: 'list',
+          tab: crumb && this.shown ? tabOf(this.shown.thread.status) : this.tab,
+          only: crumb ? null : this.only,
+          space: link.dataset.space === '' ? null : link.dataset.space,
+        });
       }
       return;
     }
@@ -5804,11 +5828,18 @@ class Threads {
     if (button.dataset.go === 'today' || button.dataset.go === 'list' || button.dataset.go === 'people' || button.dataset.go === 'meetings' || button.dataset.go === 'asks' || button.dataset.go === 'journal') {
       event.preventDefault();
       const go = button.dataset.go;
-      void this.go(go === 'today' ? { view: 'today' } : go === 'people' ? { view: 'people' } : go === 'meetings' ? { view: 'meetings' } : go === 'asks' ? { view: 'asks' } : go === 'journal' ? { view: 'journal' } : { view: 'list', tab: this.tab, space: this.space });
+      void this.go(go === 'today' ? { view: 'today' } : go === 'people' ? { view: 'people' } : go === 'meetings' ? { view: 'meetings' } : go === 'asks' ? { view: 'asks' } : go === 'journal' ? { view: 'journal' } : { view: 'list', tab: this.tab, only: this.only, space: this.space });
       return;
     }
     const thread = this.target();
     switch (button.dataset.act) {
+      case 'only': {
+        const status = button.dataset.only;
+        if (this.route.view !== 'list' || (status !== 'received' && status !== 'act' && status !== 'discuss')) break;
+        this.sel = null;
+        void this.go({ view: 'list', tab: 'pending', only: this.only === status ? null : status, space: this.space });
+        break;
+      }
       case 'find':
         this.openFind();
         break;
@@ -6386,14 +6417,12 @@ class Threads {
       case 'back':
         if (this.route.view === 'thread' || this.route.view === 'person' || this.route.view === 'entry' || this.route.view === 'storyline' || this.route.view === 'storylines') this.back();
         break;
-      case 'tab-look':
-      case 'tab-act':
-      case 'tab-discuss':
+      case 'tab-pending':
       case 'tab-done': {
         const tab = command.slice(4);
         if (isTab(tab)) {
           this.sel = null;
-          void this.go({ view: 'list', tab, space: this.space });
+          void this.go({ view: 'list', tab, only: null, space: this.space });
         }
         break;
       }

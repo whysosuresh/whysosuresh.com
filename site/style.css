@@ -1038,6 +1038,20 @@ textarea.t-field { resize: vertical; line-height: 1.5; }
 .t-chip-meet[data-when="soon"] { background: var(--ink); color: var(--accent-ink); }
 .t-chip-meet[data-when="past"] { color: var(--faint); border-color: var(--line); }
 
+/* Where a thread stands, on its row (site/app/standing.js): New filled, as a near meeting is, because it waits to be
+   sorted; To do and To discuss outlined in ink, told apart by their words (dashed means "only he sees" here); closed
+   ones quiet. */
+.t-chip-status { color: var(--ink); border-color: var(--ink); }
+.t-chip-status[data-status="received"] { background: var(--ink); color: var(--accent-ink); }
+.t-chip-status[data-status="done"], .t-chip-status[data-status="dropped"], .t-chip-status[data-status="filed"] { color: var(--muted); border-color: var(--line); }
+
+/* Pending's counts line under the tabs: each count shows only its own status, pressed again shows them all. */
+.t-counts { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; padding: 8px 2px 2px; font-size: 12px; }
+.t-count { padding: 1px 7px; border: 1px solid transparent; border-radius: 999px; background: none; color: var(--muted); font: inherit; font-weight: 600; cursor: pointer; }
+.t-count:hover { color: var(--ink); }
+.t-count[aria-pressed="true"] { color: var(--ink); border-color: var(--ink); }
+.t-counts-dot { color: var(--faint); }
+
 .t-row-when { color: var(--ink); font-weight: 600; }
 .t-row-meet .t-meet-lead { color: var(--ink); font-size: 12px; white-space: nowrap; }
 .t-row-meet[data-when="soon"] .t-meet-lead { font-weight: 800; }

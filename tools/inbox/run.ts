@@ -18,12 +18,14 @@
 // that hands it the real ones.
 
 import { readFileSync } from "node:fs";
+import { LISTS } from "../../site/app/standing.js";
 
 /** The site the calls go to. */
 export const ORIGIN = "https://whysosuresh.com";
 /** The environment variable that carries the service token's secret. */
 export const SECRET_VARIABLE = "INBOX_SYNC_CLIENT_SECRET";
-const TABS = ["look", "act", "discuss", "done"];
+/** The lists the Worker answers, by the one map the page and the Worker share (site/app/standing.js). */
+const TABS: readonly string[] = Object.keys(LISTS);
 const ACTIONS = ["act", "discuss", "unsort", "done", "drop", "reopen", "space", "file"];
 const FIELDS = ["summary", "body"];
 /** The largest page the Worker keeps: 16 MiB, claude.ai's own limit. */
@@ -55,8 +57,10 @@ const PHOTO_TYPES: Record<string, string> = { jpg: "image/jpeg", jpeg: "image/jp
 
 export const USAGE = `Usage: inbox <verb> [arguments]
 
-  list <look|act|discuss|done>    every thread in that tab, newest number first, one JSON line each, with
-                                  its meeting (null when it isn't one)
+  list <pending|look|act|discuss|done>
+                                  every thread in that list, newest number first, one JSON line each, with
+                                  its meeting (null when it isn't one): pending is every open thread, look
+                                  the new ones, act the to-dos, discuss those to discuss, done the closed
   add                             threads from stdin, one JSON object per line; one result line each
   move <number> <action> [--reason <text>] [--space <space>] [--link <issue address>]
                                   one move: act, discuss, unsort, done, drop, reopen, space, file
@@ -188,7 +192,7 @@ function report(io: Io, verb: string, answer: Answer, key: string | null): numbe
 
 async function list(io: Io, secret: string, args: readonly string[]): Promise<number> {
   const [tab, ...rest] = args;
-  if (tab === undefined || !TABS.includes(tab) || rest.length > 0) throw new Usage(`list takes one tab: ${TABS.join(", ")}`);
+  if (tab === undefined || !TABS.includes(tab) || rest.length > 0) throw new Usage(`list takes one list: ${TABS.join(", ")}`);
   let before: string | null = null;
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const query: string = `?tab=${tab}${before === null ? "" : `&before=${before}`}`;
