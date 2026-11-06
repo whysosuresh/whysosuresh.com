@@ -111,6 +111,9 @@ describe("a good note", () => {
       link_title: null,
       public_at: null,
       person_id: expect.any(String),
+      meeting_when: null,
+      meeting_minutes: null,
+      meeting_where: null,
     });
     expect(String(row?.created_at) >= before).toBe(true);
     // The address is a person now, named as typed, and the note is from them.
@@ -317,7 +320,7 @@ describe("privacy", () => {
     const tables = (
       await database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'").all<{ name: string }>()
     ).results.map((t) => t.name);
-    expect(tables.sort()).toEqual(["comments", "events", "members", "pages", "people", "talk_days", "talk_senders", "threads"]);
+    expect(tables.sort()).toEqual(["attendees", "comments", "events", "members", "pages", "people", "talk_days", "talk_senders", "threads"]);
     const everything = JSON.stringify(await Promise.all(tables.map((table) => rows(table))));
     for (const needle of ["203.0.113.77", "2001:db8:aa:bb", "2001:0db8:00aa:00bb"]) expect(everything).not.toContain(needle);
   });

@@ -7,7 +7,8 @@
 // stdout; a refusal exits non-zero with the Worker's reason. Words (a comment, a summary, a main text) come on
 // stdin, so quotes and line breaks need no escaping. A page (a Claude artifact's own HTML) comes from a file,
 // because pages are large, and is refused here past the Worker's 16 MiB before it is sent; a link is an address on
-// claude.ai. This module is the logic, with fetch, the environment and
+// claude.ai. A meeting is set on a thread by its when (a day, or a moment always with its zone), and its people are
+// added by their person number, or by name as someone new. This module is the logic, with fetch, the environment and
 // the streams handed in, so the tests drive it with a played fetch; tools/inbox/inbox.ts is the entry point
 // that hands it the real ones.
 
@@ -33,7 +34,8 @@ const PEOPLE = "/threads/api/people";
 
 export const USAGE = `Usage: inbox <verb> [arguments]
 
-  list <look|act|discuss|done>    every thread in that tab, newest number first, one JSON line each
+  list <look|act|discuss|done>    every thread in that tab, newest number first, one JSON line each, with
+                                  its meeting (null when it isn't one)
   add                             threads from stdin, one JSON object per line; one result line each
   move <number> <action> [--reason <text>] [--space <space>] [--link <issue address>]
                                   one move: act, discuss, unsort, done, drop, reopen, space, file
@@ -42,7 +44,7 @@ export const USAGE = `Usage: inbox <verb> [arguments]
   edit <number> <summary|body>    the thread's living summary or main text, replaced by stdin;
                                   an empty summary clears it
   show <number>                   the thread with its comments and history, its page's versions, its
-                                  link and the people it is shared with, as one JSON line; a comment
+                                  link, its meeting and the people it is shared with, as one JSON line; a comment
                                   names where it sits: the comment it replies to (parent), the page's
                                   question it answers (question) or the page's words it is on (quote)
   page <number> <file> [--from <claude.ai address>]
@@ -51,9 +53,20 @@ export const USAGE = `Usage: inbox <verb> [arguments]
   link <number> <claude.ai address> [--title <text>]
                                   the thread's link to an artifact that only works on claude.ai
   link <number> --clear           the link removed; the thread shows its page again, or its text
-  people                          everyone he deals with, whoever was last in touch first, one JSON line each
+  meeting <number> --when <when> [--minutes <n>] [--where <text>]
+                                  the thread is a meeting: --when is a day (2026-11-09, its time not set)
+                                  or a moment with its zone (2026-11-09T15:00+05:30); --minutes its length
+                                  (5 to 1440), --where one line; setting it again replaces all three
+  meeting <number> --clear        the thread is no meeting, and its people are taken off it
+  attendees <number> (--add <person number> | --new <name> | --remove <person number>)...
+                                  the meeting's people changed, one call each in the order given: --add a
+                                  person by their number, --new someone inbox people doesn't hold (a new
+                                  person with no address), --remove a person; prints the thread after the
+                                  last, and stops at the first refusal, keeping the changes before it
+  people                          everyone he deals with, whoever was last in touch first, one JSON line each;
+                                  their counts include the meetings they are in (met)
   person <number>                 one person (by their number) with their threads and what they said, as
-                                  one JSON line
+                                  one JSON line; a thread they are in a meeting on has the role met
 
 The service token's secret is read from ${SECRET_VARIABLE}; the client id from wrangler.jsonc.
 Exit status: 0 when every request was answered as asked, 1 on any refusal, 2 on a usage error.
@@ -273,6 +286,57 @@ async function link(io: Io, secret: string, args: readonly string[]): Promise<nu
   return report(io, "link", await call(io, secret, `${THREADS}/${number}/link`, { method: "POST", body: JSON.stringify(change) }), "thread");
 }
 
+/** A length in minutes as typed: whole digits only, so the Worker sees a number. */
+const MINUTES_SHAPE = /^\d{1,4}$/;
+
+/** A thread's meeting set by its when, with a length and a where, or cleared with --clear. */
+async function meeting(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const [given, ...rest] = args;
+  const number = numberOf("meeting", given);
+  // Clearing sends every key null, as the Worker asks.
+  const change: { when: string | null; minutes: number | null; where: string | null } = { when: null, minutes: null, where: null };
+  if (rest.length !== 1 || rest[0] !== "--clear") {
+    for (let i = 0; i < rest.length; i += 2) {
+      const flag = rest[i];
+      const value = rest[i + 1];
+      if (value === undefined) throw new Usage(`meeting: missing value after ${flag ?? ""}`);
+      if (flag === "--when" && change.when === null) change.when = value;
+      else if (flag === "--minutes" && change.minutes === null && MINUTES_SHAPE.test(value)) change.minutes = Number(value);
+      else if (flag === "--where" && change.where === null) change.where = value;
+      else throw new Usage(`meeting: unknown, repeated or malformed flag at ${flag ?? ""}`);
+    }
+    if (change.when === null) throw new Usage("meeting takes a thread's number and --when <day or moment with its zone>, or --clear");
+  }
+  return report(io, "meeting", await call(io, secret, `${THREADS}/${number}/meeting`, { method: "POST", body: JSON.stringify(change) }), "thread");
+}
+
+/** The flags `attendees` takes, each a change of one person. */
+const ATTENDEE_FLAGS = ["--add", "--new", "--remove"];
+
+/** A meeting's people changed, one call per flag in the order given; the thread after the last is printed. */
+async function attendees(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const [given, ...rest] = args;
+  const number = numberOf("attendees", given);
+  const changes: unknown[] = [];
+  for (let i = 0; i < rest.length; i += 2) {
+    const flag = rest[i] ?? "";
+    const value = rest[i + 1];
+    if (!ATTENDEE_FLAGS.includes(flag) || value === undefined) throw new Usage(`attendees: unknown flag or missing value at ${flag}`);
+    if (flag !== "--new" && !NUMBER_SHAPE.test(value)) throw new Usage(`attendees: ${flag} takes a person's number, such as 7`);
+    changes.push(flag === "--add" ? { add: { person: Number(value) } } : flag === "--new" ? { add: { name: value } } : { remove: Number(value) });
+  }
+  if (changes.length === 0) throw new Usage("attendees takes a thread's number and at least one of --add, --new or --remove");
+  let last: Answer | null = null;
+  for (const [index, change] of changes.entries()) {
+    last = await call(io, secret, `${THREADS}/${number}/attendees`, { method: "POST", body: JSON.stringify(change) });
+    if (last.status !== 200) {
+      io.err(`inbox: attendees refused at change ${index + 1} of ${changes.length} (${last.status} ${reasonOf(last)}); the changes before it were kept`);
+      return 1;
+    }
+  }
+  return last === null ? 1 : report(io, "attendees", last, "thread");
+}
+
 /** Everyone, one line each, as the Worker answers them; it says when there were more than it answered. */
 async function people(io: Io, secret: string, args: readonly string[]): Promise<number> {
   if (args.length > 0) throw new Usage("people takes nothing more");
@@ -315,6 +379,8 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     if (verb === "show") return await show(io, secret, args);
     if (verb === "page") return await page(io, secret, args);
     if (verb === "link") return await link(io, secret, args);
+    if (verb === "meeting") return await meeting(io, secret, args);
+    if (verb === "attendees") return await attendees(io, secret, args);
     if (verb === "people") return await people(io, secret, args);
     if (verb === "person") return await person(io, secret, args);
     throw new Usage(`unknown verb: ${verb}`);

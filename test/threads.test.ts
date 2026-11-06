@@ -169,6 +169,7 @@ describe("an add", () => {
       main: "text",
       link: null,
       publicAt: null,
+      meeting: null,
     });
     const again = await call("", { body: { ...body, title: "Another title" } });
     expect(again.status).toBe(200);

@@ -14,9 +14,10 @@
 // Everyone is answered whoever was last in touch first, each with how he knows them (the counts) and whether
 // anything of theirs is live (`dropped` when it isn't: only ever in threads he dropped). A person's call adds his
 // own notes on them, every thread they are in with how (`roles`: `sent` a site note, `told` him, `invited`, their
-// invitation `removed`, `wrote` a comment or note there), shaped as the threads' calls shape a thread, and what they
-// said, newest first: their site notes, their comments as an invited person, and their notes on public threads with
-// whether each is waiting or dropped. Up to 200 of each; `truncated` says there are more.
+// invitation `removed`, `wrote` a comment or note there, `met` in its meeting), shaped as the threads' calls shape a
+// thread, its meeting included, and what they said, newest first: their site notes, their comments as an invited
+// person, and their notes on public threads with whether each is waiting or dropped. Up to 200 of each; `truncated`
+// says there are more. The counts include the meetings they are in (`met`).
 //
 // A change is one field: their name; their address, given once while they have none (lowercased, never his own,
 // 409 `has-email` once they have one, 409 `email-taken` with the number of the person who holds it), because it is
@@ -50,7 +51,7 @@ export function personView(row: PeopleRow): { readonly [key: string]: JsonValue 
     lastContact: row.last_contact,
     invited: row.invited > 0,
     dropped: row.live === 0,
-    counts: { sent: row.sent, told: row.told, invited: row.invited, removed: row.removed, commented: row.commented, noted: row.noted },
+    counts: { sent: row.sent, told: row.told, invited: row.invited, removed: row.removed, commented: row.commented, noted: row.noted, met: row.met },
   };
 }
 
@@ -60,6 +61,7 @@ function rolesOf(row: PersonThreadRow): string[] {
   if (row.mine === 1) roles.push(row.source === "told" ? "told" : "sent");
   if (row.membership !== null) roles.push(row.membership);
   if (row.wrote > 0) roles.push("wrote");
+  if (row.attends === 1) roles.push("met");
   return roles;
 }
 
