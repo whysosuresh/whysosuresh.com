@@ -35,6 +35,17 @@
 // written for anyone by default (Public), or for the people here, or for him alone. A visitor's words are drawn as
 // typed, never as Markdown, wherever they show.
 //
+// A page that asks questions takes their answers in place, and any page takes comments on its words. The page's frame
+// carries the bridge (frame/bridge.js), which speaks to this page by message alone (page-talk.js holds this side's
+// checks): it draws an answer box under each of the page's questions, offers Comment beside selected words, and
+// underlines the words each discussion is on. Every write is this page's, as whoever is signed in: an answer the page
+// asks for is taken only while the frame holds the focus (the reader clicked or typed in it), at most ten a minute,
+// for a question the page named; words and replies are typed here, never in the frame. A discussion on the page's
+// words sits beside them on a wide screen, in a column under the details; below 1000 px and in full screen its words
+// open it in a sheet, and the page's discussions are listed under it. Every comment can have replies, except a
+// visitor's note, a comment for anyone, an answer or a reply; the history keeps one line for each answer and
+// discussion, with Show, and a discussion whose words this version no longer has stays in the history whole.
+//
 // Everyone he deals with is a person (people.js holds their words and addresses): People, under All threads, lists
 // everyone at /threads/people, whoever was last in touch first, those only ever in threads he dropped folded away; a
 // person's page (/threads/people/7-meera) shows every thread they are in and how, what they said, newest first,
@@ -56,6 +67,7 @@
 import { SPACES } from '../spaces.js';
 import { MEMBER_COMMANDS, MEMBER_SHEET, SHEET, commandFor } from './keys.js';
 import { parse, summaryLines } from './markdown.js';
+import { DRAFT, KEY, discussionFor, placesOf, readPageMessage, stack } from './page-talk.js';
 import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, takenLine } from './people.js';
 import { addressOf, invitation, invitationProblem, isAddress, levelOf, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
 import { prepare as prepareBotCheck, sendTo } from '../talk-send.js';
@@ -103,6 +115,9 @@ import {
  * @typedef {import('./threads-store.js').Someone} Someone
  * @typedef {import('./threads-store.js').PersonShown} PersonShown
  * @typedef {import('./threads-store.js').PersonChange} PersonChange
+ * @typedef {import('./page-talk.js').Places<ThreadComment>} Places
+ * @typedef {{ quote: string, prefix: string, suffix: string, top: number }} WordsDraft
+ * @typedef {{ ready: boolean, questions: Set<string>, anchors: Map<string, number | null>, questionTops: Map<string, number>, answered: number[], sent: string }} Talk
  * @typedef {import('./markdown.js').Inline} Inline
  * @typedef {import('./keys.js').Command} Command
  * @typedef {{ view: 'today' } | { view: 'list', tab: Tab, space: string | null } | { view: 'thread', number: number } | { view: 'people' }
@@ -110,7 +125,7 @@ import {
  * @typedef {{ to: string, subject: string, body: string }} Draft
  * @typedef {{ title: string, summary: string, body: string }} Editing
  * @typedef {{ title: string, space: string, status: 'received' | 'act' | 'discuss', body: string }} NewDraft
- * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share'} Overlay
+ * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share' | 'discussion'} Overlay
  * @typedef {{ number: number, people: Person[], count: number, email: string, name: string, problem: string,
  *   invited: { name: string, email: string } | null, busy: boolean }} Sharing
  * @typedef {{ label: string, sub: string, side: string, number: number | null, person: number | null, run: () => void }} FindItem
@@ -167,6 +182,22 @@ const SIGNED_IN_KEY = 'threads:signed-in';
 const PAGE_SANDBOX = 'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox';
 /** The heights a page may ask its frame for; anything else is ignored. */
 const PAGE_HEIGHT = { min: 160, max: 20000 };
+/** The most answers one page's frame may ask to save in a minute. */
+const ANSWERS_A_MINUTE = 10;
+/** How far a card beside the page sits above its words, so its quote lines up with them. */
+const CARD_LIFT = 10;
+/** The gap between two cards beside the page. */
+const CARD_GAP = 8;
+
+/** What a new page's frame has said: nothing yet. @returns {Talk} */
+function freshTalk() {
+  return { ready: false, questions: new Set(), anchors: new Map(), questionTops: new Map(), answered: [], sent: '' };
+}
+
+/** Whether a comment can have replies: shown, not a reply, an answer or words' discussion's reply, not a visitor's or for anyone. @param {ThreadComment} said */
+function repliable(said) {
+  return !said.parent && !said.question && said.author !== 'visitor' && said.audience !== 'public' && said.state === 'shown';
+}
 /** The longest note a visitor may send, as the Worker counts it (trimmed, in UTF-16 code units). */
 const MAX_NOTE = 4000;
 /** A thread's own address, with its title after the number or not. */
@@ -629,7 +660,8 @@ function linkCard(link) {
 /**
  * Puts a freshly drawn thread into the pane while keeping the page's frame that is already there, so a move, a
  * comment or a toggle never reloads the page (an iframe taken out of the document loads again). Everything around
- * the frame is replaced; the frame's own bar too. False when there is no such frame to keep.
+ * the frame is replaced: the frame's own bar, and the side column with its details and discussions. False when there
+ * is no such frame to keep.
  * @param {HTMLElement} pane
  * @param {HTMLElement} view
  */
@@ -639,9 +671,10 @@ function keepFrame(pane, view) {
   const kept = key === undefined ? null : pane.querySelector(`.t-page[data-page-key="${key}"]`);
   const doc = kept?.parentElement;
   const freshDoc = fresh?.parentElement;
-  const details = pane.querySelector('.t-details');
-  const freshDetails = view.querySelector('.t-details');
-  if (!(kept instanceof HTMLElement) || !(fresh instanceof HTMLElement) || !doc || !freshDoc || !details || !freshDetails) return false;
+  const side = pane.querySelector('.t-rail');
+  const freshSide = view.querySelector('.t-rail');
+  const frame = pane.querySelector('.t-thread');
+  if (!(kept instanceof HTMLElement) || !(fresh instanceof HTMLElement) || !doc || !freshDoc || !side || !freshSide || !frame) return false;
   const children = [...freshDoc.children];
   const at = children.indexOf(fresh);
   for (const child of [...doc.children]) if (child !== kept) child.remove();
@@ -650,7 +683,8 @@ function keepFrame(pane, view) {
   const bar = fresh.querySelector('.t-page-bar');
   if (bar) kept.querySelector('.t-page-bar')?.replaceWith(bar);
   kept.dataset.full = fresh.dataset.full ?? 'false';
-  details.replaceWith(freshDetails);
+  side.replaceWith(freshSide);
+  frame.toggleAttribute('data-rail', view.hasAttribute('data-rail'));
   return true;
 }
 
@@ -741,6 +775,21 @@ class Threads {
     this.pageVersions = new Map();
     /** Whether the page fills the window. */
     this.pageFull = false;
+    /** What the open page's frame has said. @type {Talk} */
+    this.talk = freshTalk();
+    /** The comment being written on words selected in the page, and its text. @type {WordsDraft | null} */
+    this.wordsDraft = null;
+    this.wordsText = '';
+    /** The discussion on the page's words shown as chosen. @type {string | null} */
+    this.activeDisc = null;
+    /** The comment a reply is being written under, and each reply's words so far. @type {string | null} */
+    this.replyingTo = null;
+    /** @type {Map<string, string>} */
+    this.replyDrafts = new Map();
+    /** Which discussions the sheet or drawer shows: one by id, the comment being written, or all. @type {string | null} */
+    this.discussionShown = null;
+    /** Wide enough for discussions beside the page. */
+    this.wide = window.matchMedia('(min-width: 1000px)');
     /** @type {Overlay} */
     this.overlay = null;
     /** @type {NewDraft | null} */
@@ -779,13 +828,19 @@ class Threads {
       if (box.id === 'person-name') void this.savePersonName();
     });
     window.addEventListener('popstate', () => this.go(routeOf(location), false));
-    window.addEventListener('message', (event) => this.onPageHeight(event));
+    window.addEventListener('message', (event) => this.onPageMessage(event));
+    this.wide.addEventListener('change', () => {
+      if (this.route.view !== 'thread') return;
+      this.keepScroll = true;
+      this.render();
+    });
     // A dialog's close arrives as a task, after another may already have opened in its place; only a dialog still
     // closed is emptied, so nothing in it keeps the focus and keys reach the page again.
     this.dialog.addEventListener('close', () => {
       if (this.dialog.open) return;
       this.overlay = null;
       this.sharing = null;
+      this.discussionShown = null;
       this.dialog.replaceChildren();
       this.main.focus({ preventScroll: true });
     });
@@ -943,6 +998,7 @@ class Threads {
     try {
       const shown = await show(number);
       if (ticket !== this.loading) return;
+      if (this.shown?.thread.number !== number) this.forgetPage();
       this.shown = shown;
       this.missing = null;
       this.remember(shown.thread, this.member ? {} : { shared: shown.people.length });
@@ -1173,11 +1229,20 @@ class Threads {
     this.publicShown = null;
     this.app.hidden = false;
     const scroll = this.main.scrollTop;
+    // A box being typed in keeps its focus and its cursor across a redraw (a page saying where its words moved).
+    const typing = document.activeElement;
+    const kept = typing instanceof HTMLTextAreaElement && typing.id !== '' && this.main.contains(typing) ? { id: typing.id, from: typing.selectionStart, to: typing.selectionEnd } : null;
     this.renderNav();
     this.renderTabbar();
     if (this.route.view === 'thread') {
       const view = this.threadView();
-      if (!keepFrame(this.main, view)) this.main.replaceChildren(view);
+      if (!keepFrame(this.main, view)) {
+        this.main.replaceChildren(view);
+        this.talk = freshTalk();
+      }
+      this.tellPage();
+      this.placeCards();
+      if (this.overlay === 'discussion') this.renderDiscussion();
       const thread = this.shown?.thread;
       document.title = thread ? `#${thread.number} ${titleOf(thread)} · Threads` : 'Threads';
       if (thread && location.pathname !== threadPath(thread)) history.replaceState(null, '', threadPath(thread));
@@ -1200,6 +1265,11 @@ class Threads {
     }
     if (this.keepScroll) this.main.scrollTop = scroll;
     this.keepScroll = false;
+    const again = kept === null ? null : this.main.querySelector(`#${kept.id}`);
+    if (kept !== null && again instanceof HTMLTextAreaElement && document.activeElement !== again) {
+      again.focus({ preventScroll: true });
+      again.setSelectionRange(kept.from, kept.to);
+    }
     const selected = this.main.querySelector('.t-row[aria-selected="true"]');
     if (selected && this.route.view !== 'thread') selected.scrollIntoView({ block: 'nearest' });
   }
@@ -1413,6 +1483,9 @@ class Threads {
         ? el('section', { class: 't-summary t-summary-empty', 'aria-label': 'Summary' }, ['No summary yet.'])
         : el('section', { class: 't-summary t-summary-empty', 'aria-label': 'Summary' }, ['No summary yet. The sync writes one at its next pass, or press ', kbd('W'), ' to write it.']);
     const text = this.mainSection(thread, this.shown.page);
+    const places = placesOf(this.shown.comments);
+    const paged = thread.main === 'page' && this.shown.page !== null;
+    const beside = paged && !this.columnless() && (places.words.length > 0 || this.wordsDraft !== null);
     const doc = el('article', { class: 't-doc' }, [
       crumbs,
       el('h1', { class: 't-title' }, [el('span', { class: 't-tn' }, [`#${thread.number}`]), ' ', titleOf(thread)]),
@@ -1421,11 +1494,22 @@ class Threads {
       summary,
       ...(this.reply ? [this.replyPanel(this.reply)] : []),
       ...text,
-      el('div', { class: 't-feed' }, this.feed(this.shown, thread)),
+      ...(paged && this.columnless() ? this.pageDiscussions(places, thread) : []),
+      el('div', { class: 't-feed' }, this.feed(this.shown, thread, places)),
       ...(this.shown.truncated ? [el('p', { class: 't-note' }, ['Only the first 500 comments and events are shown.'])] : []),
       this.composer(thread),
     ]);
-    return el('div', { class: 't-thread' }, [doc, this.member ? this.memberDetails(thread) : this.details(thread)]);
+    const details = this.member ? this.memberDetails(thread) : this.details(thread);
+    const cards = beside
+      ? [
+          el('div', { class: 't-rail-head' }, ['Discussions on the page']),
+          el('div', { class: 't-rail-cards', 'data-rail-cards': '' }, [
+            ...places.words.filter((said) => this.talk.anchors.get(said.id) !== null).map((said) => this.discCard(said, places, thread)),
+            ...(this.wordsDraft ? [this.draftCard()] : []),
+          ]),
+        ]
+      : [];
+    return el('div', beside ? { class: 't-thread', 'data-rail': '' } : { class: 't-thread' }, [doc, el('div', { class: 't-rail' }, [details, ...cards])]);
   }
 
   /**
@@ -1469,6 +1553,9 @@ class Threads {
       el('span', { class: 't-grow' }),
       ...(page.versions.length > 1 ? [el('button', { type: 'button', class: 't-btn', 'data-act': 'page-versions' }, ['Versions'])] : []),
       ...(shown?.source ? [el('a', { class: 't-btn', href: shown.source, target: '_blank', rel: 'noopener' }, ['Open in Claude'])] : []),
+      ...(this.pageFull && this.shown && placesOf(this.shown.comments).words.length > 0
+        ? [el('button', { type: 'button', class: 't-btn', 'data-act': 'discussions' }, [`Discussions · ${placesOf(this.shown.comments).words.filter((said) => this.talk.anchors.get(said.id) !== null).length}`])]
+        : []),
       el('button', { type: 'button', class: 't-btn', 'data-act': 'page-full' }, [this.pageFull ? 'Back to thread' : 'Full screen']),
     ]);
     const frame = el('iframe', { class: 't-page-frame', sandbox: PAGE_SANDBOX, src: pageAddress(thread.number, number), title: `Page, version ${number}`, loading: 'lazy' });
@@ -1476,17 +1563,243 @@ class Threads {
   }
 
   /**
-   * A page's height, from the script its answer carries: taken only from the open page's own frame, and only as a
-   * number in range, so nothing else on the screen can resize it.
+   * A message from a page's frame (frame/bridge.js), taken only from the open page's own frame and only as one of the
+   * kinds page-talk.js reads. Its height, as a number in range, sizes the frame wherever it is. Everything else is the
+   * signed-in thread's: `ready` (a page loaded) is answered with `hello` and the discussion on it; `anchors` says
+   * where each discussion's words sit; and the three that ask for something (`selected`, `answer`, `open`) are taken
+   * only while the frame holds the focus, which it does when the reader clicked or typed in it, so a page script
+   * acting on its own at load is refused. An answer also has to name a question the page named in `ready`, at most
+   * ten a minute from one frame, and is saved here as whoever is signed in.
    * @param {MessageEvent} event
    */
-  onPageHeight(event) {
-    const frame = (this.pub.hidden ? this.main : this.pubDoc).querySelector('.t-page-frame');
+  onPageMessage(event) {
+    const signedIn = this.pub.hidden;
+    const frame = (signedIn ? this.main : this.pubDoc).querySelector('.t-page-frame');
     if (!(frame instanceof HTMLIFrameElement) || event.source !== frame.contentWindow) return;
-    const data = /** @type {unknown} */ (event.data);
-    const height = typeof data === 'object' && data !== null && 'whysosureshPageHeight' in data ? data.whysosureshPageHeight : null;
-    if (typeof height !== 'number' || !Number.isFinite(height) || height < PAGE_HEIGHT.min || height > PAGE_HEIGHT.max) return;
-    frame.style.height = `${Math.round(height)}px`;
+    const said = readPageMessage(/** @type {unknown} */ (event.data));
+    if (said === null) return;
+    if (said.kind === 'height') {
+      if (said.height >= PAGE_HEIGHT.min && said.height <= PAGE_HEIGHT.max) frame.style.height = `${Math.round(said.height)}px`;
+      return;
+    }
+    const thread = this.shown?.thread;
+    if (!signedIn || this.route.view !== 'thread' || !thread || thread.main !== 'page') return;
+    if (said.kind === 'ready') {
+      this.talk = { ...freshTalk(), ready: true, questions: new Set(said.questions) };
+      this.wordsDraft = null;
+      frame.contentWindow?.postMessage({ [KEY]: 'hello' }, '*');
+      this.tellPage();
+      return;
+    }
+    if (said.kind === 'anchors') {
+      // Only a discussion found or lost changes what is drawn; the comment being written is drawn already.
+      const found = (/** @type {Iterable<[string, number | null]>} */ pairs) => [...pairs].filter(([id]) => id !== DRAFT).map(([id, top]) => `${id}:${top === null}`).join(',');
+      const before = found(this.talk.anchors);
+      this.talk.anchors = new Map(said.anchors.map((one) => [one.id, one.top]));
+      this.talk.questionTops = new Map(said.questions.map((one) => [one.id, one.top]));
+      const after = found(this.talk.anchors);
+      if (before !== after) {
+        this.keepScroll = true;
+        this.render();
+      } else this.placeCards();
+      return;
+    }
+    if (document.activeElement !== frame) return;
+    if (said.kind === 'selected') {
+      this.wordsDraft = { quote: said.quote, prefix: said.prefix, suffix: said.suffix, top: said.top };
+      this.wordsText = '';
+      this.activeDisc = null;
+      this.keepScroll = true;
+      this.render();
+      if (this.columnless()) this.openDiscussion(DRAFT);
+      else focusIn(this.main, '#words-text');
+    } else if (said.kind === 'open') {
+      this.showDisc(said.id);
+    } else if (said.kind === 'answer') {
+      const now = Date.now();
+      this.talk.answered = this.talk.answered.filter((at) => now - at < 60_000);
+      if (!this.talk.questions.has(said.question) || this.talk.answered.length >= ANSWERS_A_MINUTE) {
+        frame.contentWindow?.postMessage({ [KEY]: 'saved', question: said.question, ok: false }, '*');
+        return;
+      }
+      this.talk.answered.push(now);
+      void this.saveAnswer(thread, said.question, said.body);
+    }
+  }
+
+  /** Forgets what the open page's frame said and what was being written on it, as another thread opens. */
+  forgetPage() {
+    this.talk = freshTalk();
+    this.wordsDraft = null;
+    this.wordsText = '';
+    this.activeDisc = null;
+    this.replyingTo = null;
+  }
+
+  /** Whether discussions open in a sheet rather than beside the page: below 1000 px, and in full screen. */
+  columnless() {
+    return !this.wide.matches || this.pageFull;
+  }
+
+  /** The page version shown on the open thread, or null when it shows no page. */
+  shownVersion() {
+    const shown = this.shown;
+    if (!shown?.page) return null;
+    return this.pageVersions.get(shown.thread.number) ?? shown.page.version;
+  }
+
+  /**
+   * Tells the open page the discussion on it, once its frame said it is ready, and only when that changed: each
+   * person's newest answer by name, the words of every discussion and of the comment being written, and the one
+   * chosen. The frame has no address of its own, so it is posted to `*`, and holds only what the reader may read.
+   */
+  tellPage() {
+    if (!this.talk.ready || !this.shown) return;
+    const frame = this.main.querySelector('.t-page-frame');
+    if (!(frame instanceof HTMLIFrameElement)) return;
+    const words = this.wordsDraft ? { quote: this.wordsDraft.quote, prefix: this.wordsDraft.prefix, suffix: this.wordsDraft.suffix } : null;
+    const message = discussionFor(placesOf(this.shown.comments), { ownerName: 'Suresh', draft: words, active: this.activeDisc ?? (words ? DRAFT : null) });
+    const text = JSON.stringify(message);
+    if (text === this.talk.sent) return;
+    this.talk.sent = text;
+    frame.contentWindow?.postMessage(message, '*');
+  }
+
+  /** Puts each card beside the page level with its words, pushed down where two would overlap. */
+  placeCards() {
+    const box = this.main.querySelector('[data-rail-cards]');
+    const frame = this.main.querySelector('.t-page-frame');
+    if (!(box instanceof HTMLElement) || !(frame instanceof HTMLElement)) return;
+    const offset = frame.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    const cards = [...box.querySelectorAll('[data-card]')].filter((card) => card instanceof HTMLElement);
+    const wanted = cards.map((card) => {
+      const id = card.dataset.card ?? '';
+      const top = id === DRAFT ? (this.wordsDraft?.top ?? 0) : (this.talk.anchors.get(id) ?? 0);
+      return { id, want: offset + top - CARD_LIFT, height: card.offsetHeight };
+    });
+    const { placed, bottom } = stack(wanted, CARD_GAP);
+    for (const card of cards) card.style.top = `${Math.round(placed.get(card.dataset.card ?? '') ?? 0)}px`;
+    box.style.height = `${Math.round(bottom)}px`;
+  }
+
+  /**
+   * Opens one discussion on the page's words, or all of them, or the comment being written, where there is no room
+   * beside the page: a sheet, or in full screen a drawer.
+   * @param {string} which a discussion's id, `draft`, or `all`
+   */
+  openDiscussion(which) {
+    this.discussionShown = which;
+    this.renderDiscussion();
+    focusIn(this.dialog, which === DRAFT ? '#words-text' : '#reply-text');
+  }
+
+  /** Draws the open sheet or drawer of discussions again, as the thread now stands. */
+  renderDiscussion() {
+    const shown = this.shown;
+    const which = this.discussionShown;
+    if (!shown || which === null) return;
+    const places = placesOf(shown.comments);
+    const thread = shown.thread;
+    const here = places.words.filter((said) => this.talk.anchors.get(said.id) !== null);
+    const one = places.words.find((said) => said.id === which);
+    const body =
+      which === DRAFT && this.wordsDraft ? [this.draftCard()] : which === 'all' ? here.map((said) => this.discCard(said, places, thread)) : one ? [this.discCard(one, places, thread)] : [];
+    const title = which === DRAFT ? 'Comment on these words' : which === 'all' ? 'Discussions on this page' : 'Discussion';
+    this.openOverlay('discussion', title, this.pageFull ? 'drawer' : 'narrow', [this.sheetHead(title), el('div', { class: 't-sheet-body t-disc-list' }, body)]);
+  }
+
+  /**
+   * Shows one discussion on the page's words: chosen in the page, beside it when there is room (scrolled to), else in
+   * a sheet; in full screen the page scrolls to its words.
+   * @param {string} id
+   */
+  showDisc(id) {
+    this.activeDisc = id;
+    this.keepScroll = true;
+    this.render();
+    const frame = this.main.querySelector('.t-page-frame');
+    if (this.pageFull && frame instanceof HTMLIFrameElement) frame.contentWindow?.postMessage({ [KEY]: 'focus', id, scroll: true }, '*');
+    if (this.columnless()) this.openDiscussion(id);
+    else this.main.querySelector(`.t-rail [data-card="${id}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
+  /** Scrolls the thread to a question on its page, where the page said it sits. @param {string} question */
+  showAnswer(question) {
+    const frame = this.main.querySelector('.t-page-frame');
+    if (!(frame instanceof HTMLElement)) return;
+    const top = frame.getBoundingClientRect().top - this.main.getBoundingClientRect().top + this.main.scrollTop + (this.talk.questionTops.get(question) ?? 0) - 80;
+    this.main.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  }
+
+  /**
+   * Saves an answer the page asked for, as whoever is signed in, and tells the page whether it was kept.
+   * @param {Thread} thread
+   * @param {string} question
+   * @param {string} body
+   */
+  async saveAnswer(thread, question, body) {
+    const frame = this.main.querySelector('.t-page-frame');
+    const tell = (/** @type {boolean} */ ok) => (frame instanceof HTMLIFrameElement ? frame.contentWindow?.postMessage({ [KEY]: 'saved', question, ok }, '*') : undefined);
+    try {
+      await comment(thread.number, body, { question });
+    } catch (error) {
+      tell(false);
+      this.fail(error, "That answer didn't save. It is still in its box on the page.");
+      return;
+    }
+    tell(true);
+    this.clearProblem();
+    this.touchThread(thread.number);
+    await this.refreshShown(thread.number);
+    this.say(this.member ? `Answer saved on #${thread.number} as ${this.me}` : `Answer saved on #${thread.number}`, null);
+  }
+
+  /** Saves the comment written on the page's selected words, on the version shown. @param {Thread} thread */
+  async sendWords(thread) {
+    const draft = this.wordsDraft;
+    const text = this.wordsText.trim();
+    const version = this.shownVersion();
+    if (!draft || text === '' || version === null) return;
+    let saved;
+    try {
+      saved = await comment(thread.number, text, { quote: draft.quote, prefix: draft.prefix, suffix: draft.suffix, version });
+    } catch (error) {
+      this.fail(error, "The comment didn't save. It is still in the box.");
+      return;
+    }
+    this.wordsDraft = null;
+    this.wordsText = '';
+    this.activeDisc = saved.id;
+    if (this.overlay === 'discussion') this.discussionShown = saved.id;
+    this.clearProblem();
+    this.touchThread(thread.number);
+    await this.refreshShown(thread.number);
+    this.say(`Commented on the page's words on #${thread.number}`, null);
+  }
+
+  /** Saves the reply being written, under its comment, in that comment's audience. @param {Thread} thread */
+  async sendReply(thread) {
+    const parent = this.replyingTo;
+    const text = (parent === null ? '' : (this.replyDrafts.get(parent) ?? '')).trim();
+    if (parent === null || text === '') return;
+    try {
+      await comment(thread.number, text, { parent });
+    } catch (error) {
+      this.fail(error, "The reply didn't save. It is still in the box.");
+      return;
+    }
+    this.replyDrafts.delete(parent);
+    this.replyingTo = null;
+    this.clearProblem();
+    this.touchThread(thread.number);
+    await this.refreshShown(thread.number);
+    this.say(`Replied on #${thread.number}`, null);
+  }
+
+  /** Marks a thread active now, and for the owner no longer waiting on him. @param {number} number */
+  touchThread(number) {
+    const known = this.threads.get(number);
+    if (known) this.threads.set(number, { ...known, activityAt: new Date().toISOString(), waiting: this.member ? (known.waiting ?? false) : false });
   }
 
   /** @param {Thread} thread @param {Page} page */
@@ -1555,16 +1868,25 @@ class Threads {
   }
 
   /**
-   * The history and the comments, in the order they happened.
+   * The history and the comments, in the order they happened: each general comment with its replies, and one line
+   * for each answer and each discussion on the page's words.
    * @param {Shown} shown
    * @param {Thread} thread
+   * @param {Places} places
    */
-  feed(shown, thread) {
+  feed(shown, thread, places) {
     /** @type {{ at: string, order: number, node: HTMLElement }[]} */
     const entries = [];
     shown.events.forEach((event, i) => entries.push({ at: event.at, order: i, node: this.eventNode(event, thread) }));
     shown.comments.forEach((said, i) => {
-      for (const node of this.commentNode(said, thread)) entries.push({ at: said.createdAt, order: shown.events.length + i, node });
+      const order = shown.events.length + i;
+      if (said.parent) return;
+      if (said.question) entries.push({ at: said.createdAt, order, node: this.answerLine(said, thread) });
+      else if (said.quote) {
+        // Words this version no longer has keep their whole discussion here, marked with the version they were on.
+        if (this.talk.anchors.get(said.id) === null || thread.main !== 'page') entries.push({ at: said.createdAt, order, node: this.goneDisc(said, places, thread) });
+        else entries.push({ at: said.createdAt, order, node: this.wordsLine(said, places, thread) });
+      } else for (const node of this.commentNode(said, thread, places)) entries.push({ at: said.createdAt, order, node });
     });
     entries.sort((a, b) => (a.at === b.at ? a.order - b.order : a.at.localeCompare(b.at)));
     return entries.map((entry) => entry.node);
@@ -1693,11 +2015,13 @@ class Threads {
   /**
    * A comment: the owner's, the sync's, an invited person's, or a visitor's note on a public thread, whose words are
    * drawn as typed. A note waiting for his OK is a card of its own; a dropped one is drawn only on its event's line.
+   * Given the thread's places, a comment that can have replies is followed by them, and by Reply or its box.
    * @param {ThreadComment} said
    * @param {Thread} thread
+   * @param {Places | null} [places]
    * @returns {HTMLElement[]}
    */
-  commentNode(said, thread) {
+  commentNode(said, thread, places = null) {
     if (said.state === 'dropped') return [];
     if (said.author === 'visitor' && said.state === 'pending') return this.member ? [] : [this.pendingNode(said, thread)];
     const who = said.author === 'owner' ? 'owner' : said.author === 'member' ? 'member' : said.author === 'visitor' ? 'visitor' : 'sync';
@@ -1719,7 +2043,176 @@ class Threads {
           el('div', { class: 't-cm-body' }, [who === 'visitor' ? plain(said.body) : prose(said.body)]),
         ]),
       ]),
+      ...(places && repliable(said) ? this.repliesOf(said, places, thread) : []),
     ];
+  }
+
+  /**
+   * A comment's replies, oldest first, then the reply box when a reply is being written under it, else Reply.
+   * @param {ThreadComment} said
+   * @param {Places} places
+   * @param {Thread} thread
+   * @returns {HTMLElement[]}
+   */
+  repliesOf(said, places, thread) {
+    const replies = places.replies.get(said.id) ?? [];
+    const writing = this.replyingTo === said.id;
+    const nodes = replies.flatMap((reply) => this.commentNode(reply, thread));
+    return [
+      ...(nodes.length > 0 || writing ? [el('div', { class: 't-replies' }, [...nodes, ...(writing ? [this.replyBox(said, 't-composer')] : [])])] : []),
+      ...(writing ? [] : [el('button', { type: 'button', class: 't-reply-to', 'data-act': 'reply-open', 'data-id': said.id }, [icon('reply'), replies.length > 0 ? `Reply · ${replies.length}` : 'Reply'])]),
+    ];
+  }
+
+  /**
+   * The box a reply is written in, under the comment it answers: in a card beside the page, or in the history.
+   * @param {ThreadComment} said
+   * @param {'t-composer' | 't-disc-reply'} kind
+   */
+  replyBox(said, kind) {
+    const onlyMe = said.audience === 'owner';
+    const box = el('textarea', { id: 'reply-text', 'aria-label': 'Reply', placeholder: onlyMe ? 'Reply, for you alone' : 'Reply' }, [this.replyDrafts.get(said.id) ?? '']);
+    const send = [
+      el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'reply-cancel' }, ['Cancel']),
+      el('button', { type: 'submit', class: 't-btn t-btn-primary' }, ['Reply ', kbd('⌘↵')]),
+    ];
+    const note = el('span', { class: 't-note' }, [onlyMe ? 'Only you and Claude read this reply.' : 'Everyone in the thread reads this reply.']);
+    if (kind === 't-disc-reply') return el('form', { class: 't-disc-reply', 'data-submit': 'reply', 'data-parent': said.id }, [box, el('div', { class: 't-disc-bar' }, [note, ...send])]);
+    return el('form', { class: 't-composer', 'data-submit': 'reply', 'data-parent': said.id, 'data-audience': said.audience }, [
+      this.member ? avatar('member', this.me) : avatar('owner', ''),
+      el('div', { class: 't-composer-box' }, [box, el('div', { class: 't-composer-bar' }, [note, ...send])]),
+    ]);
+  }
+
+  /** Who wrote a comment, as a discussion card names them. @param {ThreadComment} said @param {Thread} thread */
+  writerOf(said, thread) {
+    if (said.mine) return 'You';
+    if (said.author === 'member') return said.name?.trim() || 'Someone';
+    return this.actorName(said.author, thread);
+  }
+
+  /**
+   * A discussion on the page's words: the words, the comment and its replies, then Reply or its box.
+   * @param {ThreadComment} said
+   * @param {Places} places
+   * @param {Thread} thread
+   */
+  discCard(said, places, thread) {
+    const replies = places.replies.get(said.id) ?? [];
+    const writing = this.replyingTo === said.id;
+    const message = (/** @type {ThreadComment} */ one) =>
+      el('div', { class: 't-msg' }, [
+        avatar(one.author === 'owner' ? 'owner' : 'member', one.name ?? ''),
+        el('div', {}, [
+          el('div', { class: 't-msg-head' }, [el('b', {}, [this.writerOf(one, thread)]), el('time', { datetime: one.createdAt }, [when(one.createdAt)])]),
+          el('div', { class: 't-msg-body' }, [prose(one.body)]),
+        ]),
+      ]);
+    const version = said.quote?.version;
+    const shown = this.shownVersion();
+    return el('div', { class: 't-disc', 'data-card': said.id, ...(this.activeDisc === said.id ? { 'aria-current': 'true' } : {}) }, [
+      el('p', { class: 't-disc-quote' }, [
+        el('q', {}, [said.quote?.text ?? '']),
+        ...(version !== undefined && version !== shown ? [el('span', { class: 't-chip t-disc-old' }, [`version ${version}`])] : []),
+      ]),
+      message(said),
+      ...replies.map(message),
+      writing
+        ? this.replyBox(said, 't-disc-reply')
+        : el('div', { class: 't-disc-reply' }, [
+            el('button', { type: 'button', class: 't-disc-open', 'data-act': 'reply-open', 'data-id': said.id }, [replies.length > 0 ? `Reply · ${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}` : 'Reply']),
+          ]),
+    ]);
+  }
+
+  /** The comment being written on selected words, as a card. */
+  draftCard() {
+    return el('form', { class: 't-disc', 'data-card': DRAFT, 'data-submit': 'words', 'aria-current': 'true' }, [
+      el('p', { class: 't-disc-quote' }, [el('q', {}, [this.wordsDraft?.quote.trim() ?? ''])]),
+      el('div', { class: 't-disc-reply' }, [
+        el('textarea', { id: 'words-text', 'aria-label': 'Comment on the selected words', placeholder: 'Comment on these words' }, [this.wordsText]),
+        el('div', { class: 't-disc-bar' }, [
+          el('span', { class: 't-note' }, ['Everyone in the thread reads this.']),
+          el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'words-cancel' }, ['Cancel']),
+          el('button', { type: 'submit', class: 't-btn t-btn-primary' }, ['Comment ', kbd('⌘↵')]),
+        ]),
+      ]),
+    ]);
+  }
+
+  /**
+   * The page's discussions under it, where there is no room beside it: every one whose words this version has.
+   * @param {Places} places
+   * @param {Thread} thread
+   * @returns {HTMLElement[]}
+   */
+  pageDiscussions(places, thread) {
+    const here = places.words.filter((said) => this.talk.anchors.get(said.id) !== null);
+    if (here.length === 0 && this.wordsDraft === null) return [];
+    return [
+      el('section', { class: 't-page-discs', 'aria-label': 'Discussions on this page' }, [
+        el('div', { class: 't-section-head' }, [el('h2', {}, ['Discussions on this page']), el('span', { class: 't-n' }, [String(here.length)]), el('span', { class: 't-hint' }, ['Tap underlined words to open theirs'])]),
+        ...(this.wordsDraft && !this.pageFull ? [this.draftCard()] : []),
+        ...here.map((said) => this.discCard(said, places, thread)),
+      ]),
+    ];
+  }
+
+  /**
+   * A discussion whose words the version shown no longer has (or a thread that no longer shows its page): whole, in
+   * the history, under a line that says so.
+   * @param {ThreadComment} said
+   * @param {Places} places
+   * @param {Thread} thread
+   */
+  goneDisc(said, places, thread) {
+    const version = said.quote?.version;
+    const why = thread.main !== 'page' ? 'on words of the page' : `on words of version ${version ?? '?'} that this version no longer has`;
+    return el('div', { class: 't-gone' }, [
+      el('div', { class: 't-ev' }, [el('span', { class: 't-pip' }, [icon('doc')]), el('span', { class: 't-ev-text' }, [el('b', {}, [this.writerOf(said, thread)]), ` commented ${why}`]), el('time', { datetime: said.createdAt }, [when(said.createdAt)])]),
+      this.discCard(said, places, thread),
+    ]);
+  }
+
+  /**
+   * One line in the history for a discussion on the page's words, with Show.
+   * @param {ThreadComment} said
+   * @param {Places} places
+   * @param {Thread} thread
+   */
+  wordsLine(said, places, thread) {
+    const replies = (places.replies.get(said.id) ?? []).length;
+    return el('div', { class: 't-ev' }, [
+      el('span', { class: 't-pip' }, [icon('doc')]),
+      el('span', { class: 't-ev-text' }, [
+        el('b', {}, [this.writerOf(said, thread)]),
+        ' commented on ',
+        el('span', { class: 't-ev-on' }, [`“${(said.quote?.text ?? '').trim()}”`]),
+        ...(replies > 0 ? [` · ${replies} ${replies === 1 ? 'reply' : 'replies'}`] : []),
+        ' ',
+        el('button', { type: 'button', class: 't-text-btn', 'data-act': 'disc-show', 'data-id': said.id }, ['Show']),
+      ]),
+      el('time', { datetime: said.createdAt }, [when(said.createdAt)]),
+    ]);
+  }
+
+  /**
+   * One line in the history for an answer to the page's question: who, its words, and Show.
+   * @param {ThreadComment} said
+   * @param {Thread} thread
+   */
+  answerLine(said, thread) {
+    const words = said.body.length > 140 ? `${said.body.slice(0, 140).trimEnd()}…` : said.body;
+    return el('div', { class: 't-ev' }, [
+      el('span', { class: 't-pip' }, [icon('check')]),
+      el('span', { class: 't-ev-text' }, [
+        el('b', {}, [this.writerOf(said, thread)]),
+        ' answered on the page ',
+        el('span', { class: 't-ev-on' }, [`“${words}”`]),
+        ...(thread.main === 'page' ? [' ', el('button', { type: 'button', class: 't-text-btn', 'data-act': 'answer-show', 'data-q': said.question ?? '' }, ['Show'])] : []),
+      ]),
+      el('time', { datetime: said.createdAt }, [when(said.createdAt)]),
+    ]);
   }
 
   /**
@@ -2248,7 +2741,7 @@ class Threads {
   /**
    * @param {Overlay} overlay
    * @param {string} label
-   * @param {'narrow' | 'wide' | 'find' | 'form'} kind
+   * @param {'narrow' | 'wide' | 'find' | 'form' | 'drawer'} kind
    * @param {(Node | string)[]} body
    */
   openOverlay(overlay, label, kind, body) {
@@ -2651,8 +3144,7 @@ class Threads {
     this.commentPreview = false;
     this.audience = null;
     this.clearProblem();
-    const known = this.threads.get(thread.number);
-    if (known) this.threads.set(thread.number, { ...known, activityAt: new Date().toISOString(), waiting: this.member ? (known.waiting ?? false) : false });
+    this.touchThread(thread.number);
     await this.refreshShown(thread.number);
     this.main.scrollTo({ top: this.main.scrollHeight });
     this.say(onlyMe ? `Noted on #${thread.number}, for you alone` : audience === 'public' ? `Commented on #${thread.number}, for anyone` : `Commented on #${thread.number}`, null);
@@ -3171,6 +3663,14 @@ class Threads {
       return;
     }
     const button = target.closest('[data-act], [data-go]');
+    // A card beside the page, clicked anywhere but its controls, is the discussion chosen: its words light up.
+    const card = button === null ? target.closest('.t-rail [data-card]') : null;
+    if (card instanceof HTMLElement && card.dataset.card !== DRAFT && card.dataset.card !== this.activeDisc && !target.closest('textarea')) {
+      this.activeDisc = card.dataset.card ?? null;
+      this.keepScroll = true;
+      this.render();
+      return;
+    }
     if (!(button instanceof HTMLElement)) return;
     if (button.dataset.go === 'today' || button.dataset.go === 'list' || button.dataset.go === 'people') {
       event.preventDefault();
@@ -3327,6 +3827,34 @@ class Threads {
         this.keepScroll = true;
         this.render();
         break;
+      case 'discussions':
+        this.openDiscussion('all');
+        break;
+      case 'reply-open':
+        this.replyingTo = button.dataset.id ?? null;
+        if (this.shown && placesOf(this.shown.comments).words.some((said) => said.id === this.replyingTo)) this.activeDisc = this.replyingTo;
+        this.keepScroll = true;
+        this.render();
+        focusIn(this.overlay === 'discussion' ? this.dialog : this.main, '#reply-text');
+        break;
+      case 'reply-cancel':
+        this.replyingTo = null;
+        this.keepScroll = true;
+        this.render();
+        break;
+      case 'words-cancel':
+        this.wordsDraft = null;
+        this.wordsText = '';
+        if (this.overlay === 'discussion') this.closeOverlay();
+        this.keepScroll = true;
+        this.render();
+        break;
+      case 'disc-show':
+        this.showDisc(button.dataset.id ?? '');
+        break;
+      case 'answer-show':
+        this.showAnswer(button.dataset.q ?? '');
+        break;
       case 'page-versions':
         if (thread && this.shown?.page) this.openVersions(thread, this.shown.page);
         break;
@@ -3390,6 +3918,8 @@ class Threads {
     if (!(target instanceof HTMLElement)) return;
     if (target.id === 'find-words' && target instanceof HTMLInputElement) this.findFor(target.value);
     else if (target.id === 'comment-text' && target instanceof HTMLTextAreaElement && this.shown) this.drafts.set(this.shown.thread.number, target.value);
+    else if (target.id === 'words-text' && target instanceof HTMLTextAreaElement) this.wordsText = target.value;
+    else if (target.id === 'reply-text' && target instanceof HTMLTextAreaElement && this.replyingTo !== null) this.replyDrafts.set(this.replyingTo, target.value);
     else if (target.id.startsWith('edit-') && this.editing && this.shown) {
       this.readEditor();
       this.main.querySelector('#edit-preview')?.replaceChildren(...this.editorPreview(this.shown.thread, this.editing));
@@ -3429,6 +3959,8 @@ class Threads {
   submit(kind) {
     const thread = this.shown?.thread;
     if (kind === 'comment' && thread) void this.sendComment(thread);
+    if (kind === 'words' && thread) void this.sendWords(thread);
+    if (kind === 'reply' && thread) void this.sendReply(thread);
     if (kind === 'edit' && thread) void this.saveEdit(thread);
     if (kind === 'new') void this.saveNew();
     if (kind === 'invite') void this.sendInvite();
@@ -3483,7 +4015,13 @@ class Threads {
       return;
     }
     if (event.key === 'Escape') {
-      if (this.pageFull) {
+      if (this.wordsDraft !== null || this.replyingTo !== null) {
+        event.preventDefault();
+        this.wordsDraft = null;
+        this.replyingTo = null;
+        this.keepScroll = true;
+        this.render();
+      } else if (this.pageFull) {
         event.preventDefault();
         this.pageFull = false;
         this.keepScroll = true;

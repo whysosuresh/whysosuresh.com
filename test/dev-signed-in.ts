@@ -14,9 +14,11 @@
 // (with his own notes on her), Tomás wrote on the public thread with an address (Priya gave none, so she is no
 // person), and Rex's only note was junk he dropped, so Rex sits under the people only in dropped threads. Pages are seeded the way the sync saves them, through the threads' call with its
 // played token: the sealed probe (test/fixtures/sealed-probe.html, every line of which should read "blocked" in the
-// browser), and each file given with `--page <file>` (an
+// browser), a made-up page that asks questions ("The review on Wednesday", shared with the guest and Asha), with
+// answers, a discussion on its words, one on words its second version cut, and replies, and each file given with
+// `--page <file>` (an
 // artifact's HTML as the Artifact tool's read saved it) as a version of one thread. Requests reach the Worker at
-// this local address, so the script a page carries addresses its height to it, as it addresses whysosuresh.com
+// this local address, so the bridge a page carries addresses what it says to it, as it addresses whysosuresh.com
 // live. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
 // played keys.
 
@@ -51,6 +53,29 @@ async function asSync(path: string, body: unknown): Promise<Record<string, unkno
   });
   if (!response.ok) throw new Error(`seeding ${path} answered ${response.status}: ${await response.text()}`);
   return (await response.json()) as Record<string, unknown>;
+}
+
+/**
+ * A made-up page that asks questions, as Claude builds one for a thread: each question marked with an id that stays
+ * fixed across versions, and a line for claude.ai alone, which the bridge hides on the thread. Version 2 cuts the
+ * demo from twenty minutes to twelve.
+ */
+function reviewPage(version: number): string {
+  const demo = version === 1 ? "twenty minutes of demo" : "twelve minutes of demo";
+  return `<!doctype html><html><head><meta charset="utf-8"><title>The review</title><style>body{font:16px/1.6 Georgia,serif;margin:0;padding:32px 40px;background:#fbfaf7;color:#1d1b18}h1{font-size:28px;margin:0 0 6px}h2{font-size:18px;border-bottom:1px solid #e4e0d6;padding-bottom:6px;margin-top:28px}small{font:600 11px system-ui;letter-spacing:.1em;text-transform:uppercase;color:#2b4c7e}.row{display:grid;grid-template-columns:92px 1fr;gap:14px}.row span{font:13px/1.9 ui-monospace,monospace;color:#6b665d}.q p{font-weight:600;margin:18px 0 6px}@media (prefers-color-scheme:dark){body{background:#1a1916;color:#ece8df}}</style></head><body>
+<small>Company · Wednesday 12 November, 15:00 · version ${version}</small>
+<h1>The review: how the half hour runs</h1>
+<p data-outside-thread><em>Answer these on the thread.</em></p>
+<h2>The half hour</h2>
+<div class="row"><span>0–3 min</span><p>Dev opens and says why we are in the room.</p></div>
+<div class="row"><span>3–15 min</span><p>Then ${demo}, told as a story: the setup, the three things that broke last month, then the same job on the new runner.</p></div>
+<div class="row"><span>15–25 min</span><p>Questions. Product questions go to Suresh, money questions go to Asha. The live app is shown only if someone asks to see it running.</p></div>
+<div class="row"><span>25–30 min</span><p>Next steps, written into the thread before anyone leaves.</p></div>
+<h2>Over to you</h2>
+<div class="q" data-thread-question="right-part"><p>Is your part the right length, or should it be longer or shorter?</p></div>
+<div class="q" data-thread-question="order"><p>Would you run the half hour in a different order?</p></div>
+<div class="q" data-thread-question="missing"><p>Is there something the room will expect that isn't here?</p></div>
+</body></html>`;
 }
 
 /** Made-up threads in every tab and source, so each screen has something to show. */
@@ -137,6 +162,42 @@ async function seed(): Promise<void> {
   await asSync(`/${pricing}/text`, { field: "summary", text: "Decided: small teams use it free until launch.\nOpen: per seat, per run, or flat.\nWaiting on: the cost per run.\nNext: pick one on Friday." });
   // Public too, and not shared with the invited person, so they read it in the public view, its page from the public address.
   await asPerson(owner, `/${pricing}`, { action: "publish" });
+  // A page that asks questions, shared with the guest and Asha: their answers under two of its questions, a discussion
+  // on its words with a reply, one on words of version 1 that version 2 cut, a reply under a general comment, and an
+  // Only me comment with his own reply, which the guest never sees. The meeting is made up.
+  const review = await add("chat:seed-review", { title: "The review on Wednesday: how it runs", status: "discuss", space: "company", body: "The plan for the half hour, as a page." });
+  const asha = harness.access.memberClaims("asha@example.com");
+  const guestClaims = harness.access.memberClaims(guest);
+  const commentAs = async (claims: Record<string, unknown>, body: Record<string, unknown>): Promise<string> => {
+    const response = await harness.fetch(`${SITE}/threads/api/threads/${review}/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: SITE, "Cf-Access-Jwt-Assertion": harness.access.token(claims) },
+      body: new TextEncoder().encode(JSON.stringify(body)),
+    });
+    if (response.status !== 201) throw new Error(`seeding a comment on #${review} answered ${response.status}: ${await response.text()}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return ((await response.json()) as { comment: { id: string } }).comment.id;
+  };
+  await page(review, new TextEncoder().encode(reviewPage(1)), "https://claude.ai/artifact/example-review");
+  await asPerson(owner, `/${review}/people`, { add: { email: guest, name: "Meera" } });
+  await asPerson(owner, `/${review}/people`, { add: { email: "asha@example.com", name: "Asha" } });
+  const asked = await commentAs(owner, { body: "The plan for Wednesday. Answer the questions at the end, or select anything you would change." });
+  await commentAs(asha, { body: "Will do tonight.", parent: asked });
+  const secret = await commentAs(owner, { body: "Ask Dev about the budget before the meeting.", audience: "owner" });
+  await commentAs(owner, { body: "Asked. It holds.", parent: secret });
+  const cut = await commentAs(asha, { body: "Twenty is a lot for this room. Fifteen?", quote: "twenty minutes of demo", prefix: "Then ", suffix: ", told as a story", version: 1 });
+  await commentAs(owner, { body: "Agreed. Version 2 cuts it to twelve.", parent: cut });
+  await page(review, new TextEncoder().encode(reviewPage(2)), "https://claude.ai/artifact/example-review");
+  await commentAs(guestClaims, { body: "Fine as is. Maybe two more minutes for the demo.", question: "order" });
+  await commentAs(asha, { body: "Pricing. Someone will ask what it costs.", question: "missing" });
+  const live = await commentAs(guestClaims, {
+    body: "I would show it anyway, even for two minutes. Engineers want to see it run.",
+    quote: "The live app is shown only if someone asks",
+    prefix: "money questions go to Asha. ",
+    suffix: " to see it running.",
+    version: 2,
+  });
+  await commentAs(owner, { body: "Fair. Two minutes at the end of the demo, then questions.", parent: live });
   const slides = await add("chat:seed-slides", { title: "Launch talk slides", status: "act", space: "stigmer", body: "The launch talk, as slides on claude.ai." });
   await asSync(`/${slides}/link`, { url: "https://claude.ai/artifact/example-slides", title: "Launch talk" });
 

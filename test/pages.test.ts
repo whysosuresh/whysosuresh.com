@@ -4,10 +4,13 @@
 // fresh key; the page becomes the thread's main section; a page with no doctype gets claude.ai's skeleton; a page
 // is at most 16 MiB, refused before it is read; a body that isn't UTF-8 or isn't HTML is refused, and a refused or
 // unkept save leaves no object; the owner can't save one; a version is served with exactly the frame's headers and
-// the height script addressed to the site, revalidated by its ETag; a link is a claude.ai address only, and
+// the bridge after the site's origin as JSON, revalidated by an ETag carrying the bridge's hash; a link is a claude.ai address only, and
 // clearing it goes back to the page or the text; and the owner's link write only from his own page.
 
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { BRIDGE, SCRIPT_VERSION } from "../src/frame-bridge.ts";
 import { SITE, startHarness, type Harness } from "./harness.ts";
 
 const THREADS = `${SITE}/threads/api/threads`;
@@ -177,7 +180,7 @@ describe("saving a page", () => {
 });
 
 describe("reading a page", () => {
-  it("answers the stored document with exactly the frame's headers and the height script addressed to the site", async () => {
+  it("answers the stored document with exactly the frame's headers and the bridge, addressed to the site", async () => {
     const number = await thread();
     await save(number, PAGE);
     const response = await read(`/${number}/pages/1`);
@@ -191,13 +194,15 @@ describe("reading a page", () => {
       "referrer-policy": "strict-origin-when-cross-origin",
       "cross-origin-resource-policy": "same-origin",
     });
-    expect(headers.etag).toMatch(/^"[^"]+-h1"$/);
+    expect(headers.etag).toMatch(new RegExp(`^"[^"]+-${SCRIPT_VERSION}"$`));
     const text = await response.text();
     expect(text.startsWith(PAGE)).toBe(true);
     const script = text.slice(PAGE.length);
-    expect(script).toContain(`const o=${JSON.stringify(SITE)}`);
-    expect(script).toContain("parent.postMessage({whysosureshPageHeight:n},o)");
-    expect(script).not.toContain('"*"');
+    expect(script).toBe(`\n<script type="application/json" data-whysosuresh-frame>${JSON.stringify({ origin: SITE })}</script>\n<script type="module">${BRIDGE}</script>\n`);
+    // The bridge speaks only to the origin the JSON names, and is the file tools/frame/frame.ts generated from.
+    expect(BRIDGE).toContain("parent.postMessage({ [KEY]: kind, ...fields }, origin)");
+    expect(BRIDGE).toBe(readFileSync(new URL("../frame/bridge.js", import.meta.url), "utf8"));
+    expect(SCRIPT_VERSION).toBe(createHash("sha256").update(BRIDGE).digest("hex").slice(0, 12));
     expect((await read(`/${number}/pages/1`, "sync")).status).toBe(200);
   });
 
@@ -211,7 +216,7 @@ describe("reading a page", () => {
     expect(again.status).toBe(304);
     expect(again.headers.get("content-security-policy")).toBe(FRAME_CSP);
     expect(again.headers.get("etag")).toBe(tag);
-    const older = await read(`/${number}/pages/1`, "owner", { "If-None-Match": tag.replace("-h1", "-h0") });
+    const older = await read(`/${number}/pages/1`, "owner", { "If-None-Match": tag.replace(`-${SCRIPT_VERSION}`, "-h1") });
     expect(older.status).toBe(200);
     await older.arrayBuffer();
   });
