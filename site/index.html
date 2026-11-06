@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <!-- whysosuresh.com's home page: his photo large beside a short greeting and the ways to reach him, with
-     his Now line under them; then his latest videos and what's happening, the threads he posted, newest
-     first, beside a light column of the things he makes and where else to find him (one column on a
-     phone). The Worker writes the Now line and the posts in (src/home.ts), and shows each of their
+     his Now line under them; then what's happening, the threads he posted, newest first, beside a light
+     column of the things he makes and where else to find him (one column on a phone, and while nothing is
+     posted). The Worker writes the Now line and the posts in (src/home.ts), and shows each of their
      sections only when it has something; with nothing posted the page is this file as it is. System type
      and black-and-white greys, so it matches capsjump.com and loads no web font. Its one script is the
      note flow, opened by "Send a note" and at /#talk or /#talk/<topic>. -->
@@ -57,25 +57,13 @@
     </section>
 
     <div class="home-grid">
-      <div class="home-main">
-        <section aria-labelledby="videos">
-          <div class="section-head">
-            <h2 id="videos">Latest videos</h2>
-            <a class="fine" href="https://www.youtube.com/@whysosuresh">All on YouTube</a>
-          </div>
-          <div class="player">
-            <iframe src="https://www.youtube-nocookie.com/embed/videoseries?list=UUkdfCh9gN60s_h_nfTYEwyg" title="Latest videos" loading="lazy" allow="encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin"></iframe>
-          </div>
-        </section>
-
-        <section aria-labelledby="happening" data-feed hidden>
-          <div class="section-head">
-            <h2 id="happening">What's happening</h2>
-            <a class="fine" href="/feed.xml">Subscribe</a>
-          </div>
-          <ol class="feed" data-feed-list></ol>
-        </section>
-      </div>
+      <section class="home-main" aria-labelledby="happening" data-feed hidden>
+        <div class="section-head">
+          <h2 id="happening">What's happening</h2>
+          <a class="fine" href="/feed.xml">Subscribe</a>
+        </div>
+        <ol class="feed" data-feed-list></ol>
+      </section>
 
       <aside class="home-side" aria-label="More from Suresh">
         <section aria-labelledby="makes">

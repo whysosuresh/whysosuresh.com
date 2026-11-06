@@ -195,7 +195,7 @@ describe("the home page", () => {
     const items = itemsOf(page);
     expect(items.map(titleOf)).toEqual(numbers.slice(1).reverse().map((_, i) => `Post ${LIMIT - i}`));
     expect(items[0]).toContain(`href="/threads/${numbers[LIMIT]}"`);
-    expect(page).toMatch(/<section aria-labelledby="happening" data-feed>/);
+    expect(page).toMatch(/<section class="home-main" aria-labelledby="happening" data-feed>/);
     expect(page).not.toMatch(/style="/);
   });
 
@@ -273,7 +273,7 @@ describe("the home page", () => {
     await answer(await setNow(`Getting <b>Stigmer</b> 0.1 into teams' hands`));
     const page = await (await home()).text();
     expect(page).toContain(`<p class="now" data-now><b>Now</b> <span data-now-text>Getting &lt;b&gt;Stigmer&lt;/b&gt; 0.1 into teams' hands</span></p>`);
-    expect(page).toMatch(/<section aria-labelledby="happening" data-feed hidden>/);
+    expect(page).toMatch(/<section class="home-main" aria-labelledby="happening" data-feed hidden>/);
     await answer(await setNow(""));
     expect(await (await home()).text()).toBe(INDEX);
   });

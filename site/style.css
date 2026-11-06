@@ -195,17 +195,6 @@ p { margin: 0; }
 
 /* A section's head: its title, with a quiet link to the rest on the right. */
 .section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
-/* The videos: the channel's own player, sized to the column. */
-.player {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  border-radius: 14px;
-  overflow: hidden;
-  background: #000;
-  border: 1px solid var(--line);
-}
-.player iframe { display: block; width: 100%; height: 100%; border: 0; }
-
 /* Things he makes: three plain entries, same edges and baselines. */
 .makes {
   display: grid;
@@ -235,28 +224,24 @@ p { margin: 0; }
 .links { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0; padding: 0; list-style: none; }
 .links a { color: var(--ink); font-weight: 500; }
 
-/* The home page: wider than the other pages, so what's happening has the main column beside a light side column of
-   what he makes and where to find him; one column on a phone. The bar, the column and the foot widen together, so
-   their edges stay in line. */
+/* The home page: wider than the other pages, so on a wide screen what's happening has the main column beside a light
+   side column of what he makes and where to find him. The bar, the column and the foot widen together, so their edges
+   stay in line. On a phone, and while nothing is posted (the feed's section is hidden), it is one column, what he
+   makes and where to find him at full width as before the feed. */
 .home .bar, .home main, .home .foot { max-width: 1040px; }
-.home-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 240px;
-  gap: 0 48px;
-  align-items: start;
-}
 .home-main { min-width: 0; }
-.home-side { position: sticky; top: 0; }
-.home-side h2 { font-size: 17px; }
-.home-side .makes { grid-template-columns: 1fr; gap: 10px; }
-.home-side .makes a { padding: 14px 16px; }
-.home-side .makes p { display: none; }
-@media (max-width: 820px) {
-  .home-grid { grid-template-columns: 1fr; }
-  .home-side { position: static; }
-  .home-side h2 { font-size: 24px; }
-  .home-side .makes { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-  .home-side .makes p { display: block; }
+@media (min-width: 821px) {
+  .home-grid:has(> .home-main:not([hidden])) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 240px;
+    gap: 0 48px;
+    align-items: start;
+  }
+  .home-grid:has(> .home-main:not([hidden])) .home-side { position: sticky; top: 0; }
+  .home-grid:has(> .home-main:not([hidden])) .home-side h2 { font-size: 17px; }
+  .home-grid:has(> .home-main:not([hidden])) .makes { grid-template-columns: 1fr; gap: 10px; }
+  .home-grid:has(> .home-main:not([hidden])) .makes a { padding: 14px 16px; }
+  .home-grid:has(> .home-main:not([hidden])) .makes p { display: none; }
 }
 
 /* The Now line under the greeting: what he is doing now, in one line he changes from Today. */

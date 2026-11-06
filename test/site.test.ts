@@ -307,10 +307,11 @@ describe("index.html, the home page the Worker writes the feed into", () => {
     expect(doc.querySelectorAll("[data-feed] a").map((el) => attr(el, "href"))).toEqual(["/feed.xml"]);
   });
 
-  it("puts the videos and the feed in the main column, and what he makes and where else to find him in the side column", async () => {
+  it("puts the feed in the main column, and what he makes and where else to find him in the side column", async () => {
     const doc = await parse("index.html");
     const headings = (selector: string): string[] => doc.querySelectorAll(`${selector} h2`).map((el) => attr(el, "id"));
-    expect(headings(".home-main")).toEqual(["videos", "happening"]);
+    expect(doc.querySelectorAll(".home-main[data-feed]")).toHaveLength(1);
+    expect(headings(".home-main")).toEqual(["happening"]);
     expect(headings(".home-side")).toEqual(["makes", "elsewhere"]);
     expect(doc.querySelectorAll("body")[0]?.getAttributeValue("class")).toBe("home");
   });
