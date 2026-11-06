@@ -165,6 +165,7 @@ describe("a list", () => {
     const filed = await seed({ status: "filed", kind: "feedback", filed_link: "https://github.com/example/notes/issues/1" });
 
     const expected: Record<string, string[]> = {
+      pending: [discuss.id, act.id, look[1]?.id ?? "", look[0]?.id ?? ""],
       look: [look[1]?.id ?? "", look[0]?.id ?? ""],
       act: [act.id],
       discuss: [discuss.id],
@@ -176,7 +177,7 @@ describe("a list", () => {
       expect(response.headers.get("Cache-Control")).toBe("no-store");
       const answer = (await response.json()) as ListAnswer;
       expect(answer.threads.map((thread) => thread.id)).toEqual(ids);
-      expect(answer.counts).toEqual({ look: 2, act: 1, discuss: 1, done: 3 });
+      expect(answer.counts).toEqual({ pending: 4, look: 2, act: 1, discuss: 1, done: 3 });
       expect(answer.next).toBeNull();
       expect(Object.keys(answer).sort()).toEqual(["counts", "next", "threads"]);
     }
