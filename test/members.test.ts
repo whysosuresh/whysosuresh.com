@@ -13,8 +13,9 @@
 // history with where it moved from, their own place marked as theirs by their address; being in a meeting grants
 // nothing, at the door or at sign-in. The owner's list says how many people each thread is shared with, and which wait on him: an invited person had
 // the last word, until he comments, moves or edits. Someone who answered one of his asks and whom he invited back to
-// their own thread reads it with the ask's page and their answers, answers again there as themselves, never sees who
-// else answered or the ask's own thread, and is refused every ask call.
+// their own thread reads it with the ask's page and their answers, which read as their own (by the address the thread
+// was made with) and as nobody else's, answers again there as themselves, never sees who else answered or the ask's
+// own thread, and is refused every ask call.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { OWNER, SITE, startHarness, type Harness } from "./harness.ts";
@@ -557,22 +558,39 @@ describe("a respondent he invites back to their thread", () => {
     return { ask, theirs };
   }
 
-  it("reads their thread as an answer to the ask, by its slug and title, with the ask's page and their answer", async () => {
+  it("reads their thread as an answer to the ask, by its slug and title, with the ask's page and their answer as their own", async () => {
     const { theirs } = await invitedBack();
-    const shown = await answer<Shown & { page: { version: number } | null; answeredBy?: unknown }>(await call(`/threads/${theirs}`, { as: { email: MEERA } }));
+    type Read = Omit<Shown, "comments"> & { comments: { author: string; body: string; mine: boolean }[]; page: { version: number } | null; answeredBy?: unknown };
+    const shown = await answer<Read>(await call(`/threads/${theirs}`, { as: { email: MEERA } }));
     expect(shown.thread.ask).toEqual({ slug: "tuesday-demo", title: "Tuesday demo" });
     expect(shown.page?.version).toBe(1);
-    expect(shown.comments.map((one) => one.body)).toEqual(["The resume after the crash."]);
+    expect(shown.comments.map((one) => [one.author, one.body, one.mine])).toEqual([["visitor", "The resume after the crash.", true]]);
     expect(shown.answeredBy).toBeUndefined();
     const frame = await call(`/threads/${theirs}/pages/1`, { as: { email: MEERA } });
     expect(frame.status).toBe(200);
     expect(await frame.text()).toContain("What stood out?");
   });
 
-  it("answers again there as themselves, on a question the page asks", async () => {
+  it("reads their answer as nobody else's, to another person he invites to the same thread", async () => {
     const { theirs } = await invitedBack();
-    const again = await answer<{ comment: Record<string, unknown> }>(await call(`/threads/${theirs}/comments`, { as: { email: MEERA }, body: { body: "Our support triage.", question: "fit" } }), 201);
+    await invite(theirs, DEV, "Dev");
+    const read = async (email: string): Promise<[string, boolean][]> =>
+      (await answer<{ comments: { body: string; mine: boolean }[] }>(await call(`/threads/${theirs}`, { as: { email } }))).comments.map((one) => [one.body, one.mine]);
+    expect(await read(DEV)).toEqual([["The resume after the crash.", false]]);
+    expect(await read(MEERA)).toEqual([["The resume after the crash.", true]]);
+  });
+
+  it("answers again there as themselves, on a question the page asks, and every answer of theirs reads as their own", async () => {
+    const { theirs } = await invitedBack();
+    const meera = { as: { email: MEERA } } as const;
+    const again = await answer<{ comment: Record<string, unknown> }>(await call(`/threads/${theirs}/comments`, { ...meera, body: { body: "Our support triage.", question: "fit" } }), 201);
     expect(again.comment).toMatchObject({ author: "member", name: "Meera", question: "fit", mine: true });
+    await answer(await call(`/threads/${theirs}/comments`, { ...meera, body: { body: "The resume, and how fast.", question: "stood-out" } }), 201);
+    const shown = await answer<{ comments: { author: string; body: string; question: string | null; mine: boolean }[] }>(await call(`/threads/${theirs}`, meera));
+    expect(shown.comments.filter((one) => one.question === "stood-out").map((one) => [one.author, one.body, one.mine])).toEqual([
+      ["visitor", "The resume after the crash.", true],
+      ["member", "The resume, and how fast.", true],
+    ]);
   });
 
   it("never reads the ask's own thread or its page, and is refused every ask call", async () => {

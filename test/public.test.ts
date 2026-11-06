@@ -11,7 +11,7 @@
 // answer, and a stranger reads other people's answers to a question only once their own key has answered it. Answers
 // count against their own daily limits, apart from notes'. Only he drops a visitor's words, shows them again, or
 // holds them; members see shown ones and never a waiting or dropped one, an email, or the events that would tell
-// them of one. A visitor's words make the thread wait on him. The sync never writes for anyone. Nobody replies under
+// them of one, and a visitor's note is never an invited person's own, even sent under their address. A visitor's words make the thread wait on him. The sync never writes for anyone. Nobody replies under
 // a public comment or a visitor's note, and invited people's answers, comments on words and replies never reach a
 // stranger, nor does a meeting or anyone in it. A public thread's address carries its title and preview tags,
 // escaped, with no ETag; a private and a missing number get the shell byte for byte.
@@ -512,6 +512,18 @@ describe("what invited people see on a public thread", () => {
       ["Sam", "Other Sam.", visitor(KEY_B), "first-job"],
     ]);
     expect(JSON.stringify(view)).not.toContain("senderEmail");
+  });
+
+  it("never reads a visitor's note as theirs, even one sent under their address, and reads their own comment as theirs", async () => {
+    const n = await published();
+    await answer(await call(`/threads/${n}/people`, { body: { add: { email: MEERA, name: "Meera" } } }));
+    await noteOn(n, { body: "Under her address.", email: MEERA, name: "Meera" });
+    await answer(await call(`/threads/${n}/comments`, { as: { email: MEERA }, body: { body: "Hers." } }), 201);
+    const view = await answer<{ comments: { author: string; body: string; mine: boolean }[] }>(await call(`/threads/${n}`, { as: { email: MEERA } }));
+    expect(view.comments.map((comment) => [comment.author, comment.body, comment.mine])).toEqual([
+      ["visitor", "Under her address.", false],
+      ["member", "Hers.", true],
+    ]);
   });
 });
 
