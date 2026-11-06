@@ -197,10 +197,13 @@ time{color:var(--faint);font-size:11.5px;white-space:nowrap}
 .list{border-top:1px solid var(--line)}
 .head{padding:6px 12px 0;color:var(--faint);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 .problem{padding:0 12px 6px;color:var(--ink);font-size:12px;font-weight:600}`;
+/**
+ * The Comment pill sits on the page's own ground, which may be light or dark whatever the device says, so it is one
+ * look on every page: black, with a pale ring that keeps it apart from a dark page.
+ */
 const PILL = `:host{all:initial;position:absolute;z-index:2147483647}
 :host([hidden]){display:none}
-button{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border:1px solid #0a0a0a;border-radius:999px;background:#0a0a0a;color:#fff;font:600 12.5px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;box-shadow:0 8px 20px -10px rgba(0,0,0,.5);cursor:pointer}
-@media (prefers-color-scheme:dark){button{background:#f1f1f1;color:#0a0a0a;border-color:#f1f1f1}}
+button{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border:0;border-radius:999px;background:#0a0a0a;color:#fff;font:600 12.5px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;box-shadow:0 0 0 1px rgba(255,255,255,.55),0 8px 20px -8px rgba(0,0,0,.6);cursor:pointer}
 button:focus-visible{outline:2px solid #888;outline-offset:2px}`;
 /** How the words of a discussion are marked: a faint ground and an underline, which read on a light or a dark page. */
 const MARKS = '[data-outside-thread]{display:none!important}::highlight(whysosuresh){background-color:rgba(128,128,128,.2);text-decoration:underline 2px}::highlight(whysosuresh-on){background-color:rgba(128,128,128,.42);text-decoration:underline 2px}';
