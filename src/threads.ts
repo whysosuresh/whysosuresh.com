@@ -368,11 +368,22 @@ function commentView(row: CommentRow, reader: Reader): { readonly [key: string]:
 /**
  * Whether the reader wrote a comment, so the page can show their own answer in its box and their comments as theirs:
  * the owner's for him, the sync's for the sync, and for an invited person the comments whose person has their address,
- * never their name, which two people may share. The address itself is never shown.
+ * never their name, which two people may share. The address itself is never shown. Those are their own comments as a
+ * member, and their answers to an ask, made before he invited them back, on the thread their address made. A visitor's
+ * note on a public thread is never theirs, even under their address, because anyone may type an address there.
  */
 function isMine(row: CommentRow, reader: Reader): boolean {
   if (reader.caller !== "member") return row.author === reader.caller;
-  return row.author === "member" && row.person_email === reader.email;
+  return row.person_email === reader.email && (row.author === "member" || isAskAnswer(row));
+}
+
+/**
+ * Whether a comment is a visitor's answer to an ask: a visitor's comment for the thread's people, which `answerAsk` in
+ * `src/store.ts` alone writes (a public thread's notes and answers are for anyone), always under the person the
+ * response thread was made for.
+ */
+function isAskAnswer(row: CommentRow): boolean {
+  return row.author === "visitor" && row.audience === "thread";
 }
 
 /** An event; an invited person reads its data without what is the owner's own (`OWNERS_DATA`). */

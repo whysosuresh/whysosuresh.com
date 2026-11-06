@@ -179,7 +179,10 @@ export interface PageRow {
 export interface CommentRow {
   id: string;
   thread_id: string;
-  /** `owner`, `sync`, `member` for an invited person, or `visitor` for a note sent on a public thread. */
+  /**
+   * `owner`, `sync`, `member` for an invited person, or `visitor` for a visitor's comment: a note sent on a public
+   * thread or an answer to a public page's question (both `audience` `public`), or an answer to an ask (`thread`).
+   */
   author: string;
   body: string;
   created_at: string;
@@ -193,7 +196,10 @@ export interface CommentRow {
   person_id: string | null;
   person_name: string | null;
   person_number: number | null;
-  /** A visitor's note only: the name and email they typed, each null when not given. */
+  /**
+   * A visitor's comment only: the name and email they typed, each null when not given. An ask answer carries its
+   * thread's name and no email; its person is the thread's.
+   */
   sender_name: string | null;
   sender_email: string | null;
   /**
