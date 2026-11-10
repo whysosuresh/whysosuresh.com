@@ -1333,6 +1333,8 @@ export interface FeedRow {
   number: number;
   title: string | null;
   body: string;
+  /** Its main section as it now stands, `text`, `page` or `link`, which picks the address a reader lands on. */
+  main: Main;
   feed_at: string;
   /** The notes a stranger reads under it: shown, written as Public, neither a reply nor an answer to its page. */
   notes: number;
@@ -1358,7 +1360,7 @@ export async function homeFeed(db: D1Database, limit: number): Promise<{ items: 
   const [items, now] = await db.batch([
     db
       .prepare(
-        `SELECT number, title, body, feed_at,
+        `SELECT number, title, body, main, feed_at,
            (SELECT COUNT(*) FROM comments WHERE comments.thread_id = threads.id AND comments.audience = 'public' AND comments.state = 'shown'
              AND comments.question IS NULL AND comments.parent_id IS NULL) AS notes
          FROM threads WHERE ${PUBLIC} AND threads.feed_at IS NOT NULL ORDER BY threads.feed_at DESC, threads.number DESC LIMIT ?1`,

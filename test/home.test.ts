@@ -3,7 +3,8 @@
 // home page and taking it off are moves of the owner's alone, each with its event, only for a public thread (409
 // `not-public`), and unpublishing takes a thread off; the home page shows the posted public threads newest first, at
 // most 20, each with its title or number, its first block as plain text, its day in his zone and its notes above
-// zero, every value as text; a thread that isn't posted, isn't public or isn't his never shows, even when its row is
+// zero, every value as text, and linked at its address, or its `?full` address when its main section is a page, so a
+// reader lands on the page full screen; a thread that isn't posted, isn't public or isn't his never shows, even when its row is
 // changed by hand; the Now line shows and an empty newest line hides it; with nothing to show, or a failing read, the
 // page is site/index.html byte for byte, and a rewritten one carries the site's headers and no ETag; /feed.xml is an
 // Atom feed of the same items, escaped, and a valid empty one with nothing posted; the Now line's call is the owner's
@@ -79,6 +80,23 @@ interface Moved {
 /** A thread of his own, made public and posted on the home page. Answers its number. */
 async function posted(fields: Record<string, unknown> = {}): Promise<number> {
   const n = await thread(fields);
+  await answer(await move(n, "publish"));
+  await answer(await move(n, "post"));
+  return n;
+}
+
+/** A thread of his own whose main section is a small page the sync saved, made public and posted. Answers its number. */
+async function postedPage(fields: Record<string, unknown> = {}): Promise<number> {
+  const n = await thread(fields);
+  const html = new TextEncoder().encode("<!doctype html><title>A story</title><h1>A story</h1><p>What happened.</p>");
+  await answer(
+    await harness.fetch(`${SITE}/threads/api/threads/${n}/pages`, {
+      method: "POST",
+      headers: { "Content-Type": "text/html; charset=utf-8", "Cf-Access-Jwt-Assertion": token("sync") },
+      body: html,
+    }),
+    201,
+  );
   await answer(await move(n, "publish"));
   await answer(await move(n, "post"));
   return n;
@@ -197,6 +215,20 @@ describe("the home page", () => {
     expect(items[0]).toContain(`href="/threads/${numbers[LIMIT]}"`);
     expect(page).toMatch(/<section class="home-main" aria-labelledby="happening" data-feed>/);
     expect(page).not.toMatch(/style="/);
+  });
+
+  it("links a posted page's title and Read to its full-screen address, and a posted text thread to its own", async () => {
+    const story = await postedPage({ title: "A story" });
+    await postedAt(story, "2026-11-06T09:00:00.000Z");
+    const text = await posted({ title: "Plain" });
+    await postedAt(text, "2026-11-05T09:00:00.000Z");
+    const items = itemsOf(await (await home()).text());
+    expect(items.map(titleOf)).toEqual(["A story", "Plain"]);
+    const links = items.map((item) => [...item.matchAll(/<a href="([^"]*)">/g)].map((match) => match[1]));
+    expect(links).toEqual([
+      [`/threads/${story}?full`, `/threads/${story}?full`],
+      [`/threads/${text}`, `/threads/${text}`],
+    ]);
   });
 
   it("never shows a thread that isn't posted, isn't public or isn't his, even with its row changed by hand", async () => {
@@ -332,6 +364,20 @@ describe("/feed.xml", () => {
     expect(entries[1]).toContain(`<id>tag:whysosuresh.com,2026:thread-${first}</id>`);
     expect(feed).toMatch(/<\/author>\n {2}<entry>/);
     expect(/<feed[^>]*>[\s\S]*?<updated>([^<]*)<\/updated>/.exec(feed)?.[1]).toBe("2026-11-06T09:00:00.000Z");
+  });
+
+  it("links a posted page's entry to its full-screen address, its id still the thread's, and a text entry to its own", async () => {
+    const story = await postedPage({ title: "A story" });
+    await postedAt(story, "2026-11-06T09:00:00.000Z");
+    const text = await posted({ title: "Plain" });
+    await postedAt(text, "2026-11-05T09:00:00.000Z");
+    const feed = await (await harness.fetch(`${SITE}/feed.xml`)).text();
+    const entries = [...feed.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map((match) => match[1] ?? "");
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toContain(`<id>tag:whysosuresh.com,2026:thread-${story}</id>`);
+    expect(entries[0]).toContain(`<link rel="alternate" type="text/html" href="${SITE}/threads/${story}?full"/>`);
+    expect(entries[1]).toContain(`<id>tag:whysosuresh.com,2026:thread-${text}</id>`);
+    expect(entries[1]).toContain(`<link rel="alternate" type="text/html" href="${SITE}/threads/${text}"/>`);
   });
 
   it("answers only GET and HEAD", async () => {
