@@ -15,7 +15,8 @@
 //
 // An item is a posted thread: its title (`#<n>` when it has none), its first block as plain text read with the site's
 // own Markdown reader (never the living summary, which is his private grid of what is decided and open), the day he
-// posted it in his own zone, how many notes a stranger reads under it (shown only above zero), and its address. Only
+// posted it in his own zone, how many notes a stranger reads under it (shown only above zero), and its address: the
+// thread's, or its `?full` address when its main section is a page, so a reader lands on the page full screen. Only
 // public threads are ever posted, and the feed's query holds that in its own SQL, so strangers read here only what
 // they could read at the thread's own address.
 //
@@ -59,10 +60,29 @@ interface Item {
   readonly excerpt: string;
   readonly at: string;
   readonly notes: number;
+  /** Where the title, Read and the feed's link lead, decided by `postPath`. */
+  readonly path: string;
+}
+
+/**
+ * Where a posted thread is read: a page opens full screen at the thread's `?full` address, the one Share hands out
+ * for answering (`fullLinkOf`, site/app/threads.js), and anything else at the thread's own address. Decided from the
+ * main section as it now stands, so a thread whose main section changes after he posted it links right on the next
+ * read.
+ */
+export function postPath(row: Pick<FeedRow, "number" | "main">): string {
+  return row.main === "page" ? `/threads/${row.number}?full` : `/threads/${row.number}`;
 }
 
 function itemOf(row: FeedRow): Item {
-  return { number: row.number, title: row.title ?? `#${row.number}`, excerpt: clip(plainText(row.body, false), MAX_EXCERPT), at: row.feed_at, notes: row.notes };
+  return {
+    number: row.number,
+    title: row.title ?? `#${row.number}`,
+    excerpt: clip(plainText(row.body, false), MAX_EXCERPT),
+    at: row.feed_at,
+    notes: row.notes,
+    path: postPath(row),
+  };
 }
 
 /** The day an item was posted, in his zone: "Nov 6" this year, "Nov 6, 2025" before it. */
@@ -78,7 +98,7 @@ function notesOf(count: number): string {
 
 /** One item as the home page's markup, every value escaped. */
 function itemMarkup(item: Item, today: Date): string {
-  const href = attribute(`/threads/${item.number}`);
+  const href = attribute(item.path);
   const excerpt = item.excerpt === "" ? "" : `<p>${attribute(item.excerpt)}</p>`;
   const notes = item.notes > 0 ? `<span>${attribute(notesOf(item.notes))}</span>` : "";
   return (
@@ -143,7 +163,7 @@ export function atom(items: readonly Item[], origin: string): string {
       `  <entry>\n` +
       `    <id>tag:whysosuresh.com,2026:thread-${item.number}</id>\n` +
       `    <title>${xml(item.title)}</title>\n` +
-      `    <link rel="alternate" type="text/html" href="${xml(`${origin}/threads/${item.number}`)}"/>\n` +
+      `    <link rel="alternate" type="text/html" href="${xml(`${origin}${item.path}`)}"/>\n` +
       `    <updated>${xml(item.at)}</updated>\n` +
       (item.excerpt === "" ? "" : `    <summary>${xml(item.excerpt)}</summary>\n`) +
       `  </entry>\n`,
