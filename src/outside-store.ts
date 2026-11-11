@@ -7,6 +7,10 @@
 // feed lists only its newest entries, so an older video can't be seen to go). A release row is the product's newest
 // release, replaced in place by the next. Every date is stored as Date#toISOString writes it, so it orders as text
 // beside `threads.feed_at`.
+//
+// A release gives way to his post about it: while a thread he posted names it as its origin
+// (`release:<owner>/<repo>/<tag>`, the recorder sync's draft of a release post), the read leaves the release's row out,
+// so the home page and the feed tell that news once, as his story.
 
 /** A row as the home page and its feed read it. */
 export interface OutsideRow {
@@ -52,10 +56,18 @@ export interface WantedPicture {
 const videoId = (ref: string): string => `video:${ref}`;
 const releaseId = (repo: string): string => `release:${repo}`;
 
-/** The home page's read of the outside items, newest first, as one statement for its batch. */
-export function outsideItems(db: D1Database, limit: number): D1PreparedStatement {
+/**
+ * The home page's read of the outside items, newest first, as one statement for its batch. `listed` is the SQL
+ * condition on `threads` that the home page's own posts meet (the store's, so the rule lives once): a release whose
+ * post meets it is left out.
+ */
+export function outsideItems(db: D1Database, limit: number, listed: string): D1PreparedStatement {
   return db
-    .prepare("SELECT id, kind, source, ref, title, url, published_at, updated_at, thumb FROM outside_items ORDER BY published_at DESC, id ASC LIMIT ?1")
+    .prepare(
+      `SELECT id, kind, source, ref, title, url, published_at, updated_at, thumb FROM outside_items
+       WHERE NOT (kind = 'release' AND EXISTS (SELECT 1 FROM threads WHERE threads.origin_ref = 'release:' || outside_items.source || '/' || outside_items.ref AND ${listed}))
+       ORDER BY published_at DESC, id ASC LIMIT ?1`,
+    )
     .bind(limit);
 }
 

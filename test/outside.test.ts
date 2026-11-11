@@ -7,7 +7,8 @@
 // body over its cap with or without a length, an answer that doesn't parse, entries none of which is valid, a release
 // whose address leaves its repository) keeps its rows exactly, and the others still run; an episode the feed leaves
 // out within its window leaves the list and the bucket, and an older one stays; a newer release replaces the older
-// in place and is a new feed entry; a 404 for a release drops it; pictures are copied once, again when the video's
+// in place and is a new feed entry; a 404 for a release drops it; a release gives way to his post about it (a thread
+// whose origin names its repository and tag) while that post is on the home page, and only then; pictures are copied once, again when the video's
 // `updated` moves (a new address on the page), never when they aren't a JPEG or are too big, at most ten a run, and a
 // picture with no row is deleted by the next run; `/thumbs/<id>.jpg` answers the picture with its headers and anything
 // else the unknown path's 404; the run reaches only its three hosts; and a database that fails fails the run.
@@ -79,26 +80,43 @@ async function feedEntries(): Promise<string[]> {
 }
 
 let posts = 0;
+
+/** A call on the threads' private API, as the sync or the owner. */
+async function send(path: string, as: "sync" | "owner", body: unknown): Promise<Record<string, unknown>> {
+  const claims = as === "sync" ? harness.access.syncClaims() : harness.access.ownerClaims();
+  const response = await harness.fetch(`${SITE}/threads/api/threads${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(claims), Origin: SITE },
+    body: new TextEncoder().encode(JSON.stringify(body)),
+  });
+  expect(response.ok).toBe(true);
+  return (await response.json()) as Record<string, unknown>;
+}
+
+/** A private thread of his the sync drafts, with its origin. Answers its number. */
+async function drafted(title: string, ref: string): Promise<number> {
+  const made = await send("", "sync", { ref, source: "self", title, body: "Words.", space: "company", status: "act" });
+  return (made.thread as { number: number }).number;
+}
+
 /** A thread of his own, made public and posted at `at`, as the owner does from Share. */
-async function postedAt(title: string, at: string): Promise<number> {
+async function postedAt(title: string, at: string, ref?: string): Promise<number> {
   posts += 1;
-  const sync = harness.access.token(harness.access.syncClaims());
-  const owner = harness.access.token(harness.access.ownerClaims());
-  const send = async (path: string, token: string, body: unknown): Promise<Record<string, unknown>> => {
-    const response = await harness.fetch(`${SITE}/threads/api/threads${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": token, Origin: SITE },
-      body: new TextEncoder().encode(JSON.stringify(body)),
-    });
-    expect(response.ok).toBe(true);
-    return (await response.json()) as Record<string, unknown>;
-  };
-  const made = await send("", sync, { ref: `chat:outside-${posts}`, source: "self", title, body: "Words.", space: "company", status: "act" });
-  const number = (made.thread as { number: number }).number;
-  await send(`/${number}`, owner, { action: "publish" });
-  await send(`/${number}`, owner, { action: "post" });
+  const number = await drafted(title, ref ?? `chat:outside-${posts}`);
+  await send(`/${number}`, "owner", { action: "publish" });
+  await send(`/${number}`, "owner", { action: "post" });
   await (await harness.db()).prepare("UPDATE threads SET feed_at = ?1 WHERE number = ?2").bind(at, number).run();
   return number;
+}
+
+/** The home page's titles, newest first. */
+async function homeTitles(): Promise<string[]> {
+  return (await homeItems()).map((item) => item.title);
+}
+
+/** The feed's entry ids, newest first. */
+async function feedIds(): Promise<string[]> {
+  return (await feedEntries()).map((entry) => /<id>([^<]*)<\/id>/.exec(entry)?.[1] ?? "");
 }
 
 describe("a run", () => {
@@ -268,6 +286,58 @@ describe("the mirror", () => {
     harness.outside.releases.set("whysosuresh/capsjump", { status: 404, body: '{"message":"Not Found"}' });
     await run();
     expect((await rows()).filter((row) => row.kind === "release").map((row) => row.source)).toEqual(["stigmer/stigmer"]);
+  });
+});
+
+describe("a release's post", () => {
+  it("takes the release's place: once he posts a thread whose origin is the release, its row leaves / and the feed, and the other product's stays", async () => {
+    await run();
+    const post = await postedAt("Stigmer 0.1.2: what changed", "2026-11-07T09:00:00.000Z", "release:stigmer/stigmer/v0.1.2");
+    expect(await homeTitles()).toEqual([
+      "Stigmer 0.1.2: what changed",
+      "Fish &amp; chips: &#39;what&#39; &lt;b&gt;the feed&lt;/b&gt; said &quot;today&quot;",
+      "Episode three: the week in agents",
+      "Episode two: what shipped",
+      "Episode one: the pilot",
+      "CapsJump 0.9.10",
+    ]);
+    const ids = await feedIds();
+    expect(ids).toContain(`tag:whysosuresh.com,2026:thread-${post}`);
+    expect(ids).not.toContain("tag:whysosuresh.com,2026:release/stigmer/stigmer/v0.1.2");
+    expect(ids).toContain("tag:whysosuresh.com,2026:release/whysosuresh/capsjump/v0.9.10");
+    // The mirror itself is untouched: only the read gives way.
+    expect((await rows()).filter((row) => row.kind === "release").map((row) => row.ref)).toEqual(["v0.1.2", "v0.9.10"]);
+  });
+
+  it("gives way only while the post is listed: never for a draft or a public thread he hasn't posted, and again once he takes it off", async () => {
+    await run();
+    const number = await drafted("Stigmer 0.1.2: what changed", "release:stigmer/stigmer/v0.1.2");
+    expect(await homeTitles()).toContain("Stigmer 0.1.2");
+    await send(`/${number}`, "owner", { action: "publish" });
+    expect(await homeTitles()).toContain("Stigmer 0.1.2");
+    await send(`/${number}`, "owner", { action: "post" });
+    expect(await homeTitles()).not.toContain("Stigmer 0.1.2");
+    await send(`/${number}`, "owner", { action: "unpost" });
+    expect(await homeTitles()).toContain("Stigmer 0.1.2");
+    expect(await feedIds()).toContain("tag:whysosuresh.com,2026:release/stigmer/stigmer/v0.1.2");
+  });
+
+  it("names one release exactly: a post about an older tag or another product's never hides it", async () => {
+    await run();
+    await postedAt("Stigmer 0.1.1", "2026-11-06T12:00:00.000Z", "release:stigmer/stigmer/v0.1.1");
+    await postedAt("CapsJump, the same tag", "2026-11-06T13:00:00.000Z", "release:whysosuresh/capsjump/v0.1.2");
+    const titles = await homeTitles();
+    expect(titles).toContain("Stigmer 0.1.2");
+    expect(titles).toContain("CapsJump 0.9.10");
+  });
+
+  it("follows the newest release: a post about the release a newer one replaced hides nothing", async () => {
+    await run();
+    await postedAt("Stigmer 0.1.2: what changed", "2026-11-07T09:00:00.000Z", "release:stigmer/stigmer/v0.1.2");
+    harness.outside.releases.set("stigmer/stigmer", { body: releaseAnswer("stigmer/stigmer", "v0.1.3", "2026-11-10T08:00:00Z") });
+    await run();
+    const titles = await homeTitles();
+    expect(titles.slice(0, 2)).toEqual(["Stigmer 0.1.3", "Stigmer 0.1.2: what changed"]);
   });
 });
 

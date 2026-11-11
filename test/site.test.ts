@@ -4,7 +4,7 @@
 // stylesheet carries no dead rules, that the "Send a note" doors open the note flow, that the topic list
 // the Worker shares is plain data and reads page addresses right, that the spaces the Worker shares are plain
 // data and hold every topic, that the journal's reader the Worker shares is plain data that reads no clock, that the threads page is never indexed or shared and reaches only its own calls,
-// that the home page holds its Now line and its feed hidden for the Worker to fill and offers the feed to subscribers,
+// that the home page holds its Now line and its feed hidden for the Worker to fill and offers its feed to feed readers from the head alone,
 // that /inbox, the threads' old address, redirects to /threads/ and nothing else is redirected, that no file names
 // the owner's email address, and that the Worker's config routes the one domain to the code only at the home page and
 // its feed, under /api/ and /threads/ and at the rooms (test/routing.test.ts sends the requests). `wrangler deploy --dry-run` does not read
@@ -297,11 +297,11 @@ describe("index.html, the home page the Worker writes the feed into", () => {
     expect(list.map((el) => [el.tagName.toLowerCase(), el.textContent.trim()])).toEqual([["ol", ""]]);
   });
 
-  it("offers the feed to readers that subscribe, from the head and beside the list", async () => {
+  it("offers the feed to feed readers from the head alone, never as a link a browser opens as raw XML", async () => {
     const doc = await parse("index.html");
     const alternate = doc.querySelectorAll('link[rel="alternate"]');
     expect(alternate.map((el) => [attr(el, "type"), attr(el, "href")])).toEqual([["application/atom+xml", "/feed.xml"]]);
-    expect(doc.querySelectorAll("[data-feed] a").map((el) => attr(el, "href"))).toEqual(["/feed.xml"]);
+    expect(doc.querySelectorAll("a").filter((el) => attr(el, "href") === "/feed.xml")).toEqual([]);
   });
 
   it("puts the feed in the main column, and what he makes and where else to find him in the side column", async () => {
