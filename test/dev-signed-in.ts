@@ -13,7 +13,9 @@
 // two visitors' answers from two browsers' keys, both named Sam, so signed out the page takes answers with a name,
 // shows a visitor other people's answers once they gave their own, and opens in full screen at `?full`. All three
 // public threads are posted on the home page, a page, a text with notes and a page with answers, under his Now line,
-// so http://localhost:8790/ shows what's happening and /feed.xml its feed. Everyone in the seed is a person: Asha wrote
+// beside what arrives from outside as the hourly run keeps it: two made-up episodes (one with its picture in the local
+// bucket, test/fixtures/thumb.jpg, one without) and a made-up release of each product, so http://localhost:8790/
+// shows every shape of item and /feed.xml its feed. Everyone in the seed is a person: Asha wrote
 // from the site and was then invited to the meetup thread, Dev K. told him something in person, Meera is invited
 // (with his own notes on her), Tomás wrote on the public thread with an address (Priya gave none, so she is no
 // person), and Rex's only note was junk he dropped, so Rex sits under the people only in dropped threads. Four
@@ -40,7 +42,7 @@
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { addDays, weekDays, weekOf } from "../site/app/journal.js";
-import { SITE, TEST_SECRET, startHarness, type Harness } from "./harness.ts";
+import { SITE, TEST_SECRET, THUMB, startHarness, type Harness } from "./harness.ts";
 
 const PORT = 8790;
 const LOCAL = `http://localhost:${PORT}`;
@@ -444,9 +446,32 @@ async function seedNow(): Promise<void> {
   if (!response.ok) throw new Error(`seeding the Now line answered ${response.status}: ${await response.text()}`);
 }
 
+/**
+ * What the hourly run keeps from outside, written as it writes it: two made-up episodes in the last days, the newer
+ * with its picture in the bucket, and a made-up release of each product. The run itself never fires here, because the
+ * harness refuses every outside host.
+ */
+async function seedOutside(): Promise<void> {
+  const database = await harness.db();
+  const daysAgo = (days: number): string => new Date(Date.now() - days * 86_400_000).toISOString();
+  const row = (id: string, kind: string, source: string, ref: string, title: string, url: string, at: string, updated: string | null, thumb: number) =>
+    database
+      .prepare("INSERT INTO outside_items (id, kind, source, ref, title, url, published_at, updated_at, thumb) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)")
+      .bind(id, kind, source, ref, title, url, at, updated, thumb);
+  const channel = "UCkdfCh9gN60s_h_nfTYEwyg";
+  await database.batch([
+    row("video:EPISODE0002", "video", channel, "EPISODE0002", "Episode two: what shipped, and what the feed made of it", "https://www.youtube.com/watch?v=EPISODE0002", daysAgo(1.2), daysAgo(1.1), 1),
+    row("video:EPISODE0001", "video", channel, "EPISODE0001", "Episode one: the pilot", "https://www.youtube.com/watch?v=EPISODE0001", daysAgo(4.5), daysAgo(4.4), 0),
+    row("release:stigmer/stigmer", "release", "stigmer/stigmer", "v0.1.2", "Stigmer 0.1.2", "https://github.com/stigmer/stigmer/releases/tag/v0.1.2", daysAgo(2.3), null, 0),
+    row("release:whysosuresh/capsjump", "release", "whysosuresh/capsjump", "v0.9.10", "CapsJump 0.9.10", "https://github.com/whysosuresh/capsjump/releases/tag/v0.9.10", daysAgo(9), null, 0),
+  ]);
+  await (await harness.pages()).put("outside/EPISODE0002.jpg", THUMB, { httpMetadata: { contentType: "image/jpeg" } });
+}
+
 await seed();
 await seedJournal();
 await seedNow();
+await seedOutside();
 createServer((request, response) => {
   serve(request, response).catch((error: unknown) => {
     console.error(error);

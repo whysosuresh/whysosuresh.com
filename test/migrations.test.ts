@@ -20,7 +20,9 @@
 // 0016, asks: every earlier thread is no ask and answers none, a slug is kept once, a response names a thread that is
 // there, one DELETE clears an ask's thread with the threads that answer it, which the harness's reset relies on, and
 // the asks' two budgets start empty. For 0018, the home page's feed: every earlier thread, public ones included, is
-// off the home page, so nothing he made public before is listed without him, and there is no Now line.
+// off the home page, so nothing he made public before is listed without him, and there is no Now line. For 0019, what
+// arrives from outside: it starts empty, so nothing is listed before the first hourly run, a row is a video or a
+// release, its picture flag is 0 or 1 and starts at 0, an id is kept once, and the home page reads it by date.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -578,5 +580,31 @@ describe("0018, the home page's feed", () => {
     expect(await database.prepare("SELECT COUNT(*) AS n FROM now_lines").first<{ n: number }>()).toEqual({ n: 0 });
     const index = await database.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'threads_feed'").first<{ sql: string }>();
     expect(index?.sql).toMatch(/WHERE feed_at IS NOT NULL$/);
+  });
+});
+
+describe("0019, what arrives from outside", () => {
+  it("starts empty, keeps a row of either kind once, its picture not yet kept, and refuses any other kind or flag", async () => {
+    harness = await startHarness({ through: "0018" });
+    const database = await harness.db();
+    await database.prepare("INSERT INTO threads (id, number, created_at, source, body, status) VALUES ('t1', 1, '2026-11-01T00:00:00.000Z', 'self', 'x', 'act')").run();
+    await harness.migrate();
+    expect(await database.prepare("SELECT COUNT(*) AS n FROM outside_items").first<{ n: number }>()).toEqual({ n: 0 });
+    const insert = (id: string, kind: string, thumb = "0"): Promise<unknown> =>
+      database
+        .prepare(`INSERT INTO outside_items (id, kind, source, ref, title, url, published_at, thumb) VALUES (?1, ?2, 's', 'r', 'T', 'https://example.com', '2026-11-01T00:00:00.000Z', ${thumb})`)
+        .bind(id, kind)
+        .run();
+    await database
+      .prepare("INSERT INTO outside_items (id, kind, source, ref, title, url, published_at) VALUES ('video:EPISODE0001', 'video', 'c', 'EPISODE0001', 'An episode', 'https://www.youtube.com/watch?v=EPISODE0001', '2026-11-01T00:00:00.000Z')")
+      .run();
+    expect(await database.prepare("SELECT thumb, updated_at FROM outside_items").first()).toEqual({ thumb: 0, updated_at: null });
+    await insert("release:a/b", "release");
+    await expect(insert("release:a/b", "release")).rejects.toThrow(/UNIQUE|PRIMARY/);
+    await expect(insert("post:1", "post")).rejects.toThrow(/CHECK/);
+    await expect(insert("video:x", "video", "2")).rejects.toThrow(/CHECK/);
+    const index = await database.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'outside_items_published'").first<{ sql: string }>();
+    expect(index?.sql).toMatch(/\(published_at\)$/);
+    expect((await (await harness.fetch(`${SITE}/`)).text())).toContain("An episode");
   });
 });

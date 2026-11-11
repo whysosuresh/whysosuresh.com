@@ -14,8 +14,12 @@
 // own RSA keys, and `access.token` signs an application token with them as Access would, for the threads'
 // application: the owner's, the sync's, or an invited person's (`memberClaims`). `access.evaluationClaims` are what
 // Access sends the site's evaluation door at sign-in (src/evaluate.ts), signed the same way, and the Worker gets
-// its own evaluation key (`EVALUATION_KEY`, whose public half the tests verify the answers with). Every other host
-// the Worker tries is refused and recorded.
+// its own evaluation key (`EVALUATION_KEY`, whose public half the tests verify the answers with). The home page's
+// outside sources are played as well (`outside`): his channel's feed (test/fixtures/youtube-feed.xml, made up),
+// each product's newest release on GitHub's API, and a video's picture (test/fixtures/thumb.jpg), each of which a test
+// may switch to another status, a hang, a malformed or oversized body. `startHarness({ triggers: true })` lets a test
+// fire the Worker's hourly run (`scheduled`) through Miniflare's trigger path. Every other host the Worker tries is
+// refused and recorded.
 
 import { createPublicKey, createSign, generateKeyPairSync, type KeyObject } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -76,8 +80,9 @@ export interface Statement {
 }
 /** The parts of the local R2 bucket the tests use. */
 export interface Bucket {
-  list(): Promise<{ objects: { key: string; size: number }[] }>;
-  get(key: string): Promise<{ text(): Promise<string>; httpMetadata?: { contentType?: string } } | null>;
+  list(options?: { prefix?: string }): Promise<{ objects: { key: string; size: number }[] }>;
+  get(key: string): Promise<{ text(): Promise<string>; arrayBuffer(): Promise<ArrayBuffer>; httpMetadata?: { contentType?: string } } | null>;
+  put(key: string, value: Uint8Array | string, options?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
   delete(keys: string | string[]): Promise<void>;
 }
 export interface Database {
@@ -124,6 +129,85 @@ export interface PlayedAccess {
   setDown(down: boolean): void;
 }
 
+/** How a played outside address answers: a status and a body, or a hang that never answers. */
+export interface Played {
+  readonly status?: number;
+  readonly body?: string | Uint8Array;
+  /** Sends the body as a stream, so the answer carries no Content-Length. */
+  readonly stream?: boolean;
+  /** Never answers, so the Worker's own timeout ends the request. */
+  readonly hang?: boolean;
+}
+
+/** The made-up answers the home page's outside sources give, which a test switches per source. */
+export interface PlayedOutside {
+  /** The channel's feed: test/fixtures/youtube-feed.xml by default. */
+  youtube: Played;
+  /** Each repository's `releases/latest`, by `<owner>/<repo>`: a made-up newest release by default. */
+  readonly releases: Map<string, Played>;
+  /** A video's picture, by its id: test/fixtures/thumb.jpg by default. */
+  readonly pictures: Map<string, Played>;
+  /** Every outside address asked, in order: `youtube`, `release:<owner>/<repo>` or `picture:<id>`. */
+  readonly asked: string[];
+  /** Back to the defaults. */
+  reset(): void;
+}
+
+/** The fixtures the played sources answer with by default. */
+export const YOUTUBE_FEED = readFileSync(join(root, "test", "fixtures", "youtube-feed.xml"), "utf8");
+export const THUMB = new Uint8Array(readFileSync(join(root, "test", "fixtures", "thumb.jpg")));
+/** A made-up newest release of a repository, as GitHub's API answers it. */
+export function releaseAnswer(repo: string, tag: string, publishedAt: string, fields: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    tag_name: tag,
+    name: `Release ${tag}`,
+    html_url: `https://github.com/${repo}/releases/tag/${tag}`,
+    published_at: publishedAt,
+    draft: false,
+    prerelease: false,
+    body: "## Install\n\n```\nmade up\n```",
+    ...fields,
+  });
+}
+/** The made-up newest releases the played GitHub answers with by default. */
+export const RELEASES: Record<string, string> = {
+  "stigmer/stigmer": releaseAnswer("stigmer/stigmer", "v0.1.2", "2026-11-06T23:43:27Z"),
+  "whysosuresh/capsjump": releaseAnswer("whysosuresh/capsjump", "v0.9.10", "2026-10-23T08:00:00Z"),
+};
+
+function playOutside(): PlayedOutside {
+  const played: PlayedOutside = {
+    youtube: {},
+    releases: new Map(),
+    pictures: new Map(),
+    asked: [],
+    reset() {
+      played.youtube = {};
+      played.releases.clear();
+      played.pictures.clear();
+      played.asked.length = 0;
+    },
+  };
+  return played;
+}
+
+/** A played answer, with the default body when the test gave none. */
+function playedAnswer(played: Played, fallback: string | Uint8Array, type: string): RuntimeResponse | Promise<RuntimeResponse> {
+  if (played.hang === true) return new Promise<RuntimeResponse>(() => undefined);
+  const body = played.body ?? fallback;
+  const bytes = typeof body === "string" ? new TextEncoder().encode(body) : body;
+  const sent =
+    played.stream === true
+      ? new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (let at = 0; at < bytes.byteLength; at += 16 * 1024) controller.enqueue(bytes.slice(at, at + 16 * 1024));
+            controller.close();
+          },
+        })
+      : bytes;
+  return new RuntimeResponse(sent as never, { status: played.status ?? 200, headers: { "content-type": type } });
+}
+
 export interface Harness {
   /** Sends a request to the Worker as the edge would hand it over. */
   fetch(url: string, init?: RequestInit): Promise<Response>;
@@ -135,6 +219,10 @@ export interface Harness {
   outboundHosts: Set<string>;
   /** Cloudflare Access, played. */
   access: PlayedAccess;
+  /** The home page's outside sources, played. */
+  outside: PlayedOutside;
+  /** Fires the Worker's hourly run, as its cron trigger does, and answers how it ended (`ok`, or why not). */
+  scheduled(): Promise<string>;
   /** Applies the migrations not yet applied, up to and including `through` (a four-digit number), or all of them. */
   migrate(through?: string): Promise<void>;
   /** Empties every table, between tests. */
@@ -161,7 +249,7 @@ function migrations(): { number: string; statements: string[] }[] {
 }
 
 /** The tables `reset` empties, children before the tables they name, because D1 checks foreign keys. */
-const TABLES = ["events", "comments", "members", "attendees", "pages", "threads", "people", "talk_days", "talk_senders", "answer_senders", "ask_thread_senders", "ask_answer_senders", "journal_answers", "journal_storylines", "journal_entries", "journal_versions", "journal_photos", "now_lines"];
+const TABLES = ["outside_items", "events", "comments", "members", "attendees", "pages", "threads", "people", "talk_days", "talk_senders", "answer_senders", "ask_thread_senders", "ask_answer_senders", "journal_answers", "journal_storylines", "journal_entries", "journal_versions", "journal_photos", "now_lines"];
 
 /**
  * The Worker's evaluation key in the harness, as the deploy hands it over (an RSA private key as a JWK), and its
@@ -253,12 +341,13 @@ function playAccess(): PlayedAccess & { serve(request: RuntimeRequest): RuntimeR
   };
 }
 
-export async function startHarness(options: { secret?: string; owner?: string; through?: string; evaluationKey?: string } = {}): Promise<Harness> {
+export async function startHarness(options: { secret?: string; owner?: string; through?: string; evaluationKey?: string; triggers?: boolean } = {}): Promise<Harness> {
   const bundlePath = join(root, "dist", "worker.js");
   if (!existsSync(bundlePath)) throw new Error("dist/worker.js is missing: run `npm run dry-run` first (`npm test` does)");
   if (!COMPATIBILITY_DATE) throw new Error("wrangler.jsonc names no compatibility_date");
   const outboundHosts = new Set<string>();
   const access = playAccess();
+  const outside = playOutside();
 
   async function outbound(request: RuntimeRequest): Promise<RuntimeResponse> {
     const url = new URL(request.url);
@@ -282,6 +371,22 @@ export async function startHarness(options: { secret?: string; owner?: string; t
       };
       return new RuntimeResponse(JSON.stringify(verdict), { headers: { "content-type": "application/json" } });
     }
+    if (url.host === "www.youtube.com" && url.pathname === "/feeds/videos.xml" && request.method === "GET") {
+      outside.asked.push("youtube");
+      return playedAnswer(outside.youtube, YOUTUBE_FEED, "text/xml; charset=UTF-8");
+    }
+    const release = /^\/repos\/([\w.-]+\/[\w.-]+)\/releases\/latest$/.exec(url.pathname)?.[1];
+    if (url.host === "api.github.com" && release !== undefined && request.method === "GET") {
+      outside.asked.push(`release:${release}`);
+      if (request.headers.get("user-agent") === null) return new RuntimeResponse("a User-Agent is required", { status: 403 });
+      const answer = RELEASES[release];
+      return playedAnswer(outside.releases.get(release) ?? (answer === undefined ? { status: 404 } : {}), answer ?? '{"message":"Not Found"}', "application/json; charset=utf-8");
+    }
+    const picture = /^\/vi\/([\w-]+)\/mqdefault\.jpg$/.exec(url.pathname)?.[1];
+    if (url.host === "i.ytimg.com" && picture !== undefined && request.method === "GET") {
+      outside.asked.push(`picture:${picture}`);
+      return playedAnswer(outside.pictures.get(picture) ?? {}, THUMB, "image/jpeg");
+    }
     return new RuntimeResponse("refused by the test harness", { status: 599 });
   }
 
@@ -291,6 +396,7 @@ export async function startHarness(options: { secret?: string; owner?: string; t
   const mf = new Miniflare({
     host: "127.0.0.1",
     port: 0,
+    ...(options.triggers === true ? { unsafeTriggerHandlers: true } : {}),
     workers: [
       {
         config: {
@@ -341,6 +447,12 @@ export async function startHarness(options: { secret?: string; owner?: string; t
     pages: async () => (await mf.getR2Bucket("PAGES", WORKER)) as unknown as Bucket,
     outboundHosts,
     access,
+    outside,
+    async scheduled() {
+      if (options.triggers !== true) throw new Error("start the harness with { triggers: true } to fire the hourly run");
+      const response = (await mf.dispatchFetch(`${SITE}/cdn-cgi/local/scheduled?cron=${encodeURIComponent("17 * * * *")}&format=json`)) as unknown as Response;
+      return ((await response.json()) as { outcome: string }).outcome;
+    },
     migrate,
     async reset() {
       const database = await db();
@@ -352,6 +464,7 @@ export async function startHarness(options: { secret?: string; owner?: string; t
       const kept = (await bucket.list()).objects.map((object) => object.key);
       if (kept.length > 0) await bucket.delete(kept);
       outboundHosts.clear();
+      outside.reset();
     },
     dispose: () => mf.dispose(),
   };

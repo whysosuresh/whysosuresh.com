@@ -5,8 +5,9 @@
 // most 20, each with its title or number, its first block as plain text, its day in his zone and its notes above
 // zero, every value as text, and linked at its address, or its `?full` address when its main section is a page, so a
 // reader lands on the page full screen; a thread that isn't posted, isn't public or isn't his never shows, even when its row is
-// changed by hand; the Now line shows and an empty newest line hides it; with nothing to show, or a failing read, the
-// page is site/index.html byte for byte, and a rewritten one carries the site's headers and no ETag; /feed.xml is an
+// changed by hand; the Now line shows and an empty newest line hides it; an item from outside alone (a video or a
+// release, test/outside.test.ts) shows the list too; with nothing to show (no post, no outside item, no Now line), or
+// a failing read, the page is site/index.html byte for byte, and a rewritten one carries the site's headers and no ETag; /feed.xml is an
 // Atom feed of the same items, escaped, and a valid empty one with nothing posted; the Now line's call is the owner's
 // alone, both ways, from his own page, one line of at most 140 characters, every line kept; and a stranger reading a
 // posted thread never learns it is posted.
@@ -189,12 +190,26 @@ describe("posting a thread on the home page", () => {
 });
 
 describe("the home page", () => {
-  it("is site/index.html byte for byte, its ETag kept, while nothing is posted and there is no Now line", async () => {
+  it("is site/index.html byte for byte, its ETag kept, while nothing is posted, nothing came from outside and there is no Now line", async () => {
     await thread();
+    expect(await (await harness.db()).prepare("SELECT COUNT(*) AS n FROM outside_items").first<{ n: number }>()).toEqual({ n: 0 });
     const response = await home();
     expect(response.status).toBe(200);
     expect(response.headers.get("etag")).not.toBeNull();
     expect(await response.text()).toBe(INDEX);
+  });
+
+  it("shows an item from outside with nothing posted and no Now line, the list shown and the Now line still hidden", async () => {
+    await (await harness.db())
+      .prepare("INSERT INTO outside_items (id, kind, source, ref, title, url, published_at) VALUES ('release:stigmer/stigmer', 'release', 'stigmer/stigmer', 'v0.1.2', 'Stigmer 0.1.2', 'https://github.com/stigmer/stigmer/releases/tag/v0.1.2', '2026-11-06T23:43:27.000Z')")
+      .run();
+    const response = await home();
+    expect(response.headers.get("etag")).toBeNull();
+    const page = await response.text();
+    expect(page).toMatch(/<section class="home-main" aria-labelledby="happening" data-feed>/);
+    expect(page).toContain('<p class="now" data-now hidden>');
+    expect(page).toContain('<li class="item item-release"><time class="when" datetime="2026-11-06T23:43:27.000Z">Nov 7</time>');
+    expect(itemsOf(page)).toEqual([]);
   });
 
   it("shows the posted public threads newest first, at most 20, with the site's headers and no ETag", async () => {

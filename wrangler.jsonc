@@ -3,7 +3,8 @@
 // src/threads.ts, and the threads page at every other path, src/pages.ts, which hands over
 // site/threads/index.html through the assets binding), /me (the same page, everyone's door after sign-in), and the
 // home page, /, with what Suresh posted written in, and its Atom feed, /feed.xml (src/home.ts), all on the database
-// bound below. Every other page comes
+// bound below, with its videos' pictures at /thumbs/* (src/outside.ts). It also runs every hour on the cron trigger
+// below, which fetches his videos and his products' releases into the home page's list. Every other page comes
 // straight from ./site, with no code in its path, and /inbox, the threads' old address, redirects to /threads/
 // (site/_redirects); Cloudflare Access guards /threads/api and everything under it (infrastructure/), never a
 // thread's page. This
@@ -36,8 +37,9 @@
     // ask's own address, /ask/<slug>, and his journal,
     // /journal with its days, weeks and storylines under it. The threads page's scripts live under /app/, so they stay files.
     // The home page, "/" (the root alone: a pattern without a star names one path), gets what he posted written in, and
-    // its feed is /feed.xml (src/home.ts).
-    "run_worker_first": ["/", "/feed.xml", "/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"],
+    // its feed is /feed.xml (src/home.ts); its videos' pictures, copied by the hourly run, are /thumbs/<id>.jpg
+    // (src/outside.ts).
+    "run_worker_first": ["/", "/feed.xml", "/thumbs/*", "/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"],
     // How the code hands over a file from ./site: the threads page, with site/_headers on it.
     "binding": "ASSETS"
   },
@@ -45,6 +47,9 @@
   // account above. The route needs a proxied record at the apex, which Planton holds; www is the
   // zone's redirect rule, also Planton's.
   "routes": [{ "pattern": "whysosuresh.com/*", "zone_name": "whysosuresh.com" }],
+  // Every hour, at an odd minute: his full YouTube episodes and the newest Stigmer and CapsJump releases, fetched into
+  // the home page's list with no act of his, because they are already public where they come from (src/outside.ts).
+  "triggers": { "crons": ["17 * * * *"] },
   "workers_dev": false,
   "preview_urls": false,
   // The database Planton created (Infra.prod.CloudflareD1Database.whysosuresh-com), by its
@@ -59,6 +64,8 @@
   ],
   // The pages saved into threads (Infra.prod.CloudflareR2Bucket.whysosuresh-com-pages): one private object per
   // version, read and written only by the code, which serves a page only through its thread's call, behind Access.
+  // His journal's photos live under journal/, and the home page's video pictures under outside/, which the code
+  // serves publicly at /thumbs/<id>.jpg.
   "r2_buckets": [{ "binding": "PAGES", "bucket_name": "whysosuresh-com-pages" }],
   // The threads' Access application and its callers' public halves, from Planton's outputs: the team's sign-in
   // host (Infra.prod.CloudflareZeroTrustOrganization.whysosuresh, `authDomain`), the application's audience tag
