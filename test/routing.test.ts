@@ -9,8 +9,8 @@
 // /people/<n>, and the journal's /journal, a day, a week, the storylines and a storyline), every thread's address and every ask's (/ask/<slug>) answer the threads page with the site's headers (its CSP among them) and status 200, whatever the number,
 // with no sign-in; the people pages' old addresses under /threads/, and /people/, redirect to /people for good; because
 // Access guards only the threads' calls, never a thread's page; and any other path under /threads/ is what the
-// site's files make of it. The home page, /, and its feed, /feed.xml, reach the code too (test/home.test.ts holds what
-// they say), and `"/"` in `run_worker_first` names the root alone: every file beside it, the stylesheet, a picture,
+// site's files make of it. The home page, /, its feed, /feed.xml, and its videos' pictures under /thumbs/ reach the code
+// too (test/home.test.ts and test/outside.test.ts hold what they say), and `"/"` in `run_worker_first` names the root alone: every file beside it, the stylesheet, a picture,
 // a script and the other pages, still comes straight from site/ with no code in its path, and /index.html keeps its
 // redirect to /.
 
@@ -49,6 +49,8 @@ describe("the Worker's code", () => {
     ["/api/asks/demo/answers", 405],
     ["/threads/api/threads", 401],
     ["/threads/api/anything", 401],
+    ["/thumbs/x.jpg", 404],
+    ["/thumbs/AAAAAAAAAAA.jpg", 404],
   ])("answers %s with its own JSON (%i)", async (path, status) => {
     const response = await harness.fetch(`${SITE}${path}`);
     expect(response.status).toBe(status);

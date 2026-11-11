@@ -82,6 +82,7 @@
 // own. Its answers carry its person, so a person's page shows them (`wordsOfPerson`).
 
 import { LISTS, isList, type List } from "../site/app/standing.js";
+import { outsideItems, type OutsideRow } from "./outside-store.ts";
 
 /** Where a thread came from: the site's note flow, something told to him in person, or his own. */
 export type Source = "talk" | "told" | "self";
@@ -1352,12 +1353,13 @@ const NOW_LINE = "SELECT text, set_at FROM now_lines ORDER BY id DESC LIMIT 1";
 /**
  * The home page's one read (src/home.ts), in one batch: the newest `limit` threads he posted, newest first, each
  * holding the public condition in its own SQL beside being posted, so a row changed by hand never lists a private
- * thread; and the Now line, null when he never set one. A note is what a stranger reads under the thread as a note: a
+ * thread; the newest `limit` items from outside, his videos and releases (src/outside-store.ts), which the home page
+ * merges with the posts by date; and the Now line, null when he never set one. A note is what a stranger reads under the thread as a note: a
  * comment written as Public and shown, neither a reply (`parent_id`) nor a visitor's answer to the page's questions
  * (`question`), which the page shows under its questions rather than as notes.
  */
-export async function homeFeed(db: D1Database, limit: number): Promise<{ items: FeedRow[]; now: NowRow | null }> {
-  const [items, now] = await db.batch([
+export async function homeFeed(db: D1Database, limit: number): Promise<{ items: FeedRow[]; outside: OutsideRow[]; now: NowRow | null }> {
+  const [items, now, outside] = await db.batch([
     db
       .prepare(
         `SELECT number, title, body, main, feed_at,
@@ -1367,8 +1369,13 @@ export async function homeFeed(db: D1Database, limit: number): Promise<{ items: 
       )
       .bind(limit),
     db.prepare(NOW_LINE),
+    outsideItems(db, limit),
   ]);
-  return { items: (items?.results ?? []) as FeedRow[], now: ((now?.results ?? [])[0] as NowRow | undefined) ?? null };
+  return {
+    items: (items?.results ?? []) as FeedRow[],
+    outside: (outside?.results ?? []) as OutsideRow[],
+    now: ((now?.results ?? [])[0] as NowRow | undefined) ?? null,
+  };
 }
 
 /** The Now line as it stands, null when he never set one. */

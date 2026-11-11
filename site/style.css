@@ -263,7 +263,9 @@ p { margin: 0; }
   text-transform: uppercase;
 }
 
-/* What's happening: the threads he posted, newest first, each with its day, its first lines and its notes. */
+/* What's happening: the threads he posted and what arrives from outside (his videos, his products' releases), newest
+   first, each with its day; a post with its first lines and its notes, a video with its small picture beside its title,
+   a release with its name and version. */
 .feed { margin: 0; padding: 0; list-style: none; }
 .item {
   display: grid;
@@ -287,8 +289,21 @@ p { margin: 0; }
 .what p { color: var(--muted); font-size: 16px; line-height: 1.55; overflow-wrap: anywhere; }
 .meta { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 15px; }
 .what .meta a { color: var(--ink); font-weight: 500; }
+.item-video .what:has(> .thumb) { grid-template-columns: 128px minmax(0, 1fr); gap: 6px 16px; align-items: start; }
+.item-video .what:has(> .thumb) > :not(.thumb) { grid-column: 2; }
+.thumb { grid-row: 1 / span 2; display: block; }
+.thumb img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
 @media (max-width: 560px) {
   .item { grid-template-columns: 1fr; gap: 4px; }
+  .item-video .what:has(> .thumb) { grid-template-columns: 112px minmax(0, 1fr); }
 }
 
 .foot {

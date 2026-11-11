@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A made-up answer from the channel's feed, shaped as YouTube writes it (2026-11-11): newest first, Shorts
+     interleaved with full episodes and told apart only by their /shorts/ link, dates with a +00:00 offset. Four
+     episodes and three Shorts; one title holds entities, markup and quotes. Every title and id is made up. -->
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+ <link rel="self" href="http://www.youtube.com/feeds/videos.xml?channel_id=UCkdfCh9gN60s_h_nfTYEwyg"/>
+ <id>yt:channel:kdfCh9gN60s_h_nfTYEwyg</id>
+ <yt:channelId>kdfCh9gN60s_h_nfTYEwyg</yt:channelId>
+ <title>The Feed Said So</title>
+ <link rel="alternate" href="https://www.youtube.com/channel/UCkdfCh9gN60s_h_nfTYEwyg"/>
+ <author>
+  <name>The Feed Said So</name>
+  <uri>https://www.youtube.com/channel/UCkdfCh9gN60s_h_nfTYEwyg</uri>
+ </author>
+ <published>2026-10-20T10:00:00+00:00</published>
+ <entry>
+  <id>yt:video:SHORTCLIP03</id>
+  <yt:videoId>SHORTCLIP03</yt:videoId>
+  <yt:channelId>UCkdfCh9gN60s_h_nfTYEwyg</yt:channelId>
+  <title>The one line that made the episode</title>
+  <link rel="alternate" href="https://www.youtube.com/shorts/SHORTCLIP03"/>
+  <author>
+   <name>The Feed Said So</name>
+   <uri>https://www.youtube.com/channel/UCkdfCh9gN60s_h_nfTYEwyg</uri>
+  </author>
+  <published>2026-11-04T09:30:00+00:00</published>
+  <updated>2026-11-04T09:31:00+00:00</updated>
+  <media:group>
+   <media:title>The one line that made the episode</media:title>
+   <media:content url="https://www.youtube.com/v/SHORTCLIP03?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/SHORTCLIP03/hqdefault.jpg" width="480" height="360"/>
+   <media:description>A clip.</media:description>
+   <media:community>
+    <media:starRating count="3" average="5.00" min="1" max="5"/>
+    <media:statistics views="40"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:EPISODE0004</id>
+  <yt:videoId>EPISODE0004</yt:videoId>
+  <yt:channelId>UCkdfCh9gN60s_h_nfTYEwyg</yt:channelId>
+  <title>Fish &amp; chips: &#39;what&#39; &lt;b&gt;the feed&lt;/b&gt; said &quot;today&quot;</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=EPISODE0004"/>
+  <author>
+   <name>The Feed Said So</name>
+   <uri>https://www.youtube.com/channel/UCkdfCh9gN60s_h_nfTYEwyg</uri>
+  </author>
+  <published>2026-11-03T14:00:05+00:00</published>
+  <updated>2026-11-04T02:11:40+00:00</updated>
+  <media:group>
+   <media:title>Fish &amp; chips: &#39;what&#39; &lt;b&gt;the feed&lt;/b&gt; said &quot;today&quot;</media:title>
+   <media:content url="https://www.youtube.com/v/EPISODE0004?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/EPISODE0004/hqdefault.jpg" width="480" height="360"/>
+   <media:description>An episode.</media:description>
+   <media:community>
+    <media:starRating count="9" average="5.00" min="1" max="5"/>
+    <media:statistics views="120"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:SHORTCLIP02</id>
+  <yt:videoId>SHORTCLIP02</yt:videoId>
+  <yt:channelId>UCkdfCh9gN60s_h_nfTYEwyg</yt:channelId>
+  <title>Thirty seconds on agents</title>
+  <link rel="alternate" href="https://www.youtube.com/shorts/SHORTCLIP02"/>
+  <author>
+   <name>The Feed Said So</name>
+   <uri>https://www.youtube.com/channel/UCkdfCh9gN60s_h_nfTYEwyg</uri>
+  </author>
+  <published>2026-11-02T09:30:00+00:00</published>
+  <updated>2026-11-02T09:31:00+00:00</updated>
+  <media:group>
+   <media:title>Thirty seconds on agents</media:title>
+   <media:content url="https://www.youtube.com/v/SHORTCLIP02?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/SHORTCLIP02/hqdefault.jpg" width="480" height="360"/>
+   <media:description>A clip.</media:description>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:EPISODE0003</id>
+  <yt:videoId>EPISODE0003</yt:videoId>
+  <yt:channelId>UCkdfCh9gN60s_h_nfTYEwyg</yt:channelId>
+  <title>Episode three: the week in agents</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=EPISODE0003"/>
+  <author>
+   <name>The Feed Said So</name>
+   <uri>https://www.youtube.com/channel/UCkdfCh9gN60s_h_nfTYEwyg</uri>
+  </author>
+  <published>2026-11-01T14:00:00+00:00</published>
+  <updated>2026-11-01T20:00:00+00:00</updated>
+  <media:group>
+   <media:title>Episode three: the week in agents</media:title>
+   <media:content url="https://www.youtube.com/v/EPISODE0003?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/EPISODE0003/hqdefault.jpg" width="480" height="360"/>
+   <media:description>An episode.</media:description>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:EPISODE0002</id>
+  <yt:videoId>EPISODE0002</yt:videoId>
+  <yt:channelId>UCkdfCh9gN60s_h_nfTYEwyg</yt:channelId>
+  <title>Episode two: what shipped</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=EPISODE0002"/>
+  <author>
+   <name>The Feed Said So</name>
+   <uri>https://www.youtube.com/channel/UCkdfCh9gN60s_h_nfTYEwyg</uri>
+  </author>
+  <published>2026-10-31T14:00:00+00:00</published>
+  <updated>2026-10-31T20:00:00+00:00</updated>
+  <media:group>
+   <media:title>Episode two: what shipped</media:title>
+   <media:content url="https://www.youtube.com/v/EPISODE0002?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/EPISODE0002/hqdefault.jpg" width="480" height="360"/>
+   <media:description>An episode.</media:description>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:SHORTCLIP01</id>
+  <yt:videoId>SHORTCLIP01</yt:videoId>
+  <yt:channelId>UCkdfCh9gN60s_h_nfTYEwyg</yt:channelId>
+  <title>The pilot, in thirty seconds</title>
+  <link rel="alternate" href="https://www.youtube.com/shorts/SHORTCLIP01"/>
+  <author>
+   <name>The Feed Said So</name>
+   <uri>https://www.youtube.com/channel/UCkdfCh9gN60s_h_nfTYEwyg</uri>
+  </author>
+  <published>2026-10-30T09:30:00+00:00</published>
+  <updated>2026-10-30T09:31:00+00:00</updated>
+  <media:group>
+   <media:title>The pilot, in thirty seconds</media:title>
+   <media:content url="https://www.youtube.com/v/SHORTCLIP01?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/SHORTCLIP01/hqdefault.jpg" width="480" height="360"/>
+   <media:description>A clip.</media:description>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:EPISODE0001</id>
+  <yt:videoId>EPISODE0001</yt:videoId>
+  <yt:channelId>UCkdfCh9gN60s_h_nfTYEwyg</yt:channelId>
+  <title>Episode one: the pilot</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=EPISODE0001"/>
+  <author>
+   <name>The Feed Said So</name>
+   <uri>https://www.youtube.com/channel/UCkdfCh9gN60s_h_nfTYEwyg</uri>
+  </author>
+  <published>2026-10-29T14:00:00+00:00</published>
+  <updated>2026-10-29T20:00:00+00:00</updated>
+  <media:group>
+   <media:title>Episode one: the pilot</media:title>
+   <media:content url="https://www.youtube.com/v/EPISODE0001?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/EPISODE0001/hqdefault.jpg" width="480" height="360"/>
+   <media:description>An episode.</media:description>
+  </media:group>
+ </entry>
+</feed>

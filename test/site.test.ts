@@ -50,9 +50,6 @@ const SERVED = [
   "threads/index.html",
 ];
 
-/** The only resources a page may load from another origin. */
-const EXTERNAL_RESOURCES = ["https://www.youtube-nocookie.com/embed/videoseries?list=UUkdfCh9gN60s_h_nfTYEwyg"];
-
 /**
  * The only addresses on another origin a site script names. A resource a script loads is invisible to
  * the page checks, so it is allowed here instead. Turnstile's script also opens its own frame.
@@ -77,7 +74,7 @@ const EXPECTED_HEADERS: Record<string, string> = {
     "img-src 'self'",
     "connect-src 'self'",
     // The site's own frames are the pages saved into threads, each sealed by its own answer's CSP (src/page.ts).
-    `frame-src 'self' ${originsOf([...EXTERNAL_RESOURCES, ...SCRIPT_RESOURCES])}`,
+    `frame-src 'self' ${originsOf(SCRIPT_RESOURCES)}`,
     "base-uri 'none'",
     "form-action 'none'",
     "frame-ancestors 'none'",
@@ -222,7 +219,7 @@ describe.each(pages)("%s", (page) => {
     expect(misses).toEqual([]);
   });
 
-  it("loads nothing from another origin but the allowlisted resources", async () => {
+  it("loads nothing from another origin", async () => {
     const doc = await parse(page);
     const loaded = [
       ...doc.querySelectorAll("link[href]")
@@ -231,7 +228,7 @@ describe.each(pages)("%s", (page) => {
       ...doc.querySelectorAll("img[src], iframe[src], script[src], source[src], video[src], audio[src], embed[src], object[data]")
         .map((el) => el.getAttributeValue("src") ?? attr(el, "data")),
     ];
-    const foreign = loaded.filter((url) => /^[a-z]+:|^\/\//i.test(url) && !EXTERNAL_RESOURCES.includes(url));
+    const foreign = loaded.filter((url) => /^[a-z]+:|^\/\//i.test(url));
     expect(foreign).toEqual([]);
   });
 
@@ -470,7 +467,7 @@ describe.each(SHARED_PAGES)("%s, as a shared link", (page) => {
 describe("_headers", () => {
   const rules = parseHeaders(read("_headers"));
 
-  it("sets exactly the expected headers on every path, the CSP allowing just the player's origin", () => {
+  it("sets exactly the expected headers on every path, the CSP allowing no origin but Turnstile's", () => {
     expect([...rules.keys()]).toEqual(["/*"]);
     expect(Object.fromEntries(rules.get("/*") ?? [])).toEqual(EXPECTED_HEADERS);
   });
@@ -591,9 +588,14 @@ describe("wrangler.jsonc", () => {
     expect(text).not.toContain("custom_domain");
   });
 
-  it("runs the code only at the home page and its feed, under /api/ and /threads/ and at the rooms (/me, /meetings, /people, /asks, /journal) and an ask's address, and every other page comes straight from site/", () => {
-    expect(text).toContain('"run_worker_first": ["/", "/feed.xml", "/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"]');
+  it("runs the code only at the home page, its feed and its videos' pictures, under /api/ and /threads/ and at the rooms (/me, /meetings, /people, /asks, /journal) and an ask's address, and every other page comes straight from site/", () => {
+    expect(text).toContain('"run_worker_first": ["/", "/feed.xml", "/thumbs/*", "/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"]');
     expect(text.match(/"run_worker_first"/g)).toHaveLength(1);
+  });
+
+  it("runs the home page's outside fetch every hour on one cron trigger, and no other schedule", () => {
+    expect(text).toContain('"triggers": { "crons": ["17 * * * *"] }');
+    expect(text.match(/"triggers"/g)).toHaveLength(1);
   });
 
   it("hands the threads page over through the assets binding the code names", () => {
