@@ -14,12 +14,12 @@
 // the keys) and each move's exact row are test/threads-door.test.ts's.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { SITE, startHarness, type Harness } from "./harness.ts";
+import { THREADS as HEY, startHarness, type Harness } from "./harness.ts";
 
 /** The most a list answers, and the most comments or events a thread's call answers: the contract, stated here. */
 const PAGE = 50;
 const HISTORY = 500;
-const THREADS = `${SITE}/threads/api/threads`;
+const THREADS = `${HEY}/threads/api/threads`;
 
 let harness: Harness;
 
@@ -94,7 +94,7 @@ async function call(path: string, request: Call = {}): Promise<Response> {
   const method = request.method ?? (request.body === undefined && request.rawBody === undefined ? "GET" : "POST");
   if (method === "GET") return harness.fetch(`${THREADS}${path}`, { headers });
   headers["Content-Type"] = "application/json";
-  if (request.origin !== null) headers.Origin = request.origin ?? SITE;
+  if (request.origin !== null) headers.Origin = request.origin ?? HEY;
   const text = request.rawBody ?? JSON.stringify(request.body ?? {});
   return harness.fetch(`${THREADS}${path}`, { method, headers, body: new TextEncoder().encode(text) });
 }
@@ -669,7 +669,7 @@ describe("the last activity", () => {
 
 describe("a search", () => {
   async function found(words: string, as: Who = "owner"): Promise<number[]> {
-    const response = await harness.fetch(`${SITE}/threads/api/search?${new URLSearchParams({ q: words }).toString()}`, {
+    const response = await harness.fetch(`${HEY}/threads/api/search?${new URLSearchParams({ q: words }).toString()}`, {
       headers: { "Cf-Access-Jwt-Assertion": harness.access.token(as === "owner" ? harness.access.ownerClaims() : harness.access.syncClaims()) },
     });
     expect(response.status).toBe(200);
@@ -705,7 +705,7 @@ describe("a search", () => {
   });
 
   it.each(["", "q=", "q=a&q=b", "q=x&tab=look", `q=${"x".repeat(101)}`])("refuses %j with 400", async (query) => {
-    const response = await harness.fetch(`${SITE}/threads/api/search?${query}`, {
+    const response = await harness.fetch(`${HEY}/threads/api/search?${query}`, {
       headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()) },
     });
     expect([response.status, await reasonOf(response)]).toEqual([400, "query"]);
@@ -715,27 +715,27 @@ describe("a search", () => {
 describe("the sign-in", () => {
   async function signIn(next: string | null): Promise<Response> {
     const query = next === null ? "" : `?${new URLSearchParams({ next }).toString()}`;
-    return harness.fetch(`${SITE}/threads/api/sign-in${query}`, {
+    return harness.fetch(`${HEY}/threads/api/sign-in${query}`, {
       redirect: "manual",
       headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()) },
     });
   }
 
-  it.each(["/me", "/meetings", "/threads/", "/threads/42", "/threads/42-who-owns-what", "/people", "/people/7", "/people/7-meera", "/journal", "/journal/2026-11-06", "/journal/2026-W44", "/journal/storylines", "/journal/storylines/the-demo"])("sends the owner on to %s", async (next) => {
+  it.each(["/", "/meetings", "/threads/", "/threads/42", "/threads/42-who-owns-what", "/people", "/people/7", "/people/7-meera", "/journal", "/journal/2026-11-06", "/journal/2026-W44", "/journal/storylines", "/journal/storylines/the-demo"])("sends the owner on to %s", async (next) => {
     const response = await signIn(next);
     expect([response.status, response.headers.get("location")]).toEqual([303, next]);
   });
 
-  it.each([null, "https://elsewhere.example/", "//elsewhere.example/threads/", "/inbox/", "/threads/42/../../x", "/threads/042", "/threads/42-Who", "/threads/people", "/threads/people/7", "/people/07", "/peoplex", "/people/", "/meetings/", "/meetingsx", "/me/", "/me/x", "/mex", "/me?x", "/journal/", "/journalx", "/journal/today", "/journal/storylines/The-Demo", "/journal/2026-11-06/edit"])(
-    "sends %j to /me, never anywhere else",
+  it.each([null, "https://elsewhere.example/", "//elsewhere.example/threads/", "/inbox/", "/threads/42/../../x", "/threads/042", "/threads/42-Who", "/threads/people", "/threads/people/7", "/people/07", "/peoplex", "/people/", "/meetings/", "/meetingsx", "/me/", "/me/x", "/mex", "/me?x", "/journal/", "/journalx", "/journal/today", "/journal/storylines/The-Demo", "/journal/2026-11-06/edit", "/me", "//", "/?x"])(
+    "sends %j to Today, /, never anywhere else",
     async (next) => {
       const response = await signIn(next);
-      expect([response.status, response.headers.get("location")]).toEqual([303, "/me"]);
+      expect([response.status, response.headers.get("location")]).toEqual([303, "/"]);
     },
   );
 
   it("is behind the threads' sign-in like every call: no token is 401", async () => {
-    const response = await harness.fetch(`${SITE}/threads/api/sign-in?next=/threads/`, { redirect: "manual" });
+    const response = await harness.fetch(`${HEY}/threads/api/sign-in?next=/threads/`, { redirect: "manual" });
     expect(response.status).toBe(401);
   });
 });
@@ -768,7 +768,7 @@ describe("who gets in", () => {
 
   it("answers an unknown route 404 and a wrong method 405", async () => {
     expect((await call("/1/history")).status).toBe(404);
-    expect((await harness.fetch(`${SITE}/threads/api/elsewhere`, { headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.syncClaims()) } })).status).toBe(404);
+    expect((await harness.fetch(`${HEY}/threads/api/elsewhere`, { headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.syncClaims()) } })).status).toBe(404);
     expect((await call("", { method: "PUT", body: {} })).status).toBe(405);
     expect((await call("/1/comments", { method: "GET" })).status).toBe(405);
   });

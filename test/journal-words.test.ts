@@ -63,7 +63,7 @@ The kettle took its time.
 ### The long walk
 *7 pm, along the river*
 
-Ada called halfway. See [#22](https://whysosuresh.com/threads/22) and [the notes](https://example.com/notes).
+Ada called halfway. See [#22](https://hey.whysosuresh.com/threads/22) and [the notes](https://example.com/notes).
 
 ![An old one](data:image/jpeg;base64,AAAA)
 
@@ -75,7 +75,7 @@ Ada called halfway. See [#22](https://whysosuresh.com/threads/22) and [the notes
 
 **Tomorrow's question:** What will the talk open with?
 
-→ [#24](https://whysosuresh.com/threads/24) · The talk's opening
+→ [#24](https://hey.whysosuresh.com/threads/24) · The talk's opening
 → To-do · Water the garden
 
 *From two recordings.*
@@ -187,7 +187,7 @@ describe("a week", () => {
 
 describe("inline runs", () => {
   it("reads bold, italic and links, opening the site's own addresses in place", () => {
-    expect(inline("a **b** *c* [d](https://whysosuresh.com/threads/22) [e](https://github.com/x/y/issues/1) [f](javascript:alert(1)) [g](/me)")).toEqual([
+    expect(inline("a **b** *c* [d](https://hey.whysosuresh.com/threads/22) [e](https://github.com/x/y/issues/1) [f](javascript:alert(1)) [g](/me)")).toEqual([
       { type: "text", text: "a " },
       { type: "strong", text: "b" },
       { type: "text", text: " " },
@@ -204,12 +204,18 @@ describe("inline runs", () => {
   });
 
   it("opens in place only a path on the site itself, never one that leaves it", () => {
-    expect(inline("[a](https://whysosuresh.com//evil.com) [b](https://whysosuresh.com/\\evil.com) [c](https://whysosuresh.com)")).toEqual([
-      { type: "link", text: "a", href: "https://whysosuresh.com//evil.com" },
+    expect(inline("[a](https://hey.whysosuresh.com//evil.com) [b](https://hey.whysosuresh.com/\\evil.com) [c](https://hey.whysosuresh.com)")).toEqual([
+      { type: "link", text: "a", href: "https://hey.whysosuresh.com//evil.com" },
       { type: "text", text: " " },
-      { type: "link", text: "b", href: "https://whysosuresh.com/\\evil.com" },
+      { type: "link", text: "b", href: "https://hey.whysosuresh.com/\\evil.com" },
       { type: "text", text: " " },
       { type: "site", text: "c", path: "/" },
+    ]);
+    // The home page lives on another host now, so a link to it, or to a thread's old address there, opens out.
+    expect(inline("[h](https://whysosuresh.com) [t](https://whysosuresh.com/threads/22)")).toEqual([
+      { type: "link", text: "h", href: "https://whysosuresh.com" },
+      { type: "text", text: " " },
+      { type: "link", text: "t", href: "https://whysosuresh.com/threads/22" },
     ]);
   });
 

@@ -7,8 +7,10 @@
 // browser's storage. The bot check and the upload sit behind talk-send.js's two calls. Opening the page
 // at #talk opens the flow, and #talk/<topic> opens it on that topic, so a video description, a doc or a
 // page with no button can link straight to it. In the picker, a topic that names an ask (talk-topics.js) is a link
-// to that ask's questions page at /ask/<slug> rather than a choice that opens the note.
+// to that ask's questions page on the threads' host (hey.whysosuresh.com/ask/<slug>, site/hosts.js) rather than a
+// choice that opens the note.
 
+import { threadsOrigin } from './hosts.js';
 import { TOPICS, topicFromHash } from './talk-topics.js';
 import { prepare, send } from './talk-send.js';
 
@@ -161,10 +163,11 @@ class TalkFlow {
         button.append(label, hint);
         item.append(button);
       } else {
-        // A topic that names an ask opens its questions page instead of the note; #talk/<topic> still opens the note.
+        // A topic that names an ask opens its questions page, on the threads' host, instead of the note; #talk/<topic>
+        // still opens the note.
         const link = document.createElement('a');
         link.className = 'topic';
-        link.href = `/ask/${topic.ask}`;
+        link.href = `${threadsOrigin(location.origin)}/ask/${topic.ask}`;
         const go = document.createElement('em');
         go.textContent = 'A few questions →';
         link.append(label, hint, go);

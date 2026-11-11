@@ -14,7 +14,7 @@
 // begun, and is live while it is on a thread he hasn't dropped; a name given to a meeting is someone new.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { OWNER, SITE, startHarness, type Harness } from "./harness.ts";
+import { OWNER, SITE, THREADS, startHarness, type Harness } from "./harness.ts";
 
 const MEERA = "meera@example.com";
 
@@ -41,10 +41,10 @@ function token(as: Who): string {
 /** A call under /threads/api/, by its path after that. */
 async function call(path: string, request: { as?: Who; body?: unknown; origin?: string | null } = {}): Promise<Response> {
   const headers: Record<string, string> = { "Cf-Access-Jwt-Assertion": token(request.as ?? "owner") };
-  if (request.body === undefined) return harness.fetch(`${SITE}/threads/api${path}`, { headers });
+  if (request.body === undefined) return harness.fetch(`${THREADS}/threads/api${path}`, { headers });
   headers["Content-Type"] = "application/json";
-  if (request.origin !== null) headers.Origin = request.origin ?? SITE;
-  return harness.fetch(`${SITE}/threads/api${path}`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(request.body)) });
+  if (request.origin !== null) headers.Origin = request.origin ?? THREADS;
+  return harness.fetch(`${THREADS}/threads/api${path}`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(request.body)) });
 }
 
 async function answer<T>(response: Response, status = 200): Promise<T> {
@@ -100,9 +100,9 @@ async function published(): Promise<number> {
 }
 
 async function noteOn(number: number, name: string, email: string, body = "A public note."): Promise<void> {
-  const response = await harness.fetch(`${SITE}/api/threads/${number}/notes`, {
+  const response = await harness.fetch(`${THREADS}/api/threads/${number}/notes`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Origin: SITE, "CF-Connecting-IP": network() },
+    headers: { "Content-Type": "application/json", Origin: THREADS, "CF-Connecting-IP": network() },
     body: new TextEncoder().encode(JSON.stringify({ body, name, email, token: "pass" })),
   });
   expect(response.status).toBe(201);
@@ -213,7 +213,7 @@ describe("who is a person", () => {
     await noteOn(n, "Not Meera", "Meera@example.com");
     const note = (await answer<{ comments: { id: string; name: string; personNumber?: number }[] }>(await call(`/threads/${n}`))).comments[0];
     expect([note?.name, note?.personNumber]).toEqual(["Not Meera", 1]);
-    const read = await answer<{ comments: { name: string }[] }>(await harness.fetch(`${SITE}/api/threads/${n}`));
+    const read = await answer<{ comments: { name: string }[] }>(await harness.fetch(`${THREADS}/api/threads/${n}`));
     expect(read.comments.map((one) => one.name)).toEqual(["Not Meera"]);
     const theirs = await answer<{ comments: Record<string, unknown>[] }>(await call(`/threads/${n}`, { as: { email: MEERA } }));
     expect(theirs.comments).toEqual([expect.objectContaining({ name: "Not Meera" })]);
@@ -290,7 +290,7 @@ describe("the people calls", () => {
     for (const path of ["/people/1", "/people/99"]) {
       expect(await reasonOf(await call(path, { as: { email: MEERA }, body: { note: "Mine." } }))).toEqual([403, "owner-only"]);
     }
-    const signedOut = await harness.fetch(`${SITE}/threads/api/people`);
+    const signedOut = await harness.fetch(`${THREADS}/threads/api/people`);
     expect(signedOut.status).toBe(401);
     expect(await count("SELECT COUNT(*) AS n FROM people WHERE note IS NOT NULL")).toBe(0);
   });
@@ -300,7 +300,7 @@ describe("the people calls", () => {
     expect(await reasonOf(await call("/people/1", { as: "sync", body: { note: "No." } }))).toEqual([403, "owner-only"]);
     expect(await reasonOf(await call("/people/1", { body: { note: "No." }, origin: "https://example.com" }))).toEqual([403, "origin"]);
     expect(await reasonOf(await call("/people/1", { body: { note: "No." }, origin: null }))).toEqual([403, "origin"]);
-    expect((await harness.fetch(`${SITE}/threads/api/people`, { method: "POST", headers: { "Cf-Access-Jwt-Assertion": token("owner"), Origin: SITE } })).status).toBe(405);
+    expect((await harness.fetch(`${THREADS}/threads/api/people`, { method: "POST", headers: { "Cf-Access-Jwt-Assertion": token("owner"), Origin: THREADS } })).status).toBe(405);
     expect(await reasonOf(await call("/people?x=1"))).toEqual([400, "query"]);
     expect(await reasonOf(await call("/people/abc"))).toEqual([404, "no-person"]);
     expect(await reasonOf(await call("/people/7"))).toEqual([404, "no-person"]);

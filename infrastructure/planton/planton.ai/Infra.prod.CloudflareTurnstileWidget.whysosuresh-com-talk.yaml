@@ -18,7 +18,8 @@ metadata:
 spec:
   accountId: $var/cloudflare-whysosuresh-account-id
   name: whysosuresh.com talk
-  # The production widget allows only the site. Local runs use Cloudflare's public test keys instead, so
+  # The production widget allows only the site: a hostname covers itself and every host under it, so the
+  # threads' host, hey.whysosuresh.com, needs no entry. Local runs use Cloudflare's public test keys instead, so
   # this key never works on localhost.
   domains:
     - whysosuresh.com

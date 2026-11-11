@@ -1,5 +1,5 @@
 # The account `whysosuresh`'s Zero Trust organization (../../vendors/cloudflare/README.md, "Zero Trust"): the
-# team whose sign-in page guards the threads' calls at whysosuresh.com/threads/api. Cloudflare creates it when Zero Trust is
+# team whose sign-in page guards the threads' calls at hey.whysosuresh.com/threads/api. Cloudflare creates it when Zero Trust is
 # switched on (row 21's owner step, 2026-11-04), under a random team name; this file gives it the site's name.
 # Planton configures it and never creates or deletes it: deleting this resource changes nothing at Cloudflare.
 #

@@ -6,7 +6,8 @@
 # Worker can't disagree about who is invited. Anyone else who types an address on the sign-in page is sent no code.
 # The owner's policy and the sync's come first in the application; this one is third.
 #
-# The Worker's deploy comes before this file: both addresses must answer before Access asks them.
+# The Worker's deploy comes before this file: both addresses must answer before Access asks them. They live on the
+# threads' host, beside the door they answer for.
 #
 #   planton apply -f Infra.prod.CloudflareZeroTrustAccessPolicy.whysosuresh-com-threads-members.yaml --instance planton.ai --org why-so-suresh
 apiVersion: cloudflare.planton.dev/v1alpha1
@@ -24,5 +25,5 @@ spec:
   sessionDuration: 168h # a week between email codes, as the owner's
   include:
     - externalEvaluation:
-        evaluateUrl: https://whysosuresh.com/api/access/evaluate
-        keysUrl: https://whysosuresh.com/api/access/keys
+        evaluateUrl: https://hey.whysosuresh.com/api/access/evaluate
+        keysUrl: https://hey.whysosuresh.com/api/access/keys

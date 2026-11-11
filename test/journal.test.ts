@@ -12,9 +12,9 @@
 // cache that may keep it, because it never changes.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { SITE, startHarness, type Harness } from "./harness.ts";
+import { THREADS, startHarness, type Harness } from "./harness.ts";
 
-const JOURNAL = `${SITE}/threads/api/journal`;
+const JOURNAL = `${THREADS}/threads/api/journal`;
 const MEMBER = "meera@example.com";
 
 let harness: Harness;
@@ -43,7 +43,7 @@ async function get(path: string, as: Who = "owner"): Promise<Response> {
 }
 
 /** A JSON POST under the journal; the owner's comes from his own page unless `origin` says otherwise. */
-async function post(path: string, body: unknown, as: Who = "sync", origin: string | null = SITE): Promise<Response> {
+async function post(path: string, body: unknown, as: Who = "sync", origin: string | null = THREADS): Promise<Response> {
   const headers: Record<string, string> = { ...headersFor(as), "Content-Type": "application/json" };
   if (as === "owner" && origin !== null) headers.Origin = origin;
   return harness.fetch(`${JOURNAL}${path}`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(body)) });
@@ -52,7 +52,7 @@ async function post(path: string, body: unknown, as: Who = "sync", origin: strin
 /** A photo's bytes POSTed as the sync uploads one. */
 async function upload(bytes: Uint8Array, type = "image/jpeg", as: Who = "sync"): Promise<Response> {
   const headers: Record<string, string> = { ...headersFor(as), "Content-Type": type };
-  if (as === "owner") headers.Origin = SITE;
+  if (as === "owner") headers.Origin = THREADS;
   return harness.fetch(`${JOURNAL}/photos`, { method: "POST", headers, body: bytes });
 }
 
@@ -94,16 +94,16 @@ const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0
 
 /** An invited person: a thread the sync adds, and the owner's invitation to it. */
 async function invite(): Promise<void> {
-  const added = await harness.fetch(`${SITE}/threads/api/threads`, {
+  const added = await harness.fetch(`${THREADS}/threads/api/threads`, {
     method: "POST",
     headers: { ...headersFor("sync"), "Content-Type": "application/json" },
     body: new TextEncoder().encode(JSON.stringify({ ref: "chat:journal-test", source: "self", title: "A thread", body: "Words.", space: null, status: "discuss" })),
   });
   expect(added.status).toBe(201);
   const number = ((await added.json()) as { thread: { number: number } }).thread.number;
-  const invited = await harness.fetch(`${SITE}/threads/api/threads/${number}/people`, {
+  const invited = await harness.fetch(`${THREADS}/threads/api/threads/${number}/people`, {
     method: "POST",
-    headers: { ...headersFor("owner"), "Content-Type": "application/json", Origin: SITE },
+    headers: { ...headersFor("owner"), "Content-Type": "application/json", Origin: THREADS },
     body: new TextEncoder().encode(JSON.stringify({ add: { email: MEMBER, name: "Meera" } })),
   });
   expect(invited.status).toBe(200);

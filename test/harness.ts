@@ -7,7 +7,8 @@
 // files over through, which applies site/_redirects and site/_headers as the deploy does), with a real local D1 holding
 // migrations/, all of them or up to the one a test names, so a test can stage a table as an earlier one left
 // it and then apply the rest, and a real local R2 bucket for the pages saved into threads. Turnstile's
-// verification is played here: a token of `pass` passes for the request's own host, `wrong-host` passes for
+// verification is played here: a token of `pass` passes for the host the test last asked (the home page's or the
+// threads'), `wrong-host` passes for
 // another host, `wrong-action` for another action, `unreachable` answers as a check that is down, and
 // anything else fails; under Cloudflare's test secret every token passes, as Cloudflare answers it. Cloudflare
 // Access is played too: the team's certs address (wrangler.jsonc's `ACCESS_TEAM_DOMAIN`) serves the harness's
@@ -61,7 +62,9 @@ export const INBOX_SYNC_CLIENT_ID = wranglerVar("INBOX_SYNC_CLIENT_ID");
 export const OWNER = "owner@example.com";
 
 const WORKER = "whysosuresh-com";
+/** The home page's host, and the threads' one label below it (site/hosts.js), where everything behind the door lives. */
 export const SITE = "https://whysosuresh.com";
+export const THREADS = "https://hey.whysosuresh.com";
 export const TURNSTILE_HOST = "challenges.cloudflare.com";
 /** The bot check's secret in the harness; the played Turnstile refuses any other. */
 export const SECRET = "turnstile-secret-for-the-harness";
@@ -303,7 +306,7 @@ function playAccess(): PlayedAccess & { serve(request: RuntimeRequest): RuntimeR
       exp: now() + 60,
       nonce,
       identity: { email, idp: { type: "onetimepin" } },
-      request_url: "https://whysosuresh.com/threads/api/sign-in",
+      request_url: "https://hey.whysosuresh.com/threads/api/sign-in",
       iss: undefined,
       nbf: undefined,
       type: undefined,
@@ -346,6 +349,8 @@ export async function startHarness(options: { secret?: string; owner?: string; t
   if (!existsSync(bundlePath)) throw new Error("dist/worker.js is missing: run `npm run dry-run` first (`npm test` does)");
   if (!COMPATIBILITY_DATE) throw new Error("wrangler.jsonc names no compatibility_date");
   const outboundHosts = new Set<string>();
+  // The host the test last asked: the page a played widget ran on, which a passing verdict names, as Turnstile's does.
+  let askedHost = new URL(SITE).hostname;
   const access = playAccess();
   const outside = playOutside();
 
@@ -366,7 +371,7 @@ export async function startHarness(options: { secret?: string; owner?: string; t
       const known = form.get("secret") === SECRET && form.get("remoteip") !== null;
       const verdict = {
         success: known && ["pass", "wrong-host", "wrong-action"].includes(token ?? ""),
-        hostname: token === "wrong-host" ? "elsewhere.example" : new URL(SITE).hostname,
+        hostname: token === "wrong-host" ? "elsewhere.example" : askedHost,
         action: token === "wrong-action" ? "subscribe" : "talk",
       };
       return new RuntimeResponse(JSON.stringify(verdict), { headers: { "content-type": "application/json" } });
@@ -441,6 +446,7 @@ export async function startHarness(options: { secret?: string; owner?: string; t
 
   return {
     async fetch(url, init) {
+      askedHost = new URL(url).hostname;
       return (await mf.dispatchFetch(url, init as never)) as unknown as Response;
     },
     db,

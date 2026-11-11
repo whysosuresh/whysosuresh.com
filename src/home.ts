@@ -20,7 +20,9 @@
 // An item is a posted thread: its title (`#<n>` when it has none), its first block as plain text read with the site's
 // own Markdown reader (never the living summary, which is his private grid of what is decided and open), the day he
 // posted it in his own zone, how many notes a stranger reads under it (shown only above zero), and its address: the
-// thread's, or its `?full` address when its main section is a page, so a reader lands on the page full screen. Only
+// thread's, or its `?full` address when its main section is a page, so a reader lands on the page full screen, always
+// on the threads' host (hey.whysosuresh.com, built from the request's own origin by site/hosts.js), because threads
+// live there and this host answers none of their addresses. Only
 // public threads are ever posted, and the feed's query holds that in its own SQL, so strangers read here only what
 // they could read at the thread's own address. A video is its title, its day, "Watch on YouTube" and, once the hourly
 // run copied it, its picture from the site's own `/thumbs/<id>.jpg`, versioned by the video's `updated` so a changed
@@ -40,6 +42,7 @@
 // (`readNowLine`, src/wire.ts; 400 `now` otherwise), and an empty one takes the line off the home page. Every line is
 // kept (migrations/0018_feed.sql).
 
+import { threadsOrigin } from "../site/hosts.js";
 import type { Caller } from "./access.ts";
 import type { Bindings } from "./bindings.ts";
 import { json } from "./json.ts";
@@ -82,8 +85,8 @@ interface Post {
   /** When he posted it. */
   readonly at: string;
   readonly notes: number;
-  /** Where the title, Read and the feed's link lead, decided by `postPath`. */
-  readonly path: string;
+  /** Where the title, Read and the feed's link lead: the threads' origin and `postPath`. */
+  readonly url: string;
 }
 
 /** A full episode on his channel. */
@@ -127,7 +130,7 @@ export function postPath(row: Pick<FeedRow, "number" | "main">): string {
   return row.main === "page" ? `/threads/${row.number}?full` : `/threads/${row.number}`;
 }
 
-function postOf(row: FeedRow): Post {
+function postOf(row: FeedRow, threads: string): Post {
   return {
     kind: "post",
     number: row.number,
@@ -135,7 +138,7 @@ function postOf(row: FeedRow): Post {
     excerpt: clip(plainText(row.body, false), MAX_EXCERPT),
     at: row.feed_at,
     notes: row.notes,
-    path: postPath(row),
+    url: `${threads}${postPath(row)}`,
   };
 }
 
@@ -157,9 +160,10 @@ function outsideOf(row: OutsideRow): Video | Release {
 /**
  * His posts and the outside items as one list, newest first, at most `limit`: by date, a post before an outside item
  * of the same moment, outside items of one moment by id, and posts of one moment in the order their read gave them.
+ * A post links into `threads`, the threads' origin.
  */
-export function merged(posts: readonly FeedRow[], outside: readonly OutsideRow[], limit: number): Item[] {
-  const items: Item[] = [...posts.map(postOf), ...outside.map(outsideOf)];
+export function merged(posts: readonly FeedRow[], outside: readonly OutsideRow[], limit: number, threads: string): Item[] {
+  const items: Item[] = [...posts.map((row) => postOf(row, threads)), ...outside.map(outsideOf)];
   return items
     .sort((a, b) => {
       if (a.at !== b.at) return a.at < b.at ? 1 : -1;
@@ -207,7 +211,7 @@ function itemMarkup(item: Item, today: Date): string {
       `<p class="meta"><span>Release</span><a href="${href}">Release notes</a></p></div></li>`
     );
   }
-  const href = attribute(item.path);
+  const href = attribute(item.url);
   const excerpt = item.excerpt === "" ? "" : `<p>${attribute(item.excerpt)}</p>`;
   const notes = item.notes > 0 ? `<span>${attribute(notesOf(item.notes))}</span>` : "";
   return (
@@ -267,7 +271,7 @@ export async function handleHome(request: Request, env: Bindings): Promise<Respo
   try {
     // One more than it shows, from each list, tells whether there are more.
     const feed = await homeFeed(env.DB, HOME_LIMIT + 1);
-    items = merged(feed.items, feed.outside, HOME_LIMIT + 1);
+    items = merged(feed.items, feed.outside, HOME_LIMIT + 1, threadsOrigin(new URL(request.url).origin));
     now = shown(feed.now);
   } catch {
     return env.ASSETS.fetch(request);
@@ -289,7 +293,7 @@ export async function handleUpdates(request: Request, env: Bindings): Promise<Re
   let items: Item[];
   try {
     const feed = await homeFeed(env.DB, UPDATES_LIMIT);
-    items = merged(feed.items, feed.outside, UPDATES_LIMIT);
+    items = merged(feed.items, feed.outside, UPDATES_LIMIT, threadsOrigin(new URL(request.url).origin));
   } catch {
     const failed = unvalidated(page, 503);
     failed.headers.set("Retry-After", "300");
@@ -324,7 +328,7 @@ export function atom(items: readonly Item[], origin: string): string {
       `  <entry>\n` +
       `    <id>${xml(entryId(item))}</id>\n` +
       `    <title>${xml(item.title)}</title>\n` +
-      `    <link rel="alternate" type="text/html" href="${xml(item.kind === "post" ? `${origin}${item.path}` : item.url)}"/>\n` +
+      `    <link rel="alternate" type="text/html" href="${xml(item.url)}"/>\n` +
       `    <updated>${xml(item.at)}</updated>\n` +
       (item.kind !== "post" || item.excerpt === "" ? "" : `    <summary>${xml(item.excerpt)}</summary>\n`) +
       `  </entry>\n`,
@@ -350,7 +354,7 @@ export async function handleFeed(request: Request, env: Bindings): Promise<Respo
   let items: Item[];
   try {
     const feed = await homeFeed(env.DB, FEED_LIMIT);
-    items = merged(feed.items, feed.outside, FEED_LIMIT);
+    items = merged(feed.items, feed.outside, FEED_LIMIT, threadsOrigin(new URL(request.url).origin));
   } catch {
     return json(503, { reason: "unavailable" }, { "Retry-After": "300" });
   }

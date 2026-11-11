@@ -14,7 +14,7 @@
 // else the unknown path's 404; the run reaches only its three hosts; and a database that fails fails the run.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { RELEASES, SITE, THUMB, YOUTUBE_FEED, releaseAnswer, startHarness, type Harness } from "./harness.ts";
+import { RELEASES, SITE, THREADS, THUMB, YOUTUBE_FEED, releaseAnswer, startHarness, type Harness } from "./harness.ts";
 
 let harness: Harness;
 
@@ -84,9 +84,9 @@ let posts = 0;
 /** A call on the threads' private API, as the sync or the owner. */
 async function send(path: string, as: "sync" | "owner", body: unknown): Promise<Record<string, unknown>> {
   const claims = as === "sync" ? harness.access.syncClaims() : harness.access.ownerClaims();
-  const response = await harness.fetch(`${SITE}/threads/api/threads${path}`, {
+  const response = await harness.fetch(`${THREADS}/threads/api/threads${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(claims), Origin: SITE },
+    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(claims), Origin: THREADS },
     body: new TextEncoder().encode(JSON.stringify(body)),
   });
   expect(response.ok).toBe(true);

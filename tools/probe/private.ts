@@ -1,19 +1,27 @@
 // The privacy probe the deploy runs against the live site after every deploy (`.github/workflows/site.yaml`, job
-// `private`), holding no key: it asks for Suresh's private calls as a stranger would, with no sign-in and with a forged
-// one, and fails unless each stops at Cloudflare Access's sign-in, never answering a word. His journal's calls are all
-// asked, every kind of address under /threads/api/journal (the list, a day, an earlier version, a week, the storylines,
-// a photo), and the threads' own private calls beside them (a tab's list, the people, the asks, a thread, the home
-// page's Now line). The journal's
-// pages are asked too: each must be the same shell as /me, byte for byte, because a page holds no words and reads them
-// only from the calls after sign-in. A recent day's address is asked whatever the date, since the shell is the same for
-// a day written or not. This module is the logic, with fetch handed in so a test plays the site; tools/probe/run.ts is
-// the entry point.
+// `private`), holding no key: it asks for Suresh's private calls on the threads' host (hey.whysosuresh.com, derived
+// from the home page's origin by site/hosts.js) as a stranger would, with no sign-in and with a forged one, and fails
+// unless each stops at Cloudflare Access's sign-in, never answering a word. His journal's calls are all asked, every
+// kind of address under /threads/api/journal (the list, a day, an earlier version, a week, the storylines, a photo),
+// and the threads' own private calls beside them (a tab's list, the people, the asks, a thread, the home page's Now
+// line). The journal's pages are asked too: each must be the same shell as the threads' root, Today, byte for byte,
+// because a page holds no words and reads them only from the calls after sign-in. A recent day's address is asked
+// whatever the date, since the shell is the same for a day written or not. The home page's host is asked for the
+// threads' old addresses there, each of which must be gone (404), so the old door stays shut. This module is the
+// logic, with fetch handed in so a test plays the site; tools/probe/run.ts is the entry point.
 
-/** One address the probe asks, and what it expects of it. */
+import { threadsOrigin } from "../../site/hosts.js";
+
+/** One address the probe asks, on which host, and what it expects of it. */
 export interface Probe {
   readonly path: string;
-  /** `sign-in`: a redirect to the Access team's sign-in, or a refusal; `shell`: the same bytes as /me. */
-  readonly expect: "sign-in" | "shell";
+  /** `threads`, the threads' host, where everything behind the door lives; `home`, the home page's. */
+  readonly host: "threads" | "home";
+  /**
+   * `sign-in`: a redirect to the Access team's sign-in, or a refusal; `shell`: the same bytes as the threads' root;
+   * `gone`: a 404 and nothing else.
+   */
+  readonly expect: "sign-in" | "shell" | "gone";
   /** Headers sent with it: none, or a forged sign-in. */
   readonly headers?: Readonly<Record<string, string>>;
 }
@@ -29,26 +37,35 @@ export function probes(day: string, week: string): Probe[] {
   const journal = ["", `/${day}`, `/${day}?version=1`, `/${week}`, "/storylines", `/photos/${PHOTO}`].map((rest) => `/threads/api/journal${rest}`);
   const threads = ["/threads/api/threads?tab=look", "/threads/api/threads/1", "/threads/api/people", "/threads/api/asks", "/threads/api/me", "/threads/api/now"];
   return [
-    ...[...journal, ...threads].map((path): Probe => ({ path, expect: "sign-in" })),
-    { path: "/threads/api/journal", expect: "sign-in", headers: FORGED_TOKEN },
-    { path: "/threads/api/journal", expect: "sign-in", headers: FORGED_SERVICE },
-    { path: `/threads/api/journal/${day}`, expect: "sign-in", headers: FORGED_TOKEN },
-    ...["/journal", `/journal/${day}`, `/journal/${week}`, "/journal/storylines"].map((path): Probe => ({ path, expect: "shell" })),
+    ...[...journal, ...threads].map((path): Probe => ({ path, host: "threads", expect: "sign-in" })),
+    { path: "/threads/api/journal", host: "threads", expect: "sign-in", headers: FORGED_TOKEN },
+    { path: "/threads/api/journal", host: "threads", expect: "sign-in", headers: FORGED_SERVICE },
+    { path: `/threads/api/journal/${day}`, host: "threads", expect: "sign-in", headers: FORGED_TOKEN },
+    ...["/journal", `/journal/${day}`, `/journal/${week}`, "/journal/storylines"].map((path): Probe => ({ path, host: "threads", expect: "shell" })),
+    ...["/threads/api/me", "/threads/api/journal", "/journal", "/me"].map((path): Probe => ({ path, host: "home", expect: "gone" })),
   ];
 }
 
-/** What the probe found wrong; empty when every address held. */
-export async function run(fetcher: (url: string, init: RequestInit) => Promise<Response>, origin: string, accessHost: string, day: string, week: string): Promise<string[]> {
+/** What the probe found wrong, given the home page's origin; empty when every address held. */
+export async function run(fetcher: (url: string, init: RequestInit) => Promise<Response>, home: string, accessHost: string, day: string, week: string): Promise<string[]> {
   const failures: string[] = [];
-  const shellAnswer = await fetcher(`${origin}/me`, { redirect: "manual" });
+  const threads = threadsOrigin(home);
+  const shellAnswer = await fetcher(`${threads}/`, { redirect: "manual" });
   const shell = shellAnswer.status === 200 ? await shellAnswer.text() : null;
-  if (shell === null) failures.push(`/me answered ${shellAnswer.status}, so no page can be compared with the shell`);
+  if (shell === null) failures.push(`the threads' root answered ${shellAnswer.status}, so no page can be compared with the shell`);
   for (const probe of probes(day, week)) {
+    const origin = probe.host === "home" ? home : threads;
     const answer = await fetcher(`${origin}${probe.path}`, { redirect: "manual", headers: { ...probe.headers } });
-    const said = probe.headers === undefined ? probe.path : `${probe.path} with a forged sign-in`;
+    const where = probe.host === "home" ? `${probe.path} on the home page's host` : probe.path;
+    const said = probe.headers === undefined ? where : `${where} with a forged sign-in`;
     if (probe.expect === "shell") {
       const body = await answer.text();
-      if (answer.status !== 200 || shell === null || body !== shell) failures.push(`${said} answered ${answer.status} and is not the /me shell`);
+      if (answer.status !== 200 || shell === null || body !== shell) failures.push(`${said} answered ${answer.status} and is not the threads' shell`);
+      continue;
+    }
+    if (probe.expect === "gone") {
+      await answer.body?.cancel();
+      if (answer.status !== 404) failures.push(`${said} answered ${answer.status}; the threads' old address must be gone (404)`);
       continue;
     }
     // Refused at the edge or by the Worker are both a stranger kept out; anything that answers 2xx is not.

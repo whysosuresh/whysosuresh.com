@@ -1,7 +1,8 @@
 // The signed-in local site, for looking at the threads page in a real browser before a deploy:
-// `npm run dev:signed-in` serves http://localhost:8790/ from the Worker's own bundle in workerd (test/harness.ts),
-// with a local D1 and R2 holding a few made-up threads, and plays Cloudflare Access by signing every call under
-// /threads/api/ as the owner, the way the edge hands a signed-in request over. `--signed-out` signs nothing, so the
+// `npm run dev:signed-in` serves the home page at http://localhost:8790/ and the threads at http://hey.localhost:8790/
+// (site/hosts.js; a browser sends every *.localhost to this machine) from the Worker's own bundle in workerd
+// (test/harness.ts), each request to the host it was sent to, with a local D1 and R2 holding a few made-up threads,
+// and plays Cloudflare Access by signing every call under /threads/api/ as the owner, the way the edge hands a signed-in request over. `--signed-out` signs nothing, so the
 // page shows what a visitor sees; `--member <address>` signs every call as a person signed in by that address, so
 // the page shows what an invited person sees. The seed always shares one thread ("Who owns what") with a made-up
 // person, Meera, at that address or meera@example.com, who has the last word on it, beside an "Only me" comment of
@@ -23,7 +24,7 @@
 // what" later today (with Meera, who is invited, and Dev K., who has no address), the review next Wednesday (with
 // Meera and Asha), the meetup a few days out as a day with no time (with Asha and Leela, someone new added by name),
 // and pricing for small teams three days ago (with Asha). Three asks, each a thread of his own with a questions page:
-// "Tuesday demo", open at /ask/demo-nov-10, answered from 34 browsers (Ravi and Priya by name, Meera with the guest's
+// "Tuesday demo", open at hey's /ask/demo-nov-10, answered from 34 browsers (Ravi and Priya by name, Meera with the guest's
 // address, whom he invited back to her own thread, and 31 more, a few without a name), its earlier answers marked
 // read and the newest still new, so Today folds them into one row and Answered by has enough for Show all and its
 // filter; "Founders dinner", a draft at /ask/founders-dinner, which only he can open; and "October meetup", closed,
@@ -35,17 +36,20 @@
 // answers, a discussion on its words, one on words its second version cut, and replies, and each file given with
 // `--page <file>` (an
 // artifact's HTML as the Artifact tool's read saved it) as a version of one thread. Requests reach the Worker at
-// this local address, so the bridge a page carries addresses what it says to it, as it addresses whysosuresh.com
-// live. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
+// these local addresses, so the bridge a page carries addresses what it says to them, as it addresses
+// hey.whysosuresh.com live. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
 // played keys.
 
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { addDays, weekDays, weekOf } from "../site/app/journal.js";
-import { SITE, TEST_SECRET, THUMB, startHarness, type Harness } from "./harness.ts";
+import { SITE, TEST_SECRET, THREADS, THUMB, startHarness, type Harness } from "./harness.ts";
 
 const PORT = 8790;
+/** The two local hosts, as the browser names them: the home page's, and the threads' one label below it (site/hosts.js). */
 const LOCAL = `http://localhost:${PORT}`;
+const LOCAL_THREADS = `http://hey.localhost:${PORT}`;
+const LOCAL_HOSTS = new Set([new URL(LOCAL).host, new URL(LOCAL_THREADS).host]);
 const signedOut = process.argv.includes("--signed-out");
 /** The address after `--member`, signed in as an invited person instead of the owner. */
 const memberAt = process.argv.indexOf("--member");
@@ -64,7 +68,7 @@ const sync = (): string => harness.access.token(harness.access.syncClaims());
 
 /** Sends one call as the sync, as `inbox` does, and answers its JSON. */
 async function asSync(path: string, body: unknown): Promise<Record<string, unknown>> {
-  const response = await harness.fetch(`${SITE}/threads/api/threads${path}`, {
+  const response = await harness.fetch(`${THREADS}/threads/api/threads${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": sync() },
     body: new TextEncoder().encode(JSON.stringify(body)),
@@ -124,9 +128,9 @@ async function seed(): Promise<void> {
   const guest = member ?? "meera@example.com";
   /** Sends one call from a signed-in browser on the site: the owner's, or the invited guest's. */
   const asPerson = async (claims: Record<string, unknown>, path: string, body: unknown): Promise<void> => {
-    const response = await harness.fetch(`${SITE}/threads/api/threads${path}`, {
+    const response = await harness.fetch(`${THREADS}/threads/api/threads${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: SITE, "Cf-Access-Jwt-Assertion": harness.access.token(claims) },
+      headers: { "Content-Type": "application/json", Origin: THREADS, "Cf-Access-Jwt-Assertion": harness.access.token(claims) },
       body: new TextEncoder().encode(JSON.stringify(body)),
     });
     if (!response.ok) throw new Error(`seeding ${path} answered ${response.status}: ${await response.text()}`);
@@ -156,9 +160,9 @@ async function seed(): Promise<void> {
   await asPerson(owner, `/${meetup}/people`, { add: { email: "asha@example.com", name: "Asha" } });
   /** A change to a person from the owner's own page. */
   const toPerson = async (number: number, change: Record<string, string>): Promise<void> => {
-    const response = await harness.fetch(`${SITE}/threads/api/people/${number}`, {
+    const response = await harness.fetch(`${THREADS}/threads/api/people/${number}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: SITE, "Cf-Access-Jwt-Assertion": harness.access.token(owner) },
+      headers: { "Content-Type": "application/json", Origin: THREADS, "Cf-Access-Jwt-Assertion": harness.access.token(owner) },
       body: new TextEncoder().encode(JSON.stringify(change)),
     });
     if (!response.ok) throw new Error(`seeding person ${number} answered ${response.status}: ${await response.text()}`);
@@ -167,7 +171,7 @@ async function seed(): Promise<void> {
   await toPerson(meera, { note: "Met at the infra meetup in October.\n\n- prefers async, writes long\n- owns pricing from Friday" });
   const page = async (number: number, html: Uint8Array, from: string | null): Promise<void> => {
     const query = from === null ? "" : `?${new URLSearchParams({ from }).toString()}`;
-    const response = await harness.fetch(`${SITE}/threads/api/threads/${number}/pages${query}`, {
+    const response = await harness.fetch(`${THREADS}/threads/api/threads/${number}/pages${query}`, {
       method: "POST",
       headers: { "Content-Type": "text/html; charset=utf-8", "Cf-Access-Jwt-Assertion": sync() },
       body: html,
@@ -196,9 +200,9 @@ async function seed(): Promise<void> {
   const asha = harness.access.memberClaims("asha@example.com");
   const guestClaims = harness.access.memberClaims(guest);
   const commentAs = async (claims: Record<string, unknown>, body: Record<string, unknown>): Promise<string> => {
-    const response = await harness.fetch(`${SITE}/threads/api/threads/${review}/comments`, {
+    const response = await harness.fetch(`${THREADS}/threads/api/threads/${review}/comments`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: SITE, "Cf-Access-Jwt-Assertion": harness.access.token(claims) },
+      headers: { "Content-Type": "application/json", Origin: THREADS, "Cf-Access-Jwt-Assertion": harness.access.token(claims) },
       body: new TextEncoder().encode(JSON.stringify(body)),
     });
     if (response.status !== 201) throw new Error(`seeding a comment on #${review} answered ${response.status}: ${await response.text()}`);
@@ -242,9 +246,9 @@ async function seed(): Promise<void> {
   await asPerson(owner, `/${shipping}/people`, { add: { email: guest, name: "Meera" } });
   const note = async (words: string, name: string, email: string): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 5));
-    const response = await harness.fetch(`${SITE}/api/threads/${shipping}/notes`, {
+    const response = await harness.fetch(`${THREADS}/api/threads/${shipping}/notes`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: SITE, "CF-Connecting-IP": "203.0.113.50" },
+      headers: { "Content-Type": "application/json", Origin: THREADS, "CF-Connecting-IP": "203.0.113.50" },
       body: new TextEncoder().encode(JSON.stringify({ body: words, name, email, token: "pass" })),
     });
     if (response.status !== 201) throw new Error(`seeding a note on #${shipping} answered ${response.status}: ${await response.text()}`);
@@ -266,9 +270,9 @@ ${"<p>A line to make the page tall.</p>".repeat(12)}</body></html>`;
   await asPerson(owner, `/${cold}`, { action: "post" });
   const visitorAnswer = async (key: string, question: string, words: string): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 5));
-    const response = await harness.fetch(`${SITE}/api/threads/${cold}/answers`, {
+    const response = await harness.fetch(`${THREADS}/api/threads/${cold}/answers`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: SITE, "CF-Connecting-IP": "203.0.113.60" },
+      headers: { "Content-Type": "application/json", Origin: THREADS, "CF-Connecting-IP": "203.0.113.60" },
       body: new TextEncoder().encode(JSON.stringify({ question, body: words, name: "Sam", token: "pass", key })),
     });
     if (response.status !== 201) throw new Error(`seeding an answer on #${cold} answered ${response.status}: ${await response.text()}`);
@@ -280,7 +284,7 @@ ${"<p>A line to make the page tall.</p>".repeat(12)}</body></html>`;
   // Asks: a questions page, made a draft by the sync and opened from his own page, as the real ones are.
   const askPage = (title: string, ids: readonly string[]): string => `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title><style>body{font:16px/1.55 system-ui;margin:0;padding:32px 28px;max-width:640px}h1{font-size:30px;letter-spacing:-.02em;margin:0 0 8px}p.lede{color:#5c5c5c}.q{padding:16px 0;border-bottom:1px solid #e5e5e5}.q p{margin:0;font-weight:600}@media (prefers-color-scheme:dark){body{background:#0d0d0e;color:#f1f1f1}}</style></head><body>
 <h1>${title}</h1><p class="lede">A few questions, all optional. I read every answer myself.</p>
-<p data-outside-thread>On whysosuresh.com/ask, a box to answer appears under each question.</p>
+<p data-outside-thread>On hey.whysosuresh.com/ask, a box to answer appears under each question.</p>
 ${ids.map((id) => `<div class="q" data-thread-question="${id}"><p>${ASK_QUESTIONS[id] ?? id}</p></div>`).join("\n")}
 </body></html>`;
   const makeAsk = async (ref: string, title: string, slug: string, ids: readonly string[], space: string): Promise<number> => {
@@ -296,9 +300,9 @@ ${ids.map((id) => `<div class="q" data-thread-question="${id}"><p>${ASK_QUESTION
   /** One answer to an ask from a browser's key, as the page sends it; the name and email count only on the first. */
   const answerAsk = async (slug: string, key: string, question: string, words: string, name = "", email = ""): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 3));
-    const response = await harness.fetch(`${SITE}/api/asks/${slug}/answers`, {
+    const response = await harness.fetch(`${THREADS}/api/asks/${slug}/answers`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: SITE, "CF-Connecting-IP": "203.0.113.70" },
+      headers: { "Content-Type": "application/json", Origin: THREADS, "CF-Connecting-IP": "203.0.113.70" },
       body: new TextEncoder().encode(JSON.stringify({ question, body: words, name, email, token: "pass", key })),
     });
     if (response.status !== 201) throw new Error(`seeding an answer to ${slug} answered ${response.status}: ${await response.text()}`);
@@ -363,12 +367,12 @@ const SEED_PHOTO = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mN8
 
 /** The made-up journal: three days before today, a hand edit, an answer, and last week's chapter. */
 async function seedJournal(): Promise<void> {
-  const journal = `${SITE}/threads/api/journal`;
+  const journal = `${THREADS}/threads/api/journal`;
   const write = async (key: string, text: string, base: number, as: "sync" | "owner" = "sync"): Promise<void> => {
     const claims = as === "sync" ? harness.access.syncClaims() : harness.access.ownerClaims();
     const response = await harness.fetch(`${journal}/${key}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(claims), Origin: SITE },
+      headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(claims), Origin: THREADS },
       body: new TextEncoder().encode(JSON.stringify({ text, base })),
     });
     if (response.status !== 201) throw new Error(`seeding the journal's ${key} answered ${response.status}: ${await response.text()}`);
@@ -389,7 +393,7 @@ async function seedJournal(): Promise<void> {
   const story = (extra = ""): string =>
     `### The walk\n*7:10 am, along the river*\n\nThe river was high and loud.\n\nAda called halfway and we talked about the launch.\n\n> Slow is a speed too.${extra}\n\n· · ·\n\n### The day at the desk\n*At the desk*\n\nMost of the day went to the draft. It is nearly there.`;
 
-  await write(d3, page(d3, "The river was high", "A loud river and a quiet desk.", ["**Storyline · The launch:** 8 days to go. The draft is half done.", "**Storyline · Morning walks:** day three."], story(), "**Sitting with:** slow mornings make fast afternoons.\n\n→ [#1](https://whysosuresh.com/threads/1) · The launch plan\n\n*From two recordings.*"), 0);
+  await write(d3, page(d3, "The river was high", "A loud river and a quiet desk.", ["**Storyline · The launch:** 8 days to go. The draft is half done.", "**Storyline · Morning walks:** day three."], story(), "**Sitting with:** slow mornings make fast afternoons.\n\n→ [#1](https://hey.whysosuresh.com/threads/1) · The launch plan\n\n*From two recordings.*"), 0);
   await write(d2, page(d2, "Seeds in the ground", "The garden started, and the draft moved.", ["**Storyline · The launch:** 7 days to go.", "**Storyline · The garden (new):** seeds in the ground.", "**Storyline · Morning walks:** day four."], story(`\n\n![The bed, freshly dug](photo:${photoId})`), "**Sitting with:** starting small.\n\n**Tomorrow's question:** Did the seeds survive the rain?\n\n→ [#12](https://github.com/example/example/issues/12) · The launch checklist"), 0);
   const latest = (fix: string): string => page(d1, "A day of rain", fix, ["**Storyline · The launch:** 6 days to go. Rehearsal tomorrow.", "**Storyline · Old habit:** let go (closed)"], story(), "**Sitting with:** rain days are desk days.\n\n**Still asking:** Did the seeds survive the rain?\n\n**Tomorrow's question:** What will the rehearsal show you?\n\n*From one recording and 40 desk dictations.*");
   await write(d1, latest("Rain all day, and the draft is dnoe."), 0);
@@ -397,7 +401,7 @@ async function seedJournal(): Promise<void> {
 
   const answer = await harness.fetch(`${journal}/${d2}/answers`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()), Origin: SITE },
+    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()), Origin: THREADS },
     body: new TextEncoder().encode(JSON.stringify({ body: "They did. Two came up already." })),
   });
   if (answer.status !== 201) throw new Error(`seeding the journal's answer answered ${answer.status}: ${await answer.text()}`);
@@ -415,6 +419,12 @@ async function body(request: IncomingMessage): Promise<Uint8Array | undefined> {
 
 async function serve(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const path = request.url ?? "/";
+  // Each request goes to the host it was sent to, so the Worker splits it as production does; any other host is refused.
+  const host = request.headers.host ?? "";
+  if (!LOCAL_HOSTS.has(host)) {
+    response.writeHead(421, { "Content-Type": "text/plain" }).end(`Open ${LOCAL}/ or ${LOCAL_THREADS}/`);
+    return;
+  }
   const headers: Record<string, string> = {};
   for (const [name, value] of Object.entries(request.headers)) {
     if (value === undefined || ["host", "connection", "content-length"].includes(name)) continue;
@@ -425,7 +435,7 @@ async function serve(request: IncomingMessage, response: ServerResponse): Promis
   }
   const method = request.method ?? "GET";
   const sent = method === "GET" || method === "HEAD" ? undefined : await body(request);
-  const answer = await harness.fetch(`${LOCAL}${path}`, { method, headers, redirect: "manual", ...(sent === undefined ? {} : { body: sent }) });
+  const answer = await harness.fetch(`http://${host}${path}`, { method, headers, redirect: "manual", ...(sent === undefined ? {} : { body: sent }) });
   const out: Record<string, string> = {};
   answer.headers.forEach((value, name) => {
     out[name] = value;
@@ -438,9 +448,9 @@ async function serve(request: IncomingMessage, response: ServerResponse): Promis
 
 /** His Now line, set from his own page as Today sets it. */
 async function seedNow(): Promise<void> {
-  const response = await harness.fetch(`${SITE}/threads/api/now`, {
+  const response = await harness.fetch(`${THREADS}/threads/api/now`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()), Origin: SITE },
+    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()), Origin: THREADS },
     body: new TextEncoder().encode(JSON.stringify({ text: "Getting Stigmer 0.1 into the hands of its first teams" })),
   });
   if (!response.ok) throw new Error(`seeding the Now line answered ${response.status}: ${await response.text()}`);
@@ -479,7 +489,8 @@ createServer((request, response) => {
   });
 }).listen(PORT, "127.0.0.1", () => {
   const as = signedOut ? "signed out" : member === null ? "signed in as the owner" : `signed in as ${member}, invited to one thread`;
-  console.log(`whysosuresh.com/me, ${as}: ${LOCAL}/me (Ctrl-C stops it)`);
+  console.log(`hey.whysosuresh.com, ${as}: ${LOCAL_THREADS}/ (Ctrl-C stops it)`);
+  console.log(`whysosuresh.com, the home page: ${LOCAL}/`);
 });
 process.on("SIGINT", () => {
   void harness.dispose().then(() => process.exit(0));

@@ -18,7 +18,7 @@
  * @typedef {{ id: string, waiting: Waiting | null }} Widget
  */
 
-/** The production widget's public key; it works only on whysosuresh.com. */
+/** The production widget's public key; it works only on whysosuresh.com and the hosts under it. */
 const SITE_KEY = '0x4AAAAAAFy5WgjeTVHRB3R9';
 
 /** Cloudflare's public test key for an invisible widget that always passes, for runs on this machine. */
@@ -38,8 +38,10 @@ function failure(message, reason) {
   return Object.assign(new Error(message), { reason });
 }
 
+/** Cloudflare's test key on a local run (localhost, hey.localhost, 127.0.0.1), the site's own everywhere else. */
 function siteKey() {
-  return ['localhost', '127.0.0.1'].includes(location.hostname) ? TEST_SITE_KEY : SITE_KEY;
+  const local = ['localhost', '127.0.0.1'].includes(location.hostname) || location.hostname.endsWith('.localhost');
+  return local ? TEST_SITE_KEY : SITE_KEY;
 }
 
 /** @type {Promise<Turnstile> | null} */

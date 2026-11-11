@@ -11,9 +11,9 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { BRIDGE, SCRIPT_VERSION } from "../src/frame-bridge.ts";
-import { SITE, startHarness, type Harness } from "./harness.ts";
+import { THREADS as HEY, startHarness, type Harness } from "./harness.ts";
 
-const THREADS = `${SITE}/threads/api/threads`;
+const THREADS = `${HEY}/threads/api/threads`;
 const MIB = 1024 * 1024;
 
 /** The frame's CSP, as src/page.ts must send it: claude.ai's page contract and no wider, framed only by the site. */
@@ -57,7 +57,7 @@ async function thread(): Promise<number> {
 async function save(number: number, html: string | Uint8Array, options: { as?: Who; from?: string; type?: string; query?: string } = {}): Promise<Response> {
   const query = options.query ?? (options.from === undefined ? "" : `?${new URLSearchParams({ from: options.from }).toString()}`);
   const headers: Record<string, string> = { "Content-Type": options.type ?? "text/html; charset=utf-8", "Cf-Access-Jwt-Assertion": token(options.as ?? "sync") };
-  if (options.as === "owner") headers.Origin = SITE;
+  if (options.as === "owner") headers.Origin = HEY;
   return harness.fetch(`${THREADS}/${number}/pages${query}`, { method: "POST", headers, body: typeof html === "string" ? new TextEncoder().encode(html) : html });
 }
 
@@ -85,7 +85,7 @@ async function reasonOf(response: Response): Promise<string> {
   return ((await response.json()) as { reason: string }).reason;
 }
 
-async function link(number: number, body: unknown, as: Who = "owner", origin: string | null = SITE): Promise<Response> {
+async function link(number: number, body: unknown, as: Who = "owner", origin: string | null = HEY): Promise<Response> {
   const headers: Record<string, string> = { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": token(as) };
   if (origin !== null) headers.Origin = origin;
   return harness.fetch(`${THREADS}/${number}/link`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(body)) });
@@ -198,7 +198,7 @@ describe("reading a page", () => {
     const text = await response.text();
     expect(text.startsWith(PAGE)).toBe(true);
     const script = text.slice(PAGE.length);
-    expect(script).toBe(`\n<script type="application/json" data-whysosuresh-frame>${JSON.stringify({ origin: SITE })}</script>\n<script type="module">${BRIDGE}</script>\n`);
+    expect(script).toBe(`\n<script type="application/json" data-whysosuresh-frame>${JSON.stringify({ origin: HEY })}</script>\n<script type="module">${BRIDGE}</script>\n`);
     // The bridge speaks only to the origin the JSON names, and is the file tools/frame/frame.ts generated from.
     expect(BRIDGE).toContain("parent.postMessage({ [KEY]: kind, ...fields }, origin)");
     expect(BRIDGE).toBe(readFileSync(new URL("../frame/bridge.js", import.meta.url), "utf8"));

@@ -1,7 +1,8 @@
 // @ts-check
-// whysosuresh.com/me and /threads: Suresh's threads, one page for all of them (site/threads/index.html, which the
-// Worker hands over at every room's address and every thread's). /me is the door everyone signed in enters by, and
-// the side rail is drawn for rooms, side by side at the top level: its head is the site, then Today (/me), Threads
+// hey.whysosuresh.com: Suresh's threads, one page for all of them (site/threads/index.html, which the Worker hands
+// over on the threads' host at every room's address and every thread's). Its root, /, is the door everyone signed in
+// enters by, and the side rail is drawn for rooms, side by side at the top level: its head is the site, which leads
+// to the home page's host (site/hosts.js), then Today (/), Threads
 // (/threads/) with the five spaces under it, People (/people), Meetings (/meetings), Asks (/asks) and Journal
 // (/journal). On a phone the bar holds Today, Threads, Find, New and More, with People, Meetings, Asks and Journal
 // under More. His journal is his alone: the list of days week by week (/journal), a day or a week's chapter
@@ -10,7 +11,7 @@
 // the box and says so); the storylines' trail (/journal/storylines) and one storyline (/journal/storylines/the-demo);
 // and on Today the latest day's card, its countdowns from today in his own zone, and its question with a box to
 // answer it, kept with Undo. The views, each at its own address: Today
-// (/me: the next meeting as a card, then threads waiting on him, new ones, and open threads
+// (/: the next meeting as a card, then threads waiting on him, new ones, and open threads
 // that sat a week untouched), the Threads room (/threads/, or /threads/?only=act&space=company: two tabs, Pending
 // and Done, by where a thread stands (site/app/standing.js), Pending with a line of counts that shows one open status
 // at a time and a tag on every row, and the five spaces), and a thread
@@ -79,7 +80,7 @@
 // someone new; clearing it takes its people off, with Undo. A row carries a meeting's date as a chip, solid while it
 // is near. The Meetings room lists them, coming soonest first, then past. Being in one grants nothing: an invited
 // person reads the meeting of a thread they are in, read only, with their own place marked, and gets Your meetings,
-// the ones they are in, and their next one as a card at /me.
+// the ones they are in, and their next one as a card at /, Today.
 //
 // An ask is one of his own threads whose page asks a few questions, handed to many people by one link, /ask/<slug>
 // (asks.js holds their words). Asks lists them for him: drafts first, which only he opens, then every link with Copy
@@ -98,13 +99,14 @@
 // alone never says a thread exists; a device that has signed in before also gets a small "Sign in". The link in an
 // invitation carries `?invite`: signed out, it goes straight to the sign-in and back; signed in, the page drops it
 // from the address, so a copied link is the clean one. `?invite` on any number does the same, so it says nothing
-// about a thread. At /me, /meetings and a people address (which says nothing about whether a person exists) it says
+// about a thread. At /, /meetings and a people address (which says nothing about whether a person exists) it says
 // "Suresh's private space" with a Sign in button, and at /threads/ itself "Threads" with one. An invited person's home is
-// /me too: the rail lists their threads under "Shared with you, by Suresh". Either sign-in goes through the
+// Today too: the rail lists their threads under "Shared with you, by Suresh". Either sign-in goes through the
 // threads' sign-in call and comes back to the same address. When the sign-in ends mid-use, a line says so and nothing typed
 // is lost. Every element is built with DOM calls and every text is set as text, so nothing anyone wrote becomes
 // markup; Markdown is parsed into blocks first (markdown.js). The CSP allows no inline script or style attribute.
 
+import { homeOrigin, shownAddress } from '../hosts.js';
 import { SPACES } from '../spaces.js';
 import { MEMBER_COMMANDS, MEMBER_SHEET, SHEET, commandFor } from './keys.js';
 import { STATUS_NAMES, TAB_NAMES, TABS, breakdown, countWords, listPath, ordered, routeTab, shows, tabOf, tagOf } from './standing.js';
@@ -292,7 +294,9 @@ const MAX_NOTE = 4000;
 /** A thread's own address, with its title after the number or not. */
 const THREAD_PATH = /^\/threads\/([1-9]\d{0,8})(?:-[^/]*)?$/;
 /** The door everyone signed in enters by: Today for him, their threads for a person he invited. */
-const ME = '/me';
+const ME = '/';
+/** The home page, on its own host: where the site's name leads from every bar. */
+const HOME = `${homeOrigin(location.origin)}/`;
 /** The Threads room, its first tab and every space. */
 const THREADS = '/threads/';
 /** The Meetings room: his meetings, or an invited person's own. */
@@ -933,6 +937,8 @@ class Threads {
     this.pub = find(document, '[data-public]', HTMLElement);
     this.pubDoc = find(document, '[data-public-doc]', HTMLElement);
     this.pubSignIn = find(document, '[data-public-sign-in]', HTMLAnchorElement);
+    // The shell's links to the site name the root, which on this host is Today; they lead to the home page instead.
+    for (const link of document.querySelectorAll('a[data-home]')) if (link instanceof HTMLAnchorElement) link.href = HOME;
     iconTemplate = find(document, 'template[data-icons]', HTMLTemplateElement);
 
     /** @type {Route} */
@@ -1313,7 +1319,7 @@ class Threads {
   }
 
   /**
-   * The signed-out page. At /me, the door, it says whose space this is and offers Sign in; at /threads/ (the list),
+   * The signed-out page. At /, the door, it says whose space this is and offers Sign in; at /threads/ (the list),
    * which names no thread, it says what it is and offers Sign in. At a thread's address it is what a missing address
    * shows, with a small "Sign in" only on a device that has signed in before, so the address never says whether that
    * thread exists.
@@ -1862,7 +1868,7 @@ class Threads {
       el('a', { class: 't-ask-main', href: `/threads/${ask.number}`, 'data-thread': String(ask.number) }, [
         el('span', { class: 't-row-title' }, [el('span', { class: 't-num' }, [`#${ask.number}`]), ' ', ask.title ?? ask.slug]),
         el('span', { class: 't-ask-sub' }, [
-          el('span', { class: 't-ask-link' }, [askShown(ask.slug)]),
+          el('span', { class: 't-ask-link' }, [askShown(location.origin, ask.slug)]),
           el('span', {}, [countLine(ask, ask.lastAnsweredAt === null ? null : ago(ask.lastAnsweredAt))]),
         ]),
       ]),
@@ -1890,7 +1896,7 @@ class Threads {
       el('div', { class: 't-ask-strip', 'data-state': ask.state }, [
         icon('ask'),
         el('span', { class: 't-chip t-ask-state', 'data-state': ask.state }, [stateWords(ask.state)]),
-        el('span', { class: 't-ask-link' }, [askShown(ask.slug)]),
+        el('span', { class: 't-ask-link' }, [askShown(location.origin, ask.slug)]),
         el('span', { class: 't-grow' }),
         ...acts,
       ]),
@@ -2094,7 +2100,7 @@ class Threads {
     if (!this.nowLoaded) return [];
     const head = el('div', { class: 't-now-head' }, [
       el('span', { class: 'j-label' }, ['On your home page']),
-      el('a', { class: 'j-more', href: '/', target: '_blank', rel: 'noopener' }, ['Open whysosuresh.com']),
+      el('a', { class: 'j-more', href: HOME, target: '_blank', rel: 'noopener' }, ['Open whysosuresh.com']),
     ]);
     if (this.nowDraft === null) {
       return [
@@ -4267,7 +4273,7 @@ class Threads {
         this.notesBox(person, first),
         ...(person.email === null ? [this.addressForm()] : []),
         el('aside', { class: 't-details', 'aria-label': `About ${name}` }, [
-          row('Their page', [el('span', { class: 't-linkline' }, [`whysosuresh.com${personPath(person)}`])]),
+          row('Their page', [el('span', { class: 't-linkline' }, [shownAddress(location.origin, personPath(person))])]),
           row('First in touch', [el('span', { class: 't-dval t-dval-soft' }, [when(person.createdAt)])]),
           row('Last in touch', [el('span', { class: 't-dval t-dval-soft' }, [`${ago(person.lastContact)} ago`])]),
         ]),
@@ -4442,7 +4448,7 @@ class Threads {
     const row = (label, value, wide = false) => el('div', { class: 't-drow', ...(wide ? { 'data-wide': '' } : {}) }, [el('span', { class: 't-dlabel' }, [label]), ...value]);
     const origin = originOf(thread);
     const issue = issueOf(thread.filedLink);
-    const address = `whysosuresh.com/threads/${thread.number}`;
+    const address = shownAddress(location.origin, `/threads/${thread.number}`);
     return el('aside', { class: 't-details', 'aria-label': 'About this thread' }, [
       row('Where it stands', [
         el('span', { class: 't-dval' }, [STATUS_NAMES[thread.status], ...(thread.status === 'dropped' && thread.dropReason ? [el('span', { class: 't-chip' }, [thread.dropReason])] : [])]),
@@ -4478,7 +4484,7 @@ class Threads {
   memberDetails(thread) {
     /** @param {string} label @param {(Node | string)[]} value @param {boolean} [wide] */
     const row = (label, value, wide = false) => el('div', { class: 't-drow', ...(wide ? { 'data-wide': '' } : {}) }, [el('span', { class: 't-dlabel' }, [label]), ...value]);
-    const address = `whysosuresh.com/threads/${thread.number}`;
+    const address = shownAddress(location.origin, `/threads/${thread.number}`);
     return el('aside', { class: 't-details', 'aria-label': 'About this thread' }, [
       row('Where it stands', [el('span', { class: 't-dval' }, [STATUS_NAMES[thread.status]])]),
       ...(thread.publicAt ? [row('Who can see it', [this.level(thread)])] : []),
@@ -5039,7 +5045,7 @@ class Threads {
    */
   publicSwitch(thread) {
     const on = thread.publicAt !== null;
-    const said = publicLines(thread.number, thread.source, on);
+    const said = publicLines(location.origin, thread.number, thread.source, on);
     return el('div', { class: 't-switch-row', ...(said.allowed ? {} : { 'aria-disabled': 'true' }) }, [
       el('b', { id: 'public-label' }, [icon('globe'), ' ', said.label]),
       el('button', {
@@ -5337,7 +5343,7 @@ class Threads {
     }
     const line =
       state === 'closed'
-        ? [el('div', { class: 't-ask-line', role: 'status' }, [CLOSED_LINE, ' ', el('a', { class: 't-btn', href: talkLinkFor(slug) }, ['Send Suresh a note'])])]
+        ? [el('div', { class: 't-ask-line', role: 'status' }, [CLOSED_LINE, ' ', el('a', { class: 't-btn', href: talkLinkFor(HOME, slug) }, ['Send Suresh a note'])])]
         : this.askSaved
           ? [el('div', { class: 't-ask-line', role: 'status' }, [el('b', {}, ['Saved.']), ' ', savedLine(visitor.kept)])]
           : [];
@@ -6029,7 +6035,7 @@ class Threads {
       case 'copy-full-link':
         if (thread) {
           navigator.clipboard.writeText(`${location.origin}${fullLinkOf(thread)}`).then(
-            () => this.say(`Copied whysosuresh.com${fullLinkOf(thread)}`, null),
+            () => this.say(`Copied ${shownAddress(location.origin, fullLinkOf(thread))}`, null),
             () => this.say("Couldn't copy the link.", null),
           );
         }
@@ -6037,7 +6043,7 @@ class Threads {
       case 'ask-copy': {
         const slug = button.dataset.slug ?? '';
         navigator.clipboard.writeText(askLink(location.origin, slug)).then(
-          () => this.say(`Copied ${askShown(slug)}`, null),
+          () => this.say(`Copied ${askShown(location.origin, slug)}`, null),
           () => this.say("Couldn't copy the link.", null),
         );
         break;
@@ -6060,7 +6066,7 @@ class Threads {
       case 'copy-link':
         if (thread) {
           navigator.clipboard.writeText(`${location.origin}/threads/${thread.number}`).then(
-            () => this.say(`Copied whysosuresh.com/threads/${thread.number}`, null),
+            () => this.say(`Copied ${shownAddress(location.origin, `/threads/${thread.number}`)}`, null),
             () => this.say("Couldn't copy the link.", null),
           );
         }

@@ -1,4 +1,4 @@
-# The threads' private calls: every request to whysosuresh.com/threads/api and everything under it meets Access
+# The threads' private calls: every request to hey.whysosuresh.com/threads/api and everything under it meets Access
 # first. The owner signs in with an email code, the recorder sync with its service token, and people the owner
 # invited to a thread with an email code too, once the site says they are invited; anyone else is stopped at
 # Cloudflare's edge and never reaches the site. Only the calls are guarded, never a thread's own page, so a
@@ -21,8 +21,9 @@ spec:
   accountId: $var/cloudflare-whysosuresh-account-id
   name: whysosuresh.com threads
   type: self_hosted
-  # A path: Access guards /threads/api and every path under it, and nothing else on the site.
-  domain: whysosuresh.com/threads/api
+  # A path on the threads' host: Access guards /threads/api and every path under it, and nothing else on the site.
+  # It moved from whysosuresh.com/threads/api on 2026-11-11 with the threads, an in-place change that kept the tag.
+  domain: hey.whysosuresh.com/threads/api
   sessionDuration: 168h
   # Only the email code: the sign-in page goes straight to it, without a list of methods.
   allowedIdps:
