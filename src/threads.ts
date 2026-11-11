@@ -57,7 +57,7 @@
 // Text has its own call because a move is capped at 1 KiB. A search answers up to 20 threads for ⌘K: the one
 // with that number, or those whose title, summary or text hold the words. The sign-in is where the page sends a
 // signed-out owner: Access signs him in at the edge before the call arrives, and the call sends him on to the
-// threads page he came from (/me when it names none), never anywhere else. A thread's main section is its text, a page or a link (`main`):
+// threads page he came from (Today, /, when it names none), never anywhere else. A thread's main section is its text, a page or a link (`main`):
 // a page is a Claude artifact's own HTML, which the sync saves as a new version (the object in the private bucket
 // first, then its row, the object deleted again when the row isn't kept) and the threads page frames from its own
 // address, sealed by that answer's headers (src/page.ts); a link is an address on claude.ai, for an artifact that
@@ -196,11 +196,12 @@ const NUMBER_SHAPE = /^[1-9]\d{0,8}$/;
 /** The longest search, in UTF-16 code units of the trimmed words. */
 const MAX_SEARCH = 100;
 /**
- * Where the sign-in may send the owner on: the threads page's own addresses, as src/pages.ts serves them (/me,
+ * Where the sign-in may send the owner on: the threads page's own addresses, as src/pages.ts serves them (Today, /,
  * the meetings at /meetings, the asks at /asks, the list at /threads/, a thread at /threads/<n> with its title after it, everyone at
- * /people and a person at /people/<n> with their name after it), and nowhere else. Anything else goes to /me.
+ * /people and a person at /people/<n> with their name after it), and nowhere else. Anything else goes to Today. The
+ * address is a bare path, so the sign-in lands on the host it was made on.
  */
-const NEXT_SHAPE = /^(?:\/me|\/meetings|\/asks|\/journal(?:\/(?:\d{4}-\d{2}-\d{2}|\d{4}-W\d{2}|storylines(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?))?|\/people(?:\/[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?|\/threads\/(?:[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?)$/;
+const NEXT_SHAPE = /^(?:\/|\/meetings|\/asks|\/journal(?:\/(?:\d{4}-\d{2}-\d{2}|\d{4}-W\d{2}|storylines(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?))?|\/people(?:\/[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?|\/threads\/(?:[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?)$/;
 /** The largest page: claude.ai holds a page to "16MB or smaller", and 16 MiB is at least that. */
 export const MAX_PAGE_BYTES = 16 * 1024 * 1024;
 /** The only place a link, or a page's source, may point: an address on claude.ai. */
@@ -770,10 +771,10 @@ async function judge(request: Request, number: number, noteId: string, env: Bind
   return json(200, { comment: commentView(judged, caller) });
 }
 
-/** Sends a caller Access has just signed in back to the threads page they came from, or to /me. */
+/** Sends a caller Access has just signed in back to the threads page they came from, or to Today, /. */
 function signedIn(url: URL): Response {
   const next = url.searchParams.get("next");
-  const to = next !== null && NEXT_SHAPE.test(next) ? next : "/me";
+  const to = next !== null && NEXT_SHAPE.test(next) ? next : "/";
   return json(303, { next: to }, { Location: to });
 }
 

@@ -16,7 +16,7 @@
 
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { SITE, startHarness, type Harness } from "./harness.ts";
+import { THREADS, startHarness, type Harness } from "./harness.ts";
 
 /** Two visitors' keys, as their browsers make them: 32 random bytes as hex. */
 const KEY_A = "a1".repeat(32);
@@ -46,10 +46,10 @@ function token(as: Who): string {
 /** A private call under /threads/api/, by its path after that. */
 async function call(path: string, request: { as?: Who; body?: unknown } = {}): Promise<Response> {
   const headers: Record<string, string> = { "Cf-Access-Jwt-Assertion": token(request.as ?? "owner") };
-  if (request.body === undefined) return harness.fetch(`${SITE}/threads/api${path}`, { headers });
+  if (request.body === undefined) return harness.fetch(`${THREADS}/threads/api${path}`, { headers });
   headers["Content-Type"] = "application/json";
-  headers.Origin = SITE;
-  return harness.fetch(`${SITE}/threads/api${path}`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(request.body)) });
+  headers.Origin = THREADS;
+  return harness.fetch(`${THREADS}/threads/api${path}`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(request.body)) });
 }
 
 async function answer<T>(response: Response, status = 200): Promise<T> {
@@ -72,7 +72,7 @@ async function thread(fields: Record<string, unknown> = {}): Promise<number> {
 
 async function savePage(number: number, html: string, from?: string): Promise<Response> {
   const query = from === undefined ? "" : `?${new URLSearchParams({ from }).toString()}`;
-  return harness.fetch(`${SITE}/threads/api/threads/${number}/pages${query}`, {
+  return harness.fetch(`${THREADS}/threads/api/threads/${number}/pages${query}`, {
     method: "POST",
     headers: { "Content-Type": "text/html; charset=utf-8", "Cf-Access-Jwt-Assertion": token("sync") },
     body: new TextEncoder().encode(html),
@@ -99,7 +99,7 @@ async function opened(slug: string, fields: Record<string, unknown> = {}): Promi
 }
 
 async function publicCall(path: string, init: RequestInit = {}): Promise<Response> {
-  return harness.fetch(`${SITE}/api/asks/${path}`, init);
+  return harness.fetch(`${THREADS}/api/asks/${path}`, init);
 }
 
 async function read(slug: string, key: string | null = KEY_A): Promise<{ ask: Record<string, unknown>; page: Record<string, unknown> | null; answers: Record<string, unknown>[] }> {
@@ -114,7 +114,7 @@ async function spent(): Promise<Record<string, number>> {
 }
 
 async function sendAnswer(slug: string, fields: Record<string, unknown> = {}, options: { ip?: string } = {}): Promise<Response> {
-  const headers = { "Content-Type": "application/json", "CF-Connecting-IP": options.ip ?? "203.0.113.7", Origin: SITE };
+  const headers = { "Content-Type": "application/json", "CF-Connecting-IP": options.ip ?? "203.0.113.7", Origin: THREADS };
   const body = { question: "stood-out", body: "The **graph** view.", name: "", email: "", token: "pass", key: KEY_A, ...fields };
   return publicCall(`${slug}/answers`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(body)) });
 }
@@ -196,7 +196,7 @@ describe("making an ask", () => {
       ["ask-closed", "sync"],
       ["ask-opened", "owner"],
     ]);
-    const crossSite = await harness.fetch(`${SITE}/threads/api/threads/${n}/ask`, {
+    const crossSite = await harness.fetch(`${THREADS}/threads/api/threads/${n}/ask`, {
       method: "POST",
       headers: { "Cf-Access-Jwt-Assertion": token("owner"), "Content-Type": "application/json", Origin: "https://elsewhere.example" },
       body: JSON.stringify({ action: "close" }),
@@ -328,9 +328,9 @@ describe("answering an ask", () => {
     const n = await thread();
     expect((await savePage(n, QUESTIONS)).status).toBe(201);
     await answer(await call(`/threads/${n}`, { body: { action: "publish" } }));
-    const headers = { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.7", Origin: SITE };
+    const headers = { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.7", Origin: THREADS };
     const body = { question: "fit", body: "In CI.", name: "Sam", token: "pass", key: KEY_A };
-    expect((await harness.fetch(`${SITE}/api/threads/${n}/answers`, { method: "POST", headers, body: JSON.stringify(body) })).status).toBe(201);
+    expect((await harness.fetch(`${THREADS}/api/threads/${n}/answers`, { method: "POST", headers, body: JSON.stringify(body) })).status).toBe(201);
     expect(await spent()).toEqual({ notes: 0, answers: 1, askThreads: 0, askAnswers: 0 });
   });
 
@@ -525,7 +525,7 @@ describe("Mark read", () => {
     expect(await reasonOf(await askCall(response?.number ?? 0, { action: "read" }))).toEqual([409, "not-an-ask"]);
     expect(await reasonOf(await askCall(await thread(), { action: "read" }))).toEqual([409, "not-an-ask"]);
     expect(await reasonOf(await askCall(999, { action: "read" }))).toEqual([404, "no-thread"]);
-    const crossSite = await harness.fetch(`${SITE}/threads/api/threads/${ask}/ask`, {
+    const crossSite = await harness.fetch(`${THREADS}/threads/api/threads/${ask}/ask`, {
       method: "POST",
       headers: { "Cf-Access-Jwt-Assertion": token("owner"), "Content-Type": "application/json", Origin: "https://elsewhere.example" },
       body: JSON.stringify({ action: "read" }),
@@ -568,7 +568,7 @@ describe("Asks", () => {
 
 describe("an ask's address", () => {
   async function page(path: string): Promise<Response> {
-    return harness.fetch(`${SITE}${path}`);
+    return harness.fetch(`${THREADS}${path}`);
   }
 
   it("carries an open ask's title and a fixed line, never its summary, with no ETag", async () => {
@@ -580,7 +580,7 @@ describe("an ask's address", () => {
     const html = await response.text();
     expect(html).toContain('<meta property="og:title" content="Tuesday &quot;demo&quot; &lt;b&gt; · whysosuresh.com">');
     expect(html).toContain('<meta property="og:description" content="A few questions from Suresh">');
-    expect(html).toContain(`<meta property="og:url" content="${SITE}/ask/previewed">`);
+    expect(html).toContain(`<meta property="og:url" content="${THREADS}/ask/previewed">`);
     expect(html).not.toContain("lukewarm");
     expect(html).not.toContain(`#${n}`);
   });

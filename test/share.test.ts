@@ -61,11 +61,11 @@ describe("the sheet's lines", () => {
 
 describe("the invitation", () => {
   it("names the thread and carries its ?invite link, to the person alone", () => {
-    const draft = invitation({ number: 42, title: "Who owns what", path: "/threads/42-who-owns-what" }, { name: "Meera K.", email: "meera@example.com" }, "https://whysosuresh.com");
+    const draft = invitation({ number: 42, title: "Who owns what", path: "/threads/42-who-owns-what" }, { name: "Meera K.", email: "meera@example.com" }, "https://hey.whysosuresh.com");
     expect(draft.to).toBe("meera@example.com");
     expect(draft.subject).toBe("#42 Who owns what");
     expect(draft.body).toContain("Hi Meera,");
-    expect(draft.body).toContain("https://whysosuresh.com/threads/42-who-owns-what?invite");
+    expect(draft.body).toContain("https://hey.whysosuresh.com/threads/42-who-owns-what?invite");
     expect(draft.body.match(/@/g)).toBeNull();
   });
 });
@@ -76,18 +76,18 @@ describe("the Public switch", () => {
   });
 
   it("says anyone can read it at the thread's address, and what stays his", () => {
-    const on = publicLines(57, "self", true);
-    expect(on).toMatchObject({ label: "Public: anyone can read it at whysosuresh.com/threads/57", allowed: true });
+    const on = publicLines("https://hey.whysosuresh.com", 57, "self", true);
+    expect(on).toMatchObject({ label: "Public: anyone can read it at hey.whysosuresh.com/threads/57", allowed: true });
     expect(on.note).toContain("Search engines are told not to list it.");
     expect(on.note).toContain("Only me notes");
-    expect(publicLines(57, "self", false).note).toBe("Off: only you and the people above read it.");
+    expect(publicLines("https://hey.whysosuresh.com", 57, "self", false).note).toBe("Off: only you and the people above read it.");
   });
 
   it.each([
     ["a site note", "talk", "A note someone sent from the site"],
     ["a told thread", "told", "Something someone told you"],
   ])("is off for %s, and says why", (_, source, start) => {
-    const said = publicLines(64, source, false);
+    const said = publicLines("https://hey.whysosuresh.com", 64, source, false);
     expect(said.allowed).toBe(false);
     expect(said.note.startsWith(start)).toBe(true);
     expect(said.note).toContain("the words are theirs");

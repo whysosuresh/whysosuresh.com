@@ -1,0 +1,29 @@
+# hey.whysosuresh.com, the threads' host: everything behind the door, Today at its root (../../../site/hosts.js).
+# Served only by Cloudflare: the Worker's route `hey.whysosuresh.com/*` (../../../wrangler.jsonc) answers every
+# request to it, so it needs a proxied record and never an origin, the same shape as www. `100::` is the reserved
+# "discard" IPv6 prefix. Universal SSL covers one level under the apex, so hey gets its certificate with no step.
+# Permanent: removing it takes every thread, ask and the journal off the web.
+#
+#   planton apply -f Infra.prod.CloudflareDnsRecord.whysosuresh-com-hey.yaml --instance planton.ai --org why-so-suresh
+apiVersion: cloudflare.planton.dev/v1alpha1
+kind: CloudflareDnsRecord
+metadata:
+  name: whysosuresh-com-hey
+  org: why-so-suresh
+  env: prod
+  annotations:
+    planton.dev/provisioner: tofu
+spec:
+  zoneId:
+    valueFrom:
+      kind: CloudflareDnsZone
+      env: prod # Planton stores the environment it resolved; writing it keeps `planton diff` exact
+      name: whysosuresh-com
+      fieldPath: status.outputs.zone_id
+  name: hey.whysosuresh.com
+  type: AAAA
+  content:
+    value: '100::' # nowhere: the Worker's route answers before any origin would
+  proxied: true
+  ttl: 1 # automatic, as every proxied record
+  comment: hey; answered by the Worker's route

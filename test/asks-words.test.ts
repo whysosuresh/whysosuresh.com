@@ -33,9 +33,10 @@ import {
 } from "../site/app/asks.js";
 
 describe("an ask's link", () => {
-  it("is /ask/<slug>, shown without its scheme, and read back only for a slug of the Worker's shape", () => {
-    expect(askShown("demo-nov-10")).toBe("whysosuresh.com/ask/demo-nov-10");
-    expect(askLink("https://whysosuresh.com", "stigmer")).toBe("https://whysosuresh.com/ask/stigmer");
+  it("is /ask/<slug> on the threads' host, shown without its scheme, and read back only for a slug of the Worker's shape", () => {
+    expect(askShown("https://hey.whysosuresh.com", "demo-nov-10")).toBe("hey.whysosuresh.com/ask/demo-nov-10");
+    expect(askShown("http://hey.localhost:8790", "demo-nov-10")).toBe("hey.localhost:8790/ask/demo-nov-10");
+    expect(askLink("https://hey.whysosuresh.com", "stigmer")).toBe("https://hey.whysosuresh.com/ask/stigmer");
     expect(ASK_PATH.exec("/ask/demo-nov-10")?.[1]).toBe("demo-nov-10");
     for (const path of ["/ask/", "/ask/Demo", "/ask/-x", "/ask/x-", "/ask/a/b", "/asks", `/ask/${"a".repeat(41)}`]) expect([path, ASK_PATH.test(path)]).toEqual([path, false]);
   });
@@ -58,8 +59,9 @@ describe("an ask's row", () => {
     expect(topicLine("nope")).toBeNull();
   });
 
-  it("sends a closed ask's Send a note to the picker when no topic opens it", () => {
-    expect(talkLinkFor("demo-nov-10")).toBe("/#talk");
+  it("sends a closed ask's Send a note to the home page's picker when no topic opens it, and to its topic when one does", () => {
+    expect(talkLinkFor("https://whysosuresh.com/", "demo-nov-10")).toBe("https://whysosuresh.com/#talk");
+    expect(talkLinkFor("https://whysosuresh.com/", "stigmer")).toBe("https://whysosuresh.com/#talk/stigmer");
   });
 });
 

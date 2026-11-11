@@ -1,4 +1,4 @@
-// Who is calling the private door. Cloudflare Access stands in front of whysosuresh.com/threads/api, its own
+// Who is calling the private door. Cloudflare Access stands in front of hey.whysosuresh.com/threads/api, its own
 // application, and signs every request it lets through (the
 // `Cf-Access-Jwt-Assertion` header, RS256, with the team's keys). This module checks that signature itself, with
 // the runtime's WebCrypto and no library, and then names who it is: the owner, by the email the sign-in proved,

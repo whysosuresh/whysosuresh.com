@@ -136,6 +136,7 @@ jobs:
             .nvmrc
             wrangler.jsonc
             tools/probe
+            site/hosts.js
           sparse-checkout-cone-mode: false
 
       - name: Setup Node

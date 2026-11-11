@@ -18,7 +18,7 @@
 
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { SITE, startHarness, type Harness } from "./harness.ts";
+import { SITE, THREADS, startHarness, type Harness } from "./harness.ts";
 
 const MEERA = "meera@example.com";
 /** The note flow's limit per network, stated here as the contract. */
@@ -52,10 +52,10 @@ function token(as: Who): string {
 /** A private call under /threads/api/, by its path after that. */
 async function call(path: string, request: { as?: Who; body?: unknown; origin?: string | null } = {}): Promise<Response> {
   const headers: Record<string, string> = { "Cf-Access-Jwt-Assertion": token(request.as ?? "owner") };
-  if (request.body === undefined) return harness.fetch(`${SITE}/threads/api${path}`, { headers });
+  if (request.body === undefined) return harness.fetch(`${THREADS}/threads/api${path}`, { headers });
   headers["Content-Type"] = "application/json";
-  if (request.origin !== null) headers.Origin = request.origin ?? SITE;
-  return harness.fetch(`${SITE}/threads/api${path}`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(request.body)) });
+  if (request.origin !== null) headers.Origin = request.origin ?? THREADS;
+  return harness.fetch(`${THREADS}/threads/api${path}`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(request.body)) });
 }
 
 async function answer<T>(response: Response, status = 200): Promise<T> {
@@ -99,7 +99,7 @@ async function siteNote(): Promise<number> {
 }
 
 async function publicRead(path: string, init: RequestInit = {}): Promise<Response> {
-  return harness.fetch(`${SITE}/api/threads/${path}`, init);
+  return harness.fetch(`${THREADS}/api/threads/${path}`, init);
 }
 
 /** A public thread's comments as a visitor with `key` reads them (none for no key). */
@@ -109,9 +109,9 @@ async function readAs(number: number, key: string | null): Promise<Record<string
 }
 
 async function sendAnswer(number: number | string, fields: Record<string, unknown> = {}, options: { ip?: string } = {}): Promise<Response> {
-  const headers = { "Content-Type": "application/json", "CF-Connecting-IP": options.ip ?? "203.0.113.7", Origin: SITE };
+  const headers = { "Content-Type": "application/json", "CF-Connecting-IP": options.ip ?? "203.0.113.7", Origin: THREADS };
   const body = { question: "first-job", body: "It ran in **two** minutes.", name: "Sam", token: "pass", key: KEY_A, ...fields };
-  return harness.fetch(`${SITE}/api/threads/${number}/answers`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(body)) });
+  return harness.fetch(`${THREADS}/api/threads/${number}/answers`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(body)) });
 }
 
 interface Note {
@@ -124,9 +124,9 @@ interface Note {
 
 async function sendNote(number: number | string, note: Note = {}, options: { ip?: string; origin?: string | null } = {}): Promise<Response> {
   const headers: Record<string, string> = { "Content-Type": "application/json", "CF-Connecting-IP": options.ip ?? "203.0.113.7" };
-  if (options.origin !== null) headers.Origin = options.origin ?? SITE;
+  if (options.origin !== null) headers.Origin = options.origin ?? THREADS;
   const body = { body: "Loved this. **not bold**", name: "Tomás", email: "tomas@example.com", token: "pass", ...note };
-  return harness.fetch(`${SITE}/api/threads/${number}/notes`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(body)) });
+  return harness.fetch(`${THREADS}/api/threads/${number}/notes`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(body)) });
 }
 
 interface Shown {
@@ -158,7 +158,7 @@ async function asking(): Promise<number> {
 }
 
 async function savePage(number: number, html: string): Promise<void> {
-  const response = await harness.fetch(`${SITE}/threads/api/threads/${number}/pages`, {
+  const response = await harness.fetch(`${THREADS}/threads/api/threads/${number}/pages`, {
     method: "POST",
     headers: { "Content-Type": "text/html; charset=utf-8", "Cf-Access-Jwt-Assertion": token("sync") },
     body: new TextEncoder().encode(html),
@@ -708,7 +708,7 @@ describe("a visitor's answer to a public thread's page", () => {
 
 describe("a public thread's address", () => {
   async function page(path: string, headers: Record<string, string> = {}): Promise<Response> {
-    return harness.fetch(`${SITE}${path}`, { headers });
+    return harness.fetch(`${THREADS}${path}`, { headers });
   }
 
   it("is the shell byte for byte for a private and a missing number", async () => {
@@ -732,7 +732,7 @@ describe("a public thread's address", () => {
     expect(html).toContain(`<title>#${n} Quotes &quot;&lt;b&gt;&amp;&lt;/b&gt;&quot; and &#39;more&#39; · whysosuresh.com</title>`.replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
     expect(html).toContain(`<meta property="og:title" content="#${n} Quotes &quot;&lt;b&gt;&amp;&lt;/b&gt;&quot; and &#39;more&#39; · whysosuresh.com">`);
     expect(html).toContain('<meta property="og:description" content="Decided: ship it, see the plan and #3.">');
-    expect(html).toContain(`<meta property="og:url" content="${SITE}/threads/${n}">`);
+    expect(html).toContain(`<meta property="og:url" content="${THREADS}/threads/${n}">`);
     expect(html).toContain('<meta property="og:type" content="article">');
     expect(html).toContain('<meta name="twitter:card" content="summary">');
     expect(html).toContain('<meta name="robots" content="noindex">');

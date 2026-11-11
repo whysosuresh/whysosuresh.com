@@ -20,8 +20,8 @@
 import { readFileSync } from "node:fs";
 import { LISTS } from "../../site/app/standing.js";
 
-/** The site the calls go to. */
-export const ORIGIN = "https://whysosuresh.com";
+/** The threads' host, where the calls go (site/hosts.js). */
+export const ORIGIN = "https://hey.whysosuresh.com";
 /** The environment variable that carries the service token's secret. */
 export const SECRET_VARIABLE = "INBOX_SYNC_CLIENT_SECRET";
 /** The lists the Worker answers, by the one map the page and the Worker share (site/app/standing.js). */
@@ -95,7 +95,7 @@ export const USAGE = `Usage: inbox <verb> [arguments]
   asks                            every ask, drafts first, one JSON line each: its thread's number, title,
                                   slug, state, how many answered and when last
   ask <number> --slug <slug>      the thread (his own, its page the questions) made an ask, a draft at
-                                  whysosuresh.com/ask/<slug>; he opens it himself, in Asks
+                                  hey.whysosuresh.com/ask/<slug>; he opens it himself, in Asks
   ask <number> --close            the ask closed: it takes no more answers
   journal list                    every journal entry's newest version, newest first, one JSON line each: its key,
                                   kind, version, title, one line, stories, photos and question

@@ -1,12 +1,13 @@
 // @ts-check
 // Asks, as the threads page says them (site/app/threads.js draws the pages): an ask is one of Suresh's own threads
-// whose page asks a few questions, handed to many people by one link, whysosuresh.com/ask/<slug>, and every browser
+// whose page asks a few questions, handed to many people by one link, hey.whysosuresh.com/ask/<slug>, and every browser
 // that answers it becomes a thread of its own (the Worker's src/asks.ts). These are the words and addresses the pages
 // use: the Asks room's rows (the link, how many answered, the state, the Send a note topic that opens it), the folded
 // row Today shows for several new answers to one ask, the head of an ask's Answered by and the filter over it, a
 // response thread's byline, the history's lines for an ask, and what a visitor on /ask/<slug> reads around the page.
 // Plain data and pure functions, so a test can read them without a page (test/asks-words.test.ts).
 
+import { shownAddress } from '../hosts.js';
 import { TOPICS } from '../talk-topics.js';
 
 /**
@@ -20,9 +21,9 @@ export const ASK_PATH = /^\/ask\/([a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?)$/;
 /** How many people Answered by shows before "Show all". */
 export const FIRST_ANSWERERS = 8;
 
-/** An ask's link as he copies it and as a row shows it, without the scheme. @param {string} slug */
-export function askShown(slug) {
-  return `whysosuresh.com/ask/${slug}`;
+/** An ask's link as he copies it and as a row shows it, without the scheme. @param {string} origin @param {string} slug */
+export function askShown(origin, slug) {
+  return shownAddress(origin, `/ask/${slug}`);
 }
 
 /** An ask's link on this site, as he pastes it to people. @param {string} origin @param {string} slug */
@@ -57,10 +58,15 @@ export function topicLine(topic) {
   return found ? `on Send a note · ${found.label}` : null;
 }
 
-/** Where "Send a note" goes from a closed ask: its topic's note when a topic opens it, else the picker. @param {string} slug */
-export function talkLinkFor(slug) {
+/**
+ * Where "Send a note" goes from a closed ask: its topic's note when a topic opens it, else the picker, on the home
+ * page, whose address is `home` (the note flow lives there, not on the threads' host).
+ * @param {string} home the home page's address, ending in `/`
+ * @param {string} slug
+ */
+export function talkLinkFor(home, slug) {
   const topic = TOPICS.find((one) => one.ask === slug);
-  return topic ? `/#talk/${topic.slug}` : '/#talk';
+  return topic ? `${home}#talk/${topic.slug}` : `${home}#talk`;
 }
 
 /** Who answered, as a name: what they typed, or "Someone". @param {{ name: string | null }} one */

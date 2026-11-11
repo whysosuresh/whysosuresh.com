@@ -10,7 +10,7 @@
 // helpers stage and read the threads' table under short names; test/threads.test.ts holds the calls' answers.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { ACCESS_TEAM_DOMAIN, INBOX_SYNC_CLIENT_ID, OWNER, SITE, startHarness, type Claims, type Harness, type TokenOptions } from "./harness.ts";
+import { ACCESS_TEAM_DOMAIN, INBOX_SYNC_CLIENT_ID, OWNER, THREADS, startHarness, type Claims, type Harness, type TokenOptions } from "./harness.ts";
 
 /** The most a list answers, stated here as the contract rather than imported from the Worker. */
 const PAGE = 50;
@@ -122,7 +122,7 @@ function assertion(ask: Ask, target: Harness): Record<string, string> {
 }
 
 async function getList(query: string, ask: Ask = {}, target: Harness = harness): Promise<Response> {
-  return target.fetch(`${SITE}/threads/api/threads${query}`, { headers: assertion(ask, target) });
+  return target.fetch(`${THREADS}/threads/api/threads${query}`, { headers: assertion(ask, target) });
 }
 
 interface Post extends Ask {
@@ -135,9 +135,9 @@ interface Post extends Ask {
 /** A move on the thread with that id, by its number; an id never staged names a path that is no thread's. */
 async function post(id: string, request: Post = {}, target: Harness = harness): Promise<Response> {
   const headers: Record<string, string> = { "Content-Type": request.contentType ?? "application/json", ...assertion(request, target) };
-  if (request.origin !== null) headers.Origin = request.origin ?? SITE;
+  if (request.origin !== null) headers.Origin = request.origin ?? THREADS;
   const text = request.rawBody ?? JSON.stringify(request.body ?? {});
-  return target.fetch(`${SITE}/threads/api/threads/${numbers.get(id) ?? id}`, { method: "POST", headers, body: new TextEncoder().encode(text) });
+  return target.fetch(`${THREADS}/threads/api/threads/${numbers.get(id) ?? id}`, { method: "POST", headers, body: new TextEncoder().encode(text) });
 }
 
 async function reasonOf(response: Response): Promise<string> {
@@ -195,7 +195,7 @@ describe("a list", () => {
 describe("who gets in", () => {
   it("refuses a request with no token with 401, before anything else, even an unknown route", async () => {
     for (const path of ["/threads/api/threads?tab=look", "/threads/api/other"]) {
-      const response = await harness.fetch(`${SITE}${path}`);
+      const response = await harness.fetch(`${THREADS}${path}`);
       expect(response.status).toBe(401);
       expect(await reasonOf(response)).toBe("sign-in");
     }
@@ -568,7 +568,7 @@ describe("an add", () => {
     const headers: Record<string, string> = { "Content-Type": ask.contentType ?? "application/json", ...assertion({ claims: sync(), ...ask }, harness) };
     const text = ask.rawBody ?? JSON.stringify(body);
     if (ask.origin !== undefined && ask.origin !== null) headers.Origin = ask.origin;
-    return harness.fetch(`${SITE}/threads/api/threads`, { method: "POST", headers, body: new TextEncoder().encode(text) });
+    return harness.fetch(`${THREADS}/threads/api/threads`, { method: "POST", headers, body: new TextEncoder().encode(text) });
   }
 
   async function byRef(ref: string): Promise<(Row & { moved_at: string | null })[]> {
@@ -626,7 +626,7 @@ describe("an add", () => {
   });
 
   it("in the sync's shape is the sync's alone: the owner's, from his own page, is refused as not his shape", async () => {
-    const response = await addItem(self, { claims: harness.access.ownerClaims(), origin: SITE });
+    const response = await addItem(self, { claims: harness.access.ownerClaims(), origin: THREADS });
     expect(response.status).toBe(400);
     expect(await reasonOf(response)).toBe("keys");
     expect(await byRef(self.ref)).toEqual([]);

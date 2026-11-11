@@ -1,7 +1,8 @@
 <!DOCTYPE html>
-<!-- whysosuresh.com/me and /threads: Suresh's threads, the page the Worker hands over at each room (/me, the door
-     everyone signed in enters by; /threads/; /people; /meetings; /asks) at every thread's own address, /threads/42,
-     and at an ask's, /ask/<slug> (src/pages.ts). Today at /me (the next meeting, notes waiting, threads waiting on him,
+<!-- hey.whysosuresh.com: Suresh's threads, the page the Worker hands over on the threads' host (site/hosts.js) at its
+     root and each room (/, Today, the door everyone signed in enters by; /threads/; /people; /meetings; /asks) at
+     every thread's own address, /threads/42,
+     and at an ask's, /ask/<slug> (src/pages.ts). Today at / (the next meeting, notes waiting, threads waiting on him,
      new ones, and what sat a week), the Threads room at /threads/ (four tabs and the spaces), the Meetings room, the
      Asks room (his links that ask a few questions), and a thread: its meeting, its living summary on top, its main
      text, then comments and history in order. An ask's address draws its page for anyone, signed in or not, in the
@@ -9,13 +10,14 @@
      /app/threads.js draws all of it from the threads' private calls under /threads/api/, behind Cloudflare Access;
      the page itself holds no data. Until a call answers, nothing shows: a visitor who isn't signed in sees the
      same "Nothing here" a missing thread shows at a thread's address, and a small "Sign in" there only on a device that
-     has signed in before; at /me and at /threads/ itself, which name no thread, it always offers "Sign in". A person Suresh
+     has signed in before; at / and at /threads/ itself, which name no thread, it always offers "Sign in". A person Suresh
      invited to a thread gets the same page, drawn for them: their threads, and each with a comment box. A thread
      Suresh made public is drawn for anyone who isn't in it in the public view below: the thread, the comments he
      made public, and a note form whose note waits for his OK. People (/people, and a person's page at
      /people/7-meera) are his alone: everyone he deals with, and a page for each. On a phone the bar holds Today,
      Threads, Find, New and More (People, Meetings, Asks); an invited person's holds their threads, their meetings and Find.
-     Every link and file is root-absolute; the icons are a template the script copies. -->
+     Every link and file is root-absolute; the site's name (data-home) names / until the script points it at the home
+     page's host, since / on this host is Today. The icons are a template the script copies. -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -32,7 +34,7 @@
 <body class="threads">
   <div class="t-app" data-app hidden>
     <nav class="t-side" aria-label="whysosuresh.com">
-      <div class="t-side-head"><a class="t-brand" href="/">whysosuresh.com</a></div>
+      <div class="t-side-head"><a class="t-brand" href="/" data-home>whysosuresh.com</a></div>
       <button type="button" class="t-side-find" data-act="find"><span data-icon="search"></span>Find anything<kbd>⌘K</kbd></button>
       <div class="t-nav" data-nav></div>
       <button type="button" class="t-side-new" data-act="new"><span data-icon="plus"></span>New thread<kbd>N</kbd></button>
@@ -50,7 +52,7 @@
   </div>
 
   <div class="t-lost" data-lost hidden>
-    <div class="t-lost-bar"><a class="t-lost-name" href="/">whysosuresh.com</a></div>
+    <div class="t-lost-bar"><a class="t-lost-name" href="/" data-home>whysosuresh.com</a></div>
     <div class="t-lost-body">
       <h1 class="t-lost-title" data-lost-title>Nothing here</h1>
       <p class="t-lost-text" data-lost-text>There's nothing at this address.</p>
@@ -59,7 +61,7 @@
   </div>
 
   <div class="t-pub" data-public hidden>
-    <div class="t-pub-bar"><a href="/">whysosuresh.com</a><a class="t-pub-sign-in" data-public-sign-in href="/threads/" hidden>Sign in</a></div>
+    <div class="t-pub-bar"><a href="/" data-home>whysosuresh.com</a><a class="t-pub-sign-in" data-public-sign-in href="/threads/" hidden>Sign in</a></div>
     <article class="t-pub-doc" data-public-doc></article>
   </div>
 

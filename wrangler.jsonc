@@ -1,19 +1,19 @@
-// whysosuresh.com: one Cloudflare Worker that serves the folder ./site, and runs code only for /api/* (the
-// note flow's one public write, src/talk.ts), /threads/* (the threads' private calls under /threads/api/,
-// src/threads.ts, and the threads page at every other path, src/pages.ts, which hands over
-// site/threads/index.html through the assets binding), /me (the same page, everyone's door after sign-in), and the
-// home page, /, with what Suresh posted written in, and its Atom feed, /feed.xml (src/home.ts), all on the database
-// bound below, with its videos' pictures at /thumbs/* (src/outside.ts). It also runs every hour on the cron trigger
-// below, which fetches his videos and his products' releases into the home page's list. Every other page comes
-// straight from ./site, with no code in its path, and /inbox, the threads' old address, redirects to /threads/
-// (site/_redirects); Cloudflare Access guards /threads/api and everything under it (infrastructure/), never a
-// thread's page. This
-// file drives `wrangler dev`, the dry run in `npm run check` (whose bundle the Worker tests run, with ./site and
-// the routing below), and the deploy that .github/workflows/site.yaml runs on every merge to main, all with the
-// wrangler pinned in ./deploy.
+// whysosuresh.com: one Cloudflare Worker that serves the folder ./site on two hosts (site/hosts.js). The home page's,
+// whysosuresh.com, runs code only for the home page, /, with what Suresh posted written in, its Atom feed, /feed.xml
+// (src/home.ts), its videos' pictures, /thumbs/* (src/outside.ts), and /api/talk (the note flow's one public write,
+// src/talk.ts). The threads', hey.whysosuresh.com, is everything behind the door: Today at its root, the threads'
+// private calls under /threads/api/ (src/threads.ts), their public calls and Access's sign-in answer under /api/, and
+// the threads page at every room and thread (src/pages.ts, which hands over site/threads/index.html through the
+// assets binding). Every path the code runs for on one host answers 404 on the other (src/worker.ts), all on the
+// database bound below. It also runs every hour on the cron trigger below, which fetches his videos and his products'
+// releases into the home page's list. Every other page comes straight from ./site on either host, with no code in its
+// path; Cloudflare Access guards hey.whysosuresh.com/threads/api and everything under it (infrastructure/), never a
+// thread's page. This file drives `wrangler dev`, the dry run in `npm run check` (whose bundle the Worker tests run,
+// with ./site and the routing below), and the deploy that .github/workflows/site.yaml runs on every merge to main,
+// all with the wrangler pinned in ./deploy.
 //
 // The zone, its records, its redirect rule and its settings, the database and the bot check are
-// Planton's (infrastructure/); only the Worker, its route and its bindings are declared here. Routes
+// Planton's (infrastructure/); only the Worker, its routes and its bindings are declared here. Routes
 // are declared only in this file, never in Cloudflare's dashboard. The bot check's secret is not here: the
 // deploy hands it over from the GitHub environment `production`, and `npm run dev` uses Cloudflare's
 // public test secret. Nor is the owner's email address, which the threads admit: the deploy hands it over the
@@ -32,21 +32,24 @@
     "not_found_handling": "404-page",
     // /feedback serves feedback.html; /feedback.html and /index.html redirect to the clean address.
     "html_handling": "auto-trailing-slash",
-    // Only these paths reach the code; everything else is a file from ./site. The rooms are the threads page too:
-    // /me, the door everyone signed in enters by, /meetings, /people with a person under it, and /asks; so is an
-    // ask's own address, /ask/<slug>, and his journal,
-    // /journal with its days, weeks and storylines under it. The threads page's scripts live under /app/, so they stay files.
-    // The home page, "/" (the root alone: a pattern without a star names one path), gets what he posted written in, and
-    // its feed is /feed.xml (src/home.ts); its videos' pictures, copied by the hourly run, are /thumbs/<id>.jpg
-    // (src/outside.ts).
-    "run_worker_first": ["/", "/updates", "/feed.xml", "/thumbs/*", "/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"],
+    // Only these paths reach the code, on either host; everything else is a file from ./site. The root, "/" (the root
+    // alone: a pattern without a star names one path), is the home page with what he posted written in on the home
+    // page's host, and Today, the door everyone signed in enters by, on the threads'. On the home page's host, its
+    // feed is /feed.xml, every update's page /updates (src/home.ts), and its videos' pictures, copied by the hourly run, are /thumbs/<id>.jpg
+    // (src/outside.ts). On the threads' host, the rooms are the threads page too: /meetings, /people with a person
+    // under it, and /asks; so is an ask's own address, /ask/<slug>, and his journal, /journal with its days, weeks
+    // and storylines under it. The threads page's scripts live under /app/, so they stay files.
+    "run_worker_first": ["/", "/updates", "/feed.xml", "/thumbs/*", "/api/*", "/threads/*", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"],
     // How the code hands over a file from ./site: the threads page, with site/_headers on it.
     "binding": "ASSETS"
   },
-  // The apex is the Worker's one address, through a route on the zone, found by its name in the
-  // account above. The route needs a proxied record at the apex, which Planton holds; www is the
-  // zone's redirect rule, also Planton's.
-  "routes": [{ "pattern": "whysosuresh.com/*", "zone_name": "whysosuresh.com" }],
+  // The apex and hey are the Worker's two addresses, each through a route on the zone, found by its name in the
+  // account above. Each route needs a proxied record, which Planton holds (the apex's, and hey's AAAA 100::); www
+  // is the zone's redirect rule, also Planton's.
+  "routes": [
+    { "pattern": "whysosuresh.com/*", "zone_name": "whysosuresh.com" },
+    { "pattern": "hey.whysosuresh.com/*", "zone_name": "whysosuresh.com" }
+  ],
   // Every hour, at an odd minute: his full YouTube episodes and the newest Stigmer and CapsJump releases, fetched into
   // the home page's list with no act of his, because they are already public where they come from (src/outside.ts).
   "triggers": { "crons": ["17 * * * *"] },

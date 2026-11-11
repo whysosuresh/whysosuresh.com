@@ -14,7 +14,7 @@
 // test/members.test.ts's and test/public.test.ts's.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { SITE, startHarness, type Harness } from "./harness.ts";
+import { THREADS, startHarness, type Harness } from "./harness.ts";
 
 const MEERA = "meera@example.com";
 
@@ -41,10 +41,10 @@ function token(as: Who): string {
 /** A call under /threads/api/, by its path after that: a GET with no body, else a POST from the site's own page unless `origin` says otherwise. */
 async function call(path: string, request: { as?: Who; body?: unknown; origin?: string | null } = {}): Promise<Response> {
   const headers: Record<string, string> = { "Cf-Access-Jwt-Assertion": token(request.as ?? "owner") };
-  if (request.body === undefined) return harness.fetch(`${SITE}/threads/api${path}`, { headers });
+  if (request.body === undefined) return harness.fetch(`${THREADS}/threads/api${path}`, { headers });
   headers["Content-Type"] = "application/json";
-  if (request.origin !== null) headers.Origin = request.origin ?? SITE;
-  return harness.fetch(`${SITE}/threads/api${path}`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(request.body)) });
+  if (request.origin !== null) headers.Origin = request.origin ?? THREADS;
+  return harness.fetch(`${THREADS}/threads/api${path}`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(request.body)) });
 }
 
 async function answer<T>(response: Response, status = 200): Promise<T> {
@@ -393,9 +393,9 @@ describe("who may change a meeting", () => {
     for (const part of ["meeting", "attendees"]) {
       const got = await call(`/threads/${n}/${part}`);
       expect([got.status, got.headers.get("Allow")]).toEqual([405, "POST"]);
-      const signedOut = await harness.fetch(`${SITE}/threads/api/threads/${n}/${part}`, {
+      const signedOut = await harness.fetch(`${THREADS}/threads/api/threads/${n}/${part}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Origin: SITE },
+        headers: { "Content-Type": "application/json", Origin: THREADS },
         body: JSON.stringify({ when: "2026-11-09", minutes: null, where: null }),
       });
       expect(signedOut.status).toBe(401);

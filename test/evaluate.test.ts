@@ -10,10 +10,10 @@
 
 import { createHash, createVerify } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { ACCESS_TEAM_DOMAIN, EVALUATION_PUBLIC_KEY, SITE, startHarness, type Claims, type Harness, type TokenOptions } from "./harness.ts";
+import { ACCESS_TEAM_DOMAIN, EVALUATION_PUBLIC_KEY, THREADS, startHarness, type Claims, type Harness, type TokenOptions } from "./harness.ts";
 
-const EVALUATE = `${SITE}/api/access/evaluate`;
-const KEYS = `${SITE}/api/access/keys`;
+const EVALUATE = `${THREADS}/api/access/evaluate`;
+const KEYS = `${THREADS}/api/access/keys`;
 const MEERA = "meera@example.com";
 
 let harness: Harness;
@@ -53,15 +53,15 @@ async function verdict(response: Response): Promise<{ header: Record<string, unk
 /** Invites an address to a new thread, as the owner's page does. */
 async function invited(email: string): Promise<{ number: number; personId: string }> {
   const owner = harness.access.token(harness.access.ownerClaims());
-  const made = await harness.fetch(`${SITE}/threads/api/threads`, {
+  const made = await harness.fetch(`${THREADS}/threads/api/threads`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.syncClaims()) },
     body: new TextEncoder().encode(JSON.stringify({ ref: `chat:${crypto.randomUUID()}`, source: "self", title: "Shared", body: "x", space: "company", status: "act" })),
   });
   const number = ((await made.json()) as { thread: { number: number } }).thread.number;
-  const people = await harness.fetch(`${SITE}/threads/api/threads/${number}/people`, {
+  const people = await harness.fetch(`${THREADS}/threads/api/threads/${number}/people`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": owner, Origin: SITE },
+    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": owner, Origin: THREADS },
     body: new TextEncoder().encode(JSON.stringify({ add: { email, name: "Meera" } })),
   });
   expect(people.status).toBe(200);
@@ -87,9 +87,9 @@ describe("the answer", () => {
   it("is no for an address with no invitation, for a person removed, and for the owner", async () => {
     expect((await verdict(await ask(harness.access.evaluationClaims("stranger@example.net")))).claims.success).toBe(false);
     const { number, personId } = await invited(MEERA);
-    await harness.fetch(`${SITE}/threads/api/threads/${number}/people`, {
+    await harness.fetch(`${THREADS}/threads/api/threads/${number}/people`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()), Origin: SITE },
+      headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()), Origin: THREADS },
       body: new TextEncoder().encode(JSON.stringify({ remove: personId })),
     });
     expect((await verdict(await ask(harness.access.evaluationClaims(MEERA)))).claims).toMatchObject({ success: false, nonce: "nonce-from-access" });

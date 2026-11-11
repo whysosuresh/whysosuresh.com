@@ -5,9 +5,10 @@
 // the Worker shares is plain data and reads page addresses right, that the spaces the Worker shares are plain
 // data and hold every topic, that the journal's reader the Worker shares is plain data that reads no clock, that the threads page is never indexed or shared and reaches only its own calls,
 // that the home page holds its Now line and its feed hidden for the Worker to fill and offers its feed to feed readers from the head alone,
-// that /inbox, the threads' old address, redirects to /threads/ and nothing else is redirected, that no file names
-// the owner's email address, and that the Worker's config routes the one domain to the code only at the home page and
-// its feed, under /api/ and /threads/ and at the rooms (test/routing.test.ts sends the requests). `wrangler deploy --dry-run` does not read
+// that the site's two hosts are one rule the Worker shares (site/hosts.js, plain data and pure functions), that only the
+// rooms' slash addresses are redirected (Today's old /me and the threads' older /inbox lead nowhere), that no file names
+// the owner's email address, and that the Worker's config routes the home page's host and the threads' to the code only
+// at the home page and its feed, under /api/ and /threads/ and at the rooms (test/routing.test.ts sends the requests). `wrangler deploy --dry-run` does not read
 // site/_headers or site/_redirects, so this file parses them. The Worker itself is the Worker tests'.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -43,6 +44,7 @@ const SERVED = [
   "img/share.jpg",
   "index.html",
   "robots.txt",
+  "hosts.js",
   "spaces.js",
   "style.css",
   "talk-send.js",
@@ -66,6 +68,8 @@ const originsOf = (urls: string[]): string => [...new Set(urls.map((url) => new 
 const SHARED_PAGES = ["index.html", "feedback.html", "updates.html"];
 
 const ORIGIN = "https://whysosuresh.com";
+/** The threads' host, one label below the home page's (site/hosts.js): the site's own too, never another origin. */
+const THREADS_ORIGIN = "https://hey.whysosuresh.com";
 
 const EXPECTED_HEADERS: Record<string, string> = {
   "Content-Security-Policy": [
@@ -245,8 +249,8 @@ describe.each(scripts)("%s", (script) => {
 
   it("names no address on another origin but the allowlisted resources and links", () => {
     const named = [...read(script).matchAll(/\b(?:https?:)?\/\/[^\s'"`)]+/g)].map((m) => m[0]);
-    // The site's own origin is not another one: the journal's reader names it to open the site's own links in place.
-    expect(named.filter((url) => url !== ORIGIN && !SCRIPT_RESOURCES.includes(url) && !SCRIPT_LINKS.includes(url))).toEqual([]);
+    // The site's own origins are not other ones: the journal's reader names the threads' to open its links in place.
+    expect(named.filter((url) => url !== ORIGIN && url !== THREADS_ORIGIN && !SCRIPT_RESOURCES.includes(url) && !SCRIPT_LINKS.includes(url))).toEqual([]);
   });
 
   it("imports only served files, and links only to clean root-absolute addresses", () => {
@@ -378,9 +382,10 @@ describe("talk-topics.js, which the Worker imports too", () => {
       ["capsjump", "capsjump"],
       ["other", null],
     ]);
-    // The picker draws a topic that names an ask as a link to its page; the rest stay buttons that open the note.
+    // The picker draws a topic that names an ask as a link to its page on the threads' host; the rest stay buttons
+    // that open the note.
     const talk = read("talk.js");
-    expect(talk).toContain("`/ask/${topic.ask}`");
+    expect(talk).toContain("`${threadsOrigin(location.origin)}/ask/${topic.ask}`");
     expect(talk).toContain("A few questions");
   });
 
@@ -402,6 +407,62 @@ describe("talk-topics.js, which the Worker imports too", () => {
     const { isTopic } = await loading;
     expect(["stigmer", "videos", "capsjump", "other"].every((slug) => isTopic(slug))).toBe(true);
     expect(["Stigmer", "", "talk", "stigmer "].some((slug) => isTopic(slug))).toBe(false);
+  });
+});
+
+interface HostsModule {
+  THREADS_LABEL: string;
+  isThreadsHost(hostname: string): boolean;
+  threadsOrigin(homeOrigin: string): string;
+  homeOrigin(origin: string): string;
+  shownAddress(origin: string, path: string): string;
+}
+
+function isHostsModule(value: unknown): value is HostsModule {
+  if (typeof value !== "object" || value === null) return false;
+  const module = value as Record<string, unknown>;
+  return (
+    typeof module.THREADS_LABEL === "string" &&
+    ["isThreadsHost", "threadsOrigin", "homeOrigin", "shownAddress"].every((name) => typeof module[name] === "function")
+  );
+}
+
+describe("hosts.js, which the Worker and the probe import too", () => {
+  const loading = import(pathToFileURL(join(siteDir, "hosts.js")).href).then((loaded: unknown) => {
+    if (!isHostsModule(loaded)) throw new Error("hosts.js lacks THREADS_LABEL, isThreadsHost, threadsOrigin, homeOrigin or shownAddress");
+    return loaded;
+  });
+
+  it("is plain data and pure functions: it imports nothing, touches no page, and only declares exports", () => {
+    const code = read("hosts.js").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code).not.toMatch(/^import /m);
+    expect(code).not.toMatch(/\b(document|window|location|navigator|globalThis|fetch|localStorage|sessionStorage|addEventListener|setTimeout)\b/);
+    const topLevel = code.split("\n").filter((line) => /^\S/.test(line));
+    expect(topLevel.filter((line) => !/^(export |const PREFIX = |\})/.test(line))).toEqual([]);
+  });
+
+  it("puts the threads one label below the home page, at hey., in production and on this machine alike", async () => {
+    const { THREADS_LABEL, threadsOrigin, homeOrigin } = await loading;
+    expect(THREADS_LABEL).toBe("hey");
+    expect(threadsOrigin(ORIGIN)).toBe(THREADS_ORIGIN);
+    expect(threadsOrigin(THREADS_ORIGIN)).toBe(THREADS_ORIGIN);
+    expect(threadsOrigin("http://localhost:8790")).toBe("http://hey.localhost:8790");
+    expect(homeOrigin(THREADS_ORIGIN)).toBe(ORIGIN);
+    expect(homeOrigin(ORIGIN)).toBe(ORIGIN);
+    expect(homeOrigin("http://hey.localhost:8790")).toBe("http://localhost:8790");
+    expect(homeOrigin(threadsOrigin("https://example.com"))).toBe("https://example.com");
+  });
+
+  it("knows the threads' host by its first label alone, in any case", async () => {
+    const { isThreadsHost } = await loading;
+    expect(["hey.whysosuresh.com", "HEY.whysosuresh.com", "hey.localhost"].every((host) => isThreadsHost(host))).toBe(true);
+    expect(["whysosuresh.com", "www.whysosuresh.com", "heyx.whysosuresh.com", "localhost", "they.whysosuresh.com"].some((host) => isThreadsHost(host))).toBe(false);
+  });
+
+  it("shows an address as he copies it, without the scheme", async () => {
+    const { shownAddress } = await loading;
+    expect(shownAddress(THREADS_ORIGIN, "/threads/42")).toBe("hey.whysosuresh.com/threads/42");
+    expect(shownAddress("http://hey.localhost:8790", "/ask/demo")).toBe("hey.localhost:8790/ask/demo");
   });
 });
 
@@ -510,16 +571,12 @@ describe("style.css", () => {
 });
 
 describe("_redirects", () => {
-  it("sends /inbox and everything under it to /threads/ for good, /me/, /meetings/ and /asks/ to their rooms, and nothing else", () => {
+  it("sends /meetings/ and /asks/ to their rooms, and nothing else: /me and /inbox lead nowhere", () => {
     const rules = read("_redirects")
       .split("\n")
       .filter((line) => line.trim() !== "" && !line.trimStart().startsWith("#"))
       .map((line) => line.trim().split(/\s+/));
     expect(rules).toEqual([
-      ["/inbox", "/threads/", "301"],
-      ["/inbox/", "/threads/", "301"],
-      ["/inbox/*", "/threads/", "301"],
-      ["/me/", "/me", "301"],
       ["/meetings/", "/meetings", "301"],
       ["/asks/", "/asks", "301"],
     ]);
@@ -583,14 +640,15 @@ describe("wrangler.jsonc", () => {
     expect(text).toMatch(/"account_id": "[0-9a-f]{32}"/);
   });
 
-  it("routes the apex, and only the apex, to the Worker", () => {
-    expect(text).toContain('"routes": [{ "pattern": "whysosuresh.com/*", "zone_name": "whysosuresh.com" }]');
-    expect(text.match(/"pattern"/g)).toHaveLength(1);
+  it("routes the apex and hey, and only those, to the Worker", () => {
+    expect(text).toContain('{ "pattern": "whysosuresh.com/*", "zone_name": "whysosuresh.com" }');
+    expect(text).toContain('{ "pattern": "hey.whysosuresh.com/*", "zone_name": "whysosuresh.com" }');
+    expect(text.match(/"pattern"/g)).toHaveLength(2);
     expect(text).not.toContain("custom_domain");
   });
 
-  it("runs the code only at the home page, every update's page, its feed and its videos' pictures, under /api/ and /threads/ and at the rooms (/me, /meetings, /people, /asks, /journal) and an ask's address, and every other page comes straight from site/", () => {
-    expect(text).toContain('"run_worker_first": ["/", "/updates", "/feed.xml", "/thumbs/*", "/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"]');
+  it("runs the code only at the root, every update's page, its feed and its videos' pictures, under /api/ and /threads/ and at the rooms (/meetings, /people, /asks, /journal) and an ask's address, and every other page comes straight from site/", () => {
+    expect(text).toContain('"run_worker_first": ["/", "/updates", "/feed.xml", "/thumbs/*", "/api/*", "/threads/*", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"]');
     expect(text.match(/"run_worker_first"/g)).toHaveLength(1);
   });
 

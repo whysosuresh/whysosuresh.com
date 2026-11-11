@@ -18,9 +18,9 @@
 // own thread, and is refused every ask call.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { OWNER, SITE, startHarness, type Harness } from "./harness.ts";
+import { OWNER, THREADS as HEY, startHarness, type Harness } from "./harness.ts";
 
-const THREADS = `${SITE}/threads/api/threads`;
+const THREADS = `${HEY}/threads/api/threads`;
 const MEERA = "meera@example.com";
 const DEV = "dev@example.org";
 
@@ -57,10 +57,10 @@ function token(as: Who): string {
 async function call(path: string, request: Call = {}): Promise<Response> {
   const headers: Record<string, string> = { "Cf-Access-Jwt-Assertion": token(request.as ?? "owner") };
   const method = request.method ?? (request.body === undefined ? "GET" : "POST");
-  if (method === "GET") return harness.fetch(`${SITE}/threads/api${path}`, { headers });
+  if (method === "GET") return harness.fetch(`${HEY}/threads/api${path}`, { headers });
   headers["Content-Type"] = "application/json";
-  if (request.origin !== null) headers.Origin = request.origin ?? SITE;
-  return harness.fetch(`${SITE}/threads/api${path}`, { method, headers, body: new TextEncoder().encode(JSON.stringify(request.body ?? {})) });
+  if (request.origin !== null) headers.Origin = request.origin ?? HEY;
+  return harness.fetch(`${HEY}/threads/api${path}`, { method, headers, body: new TextEncoder().encode(JSON.stringify(request.body ?? {})) });
 }
 
 async function answer<T>(response: Response, status = 200): Promise<T> {
@@ -521,7 +521,7 @@ describe("a meeting, as an invited person sees it", () => {
     for (const path of ["/me", "/threads", "/threads/1"]) {
       expect(await reasonOf(await call(path, { as: { email: DEV } }))).toEqual([403, "caller"]);
     }
-    const asked = await harness.fetch(`${SITE}/api/access/evaluate`, {
+    const asked = await harness.fetch(`${HEY}/api/access/evaluate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: new TextEncoder().encode(JSON.stringify({ token: harness.access.token(harness.access.evaluationClaims(DEV)) })),
@@ -547,9 +547,9 @@ describe("a respondent he invites back to their thread", () => {
     expect(saved.status).toBe(201);
     await answer(await call(`/threads/${ask}/ask`, { as: "sync", body: { slug: "tuesday-demo" } }));
     await answer(await call(`/threads/${ask}/ask`, { body: { action: "open" } }));
-    const sent = await harness.fetch(`${SITE}/api/asks/tuesday-demo/answers`, {
+    const sent = await harness.fetch(`${HEY}/api/asks/tuesday-demo/answers`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: SITE, "CF-Connecting-IP": "203.0.113.9" },
+      headers: { "Content-Type": "application/json", Origin: HEY, "CF-Connecting-IP": "203.0.113.9" },
       body: new TextEncoder().encode(JSON.stringify({ question: "stood-out", body: "The resume after the crash.", name: "Meera", email: MEERA, token: "pass", key: "c3".repeat(32) })),
     });
     expect(sent.status).toBe(201);

@@ -33,8 +33,11 @@
 /** The journal's room, and every address under it (the threads page draws them; src/pages.ts hands them the shell). */
 export const JOURNAL_PATH = '/journal';
 export const STORYLINES_PATH = '/journal/storylines';
-/** The site itself: a link to one of its own addresses opens in place, every other link in a new tab. */
-export const SITE_ORIGIN = 'https://whysosuresh.com';
+/**
+ * The threads' host, where the journal lives (site/hosts.js): a link to one of its addresses opens in place, every
+ * other link, the home page's among them, in a new tab.
+ */
+export const SITE_ORIGIN = 'https://hey.whysosuresh.com';
 /** A day's key, and a week's, as they name an entry and its address. */
 export const DAY_SHAPE = /^(\d{4})-(\d{2})-(\d{2})$/;
 export const WEEK_SHAPE = /^(\d{4})-W(\d{2})$/;

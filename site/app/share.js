@@ -10,6 +10,8 @@
 // can be listed. A visitor's note on a public thread is answered from his own Gmail too (`noteReply`). Plain data and
 // pure functions, so a test can read them without a page.
 
+import { shownAddress } from '../hosts.js';
+
 /** How many people Cloudflare's free plan signs in. */
 export const SEATS = 50;
 /** The longest name, as the Worker takes it. */
@@ -121,13 +123,14 @@ export function levelOf(publicAt, people) {
 /**
  * What the Public switch says: its label, the line under it for where it stands, and whether it can be turned on.
  * Only his own threads can be public; a site note's and a told thread's words are someone else's.
+ * @param {string} origin the threads' own origin
  * @param {number} number
  * @param {string} source `self`, `talk` or `told`
  * @param {boolean} on
  * @returns {{ label: string, note: string, allowed: boolean }}
  */
-export function publicLines(number, source, on) {
-  const label = `Public: anyone can read it at whysosuresh.com/threads/${number}`;
+export function publicLines(origin, number, source, on) {
+  const label = `Public: anyone can read it at ${shownAddress(origin, `/threads/${number}`)}`;
   if (source !== 'self') {
     return {
       label,

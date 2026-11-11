@@ -26,7 +26,7 @@
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
-import { SITE, startHarness, type Harness } from "./harness.ts";
+import { SITE, THREADS, startHarness, type Harness } from "./harness.ts";
 
 let harness: Harness | null = null;
 
@@ -81,7 +81,7 @@ async function stage(rows: InboxRow[]): Promise<Harness> {
 }
 
 async function threadsTab(target: Harness, tab: string): Promise<{ threads: Record<string, unknown>[]; counts: Record<string, number>; next: number | null }> {
-  const response = await target.fetch(`${SITE}/threads/api/threads?tab=${tab}`, { headers: { "Cf-Access-Jwt-Assertion": target.access.token() } });
+  const response = await target.fetch(`${THREADS}/threads/api/threads?tab=${tab}`, { headers: { "Cf-Access-Jwt-Assertion": target.access.token() } });
   expect(response.status).toBe(200);
   return (await response.json()) as { threads: Record<string, unknown>[]; counts: Record<string, number>; next: number | null };
 }
@@ -171,7 +171,7 @@ describe("0006, every inbox row a thread", () => {
   it("numbers the next new thread after the copies", async () => {
     harness = await stage(ROWS);
     await harness.migrate();
-    const response = await harness.fetch(`${SITE}/threads/api/threads`, {
+    const response = await harness.fetch(`${THREADS}/threads/api/threads`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.syncClaims()) },
       body: new TextEncoder().encode(JSON.stringify({ ref: "chat:after-the-copy", source: "self", title: "After", body: "After the copy.", space: "company", status: "received" })),
@@ -451,7 +451,7 @@ describe("0012, everyone he deals with is a person", () => {
     ]);
     await expect(database.prepare("INSERT INTO members (thread_id, person_id, added_at) VALUES ('t1', 'p-nobody', 'x')").run()).rejects.toThrow(/FOREIGN KEY/);
     await expect(database.prepare("UPDATE threads SET person_id = 'p-nobody' WHERE id = 't1'").run()).rejects.toThrow(/FOREIGN KEY/);
-    const me = await harness.fetch(`${SITE}/threads/api/me`, { headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.memberClaims("meera@example.com")) } });
+    const me = await harness.fetch(`${THREADS}/threads/api/me`, { headers: { "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.memberClaims("meera@example.com")) } });
     expect(me.status).toBe(200);
   });
 
@@ -512,7 +512,7 @@ describe("0015, visitors' answers", () => {
       { id: "c3", state: "dropped", visitor_key: null },
     ]);
     expect(await database.prepare("SELECT COUNT(*) AS n FROM answer_senders").first<{ n: number }>()).toEqual({ n: 0 });
-    const read = (await (await harness.fetch(`${SITE}/api/threads/1`)).json()) as { comments: { body: string }[] };
+    const read = (await (await harness.fetch(`${THREADS}/api/threads/1`)).json()) as { comments: { body: string }[] };
     expect(read.comments.map((comment) => comment.body)).toEqual(["Hi."]);
   });
 });

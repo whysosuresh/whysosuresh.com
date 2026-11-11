@@ -1,5 +1,6 @@
 // The privacy probe's entry point (`node tools/probe/run.ts`), run by the deploy against the live site after every
-// deploy, and by hand at any time: it hands tools/probe/private.ts the real fetch, the site, Access's sign-in host as
+// deploy, and by hand at any time: it hands tools/probe/private.ts the real fetch, the home page's origin (the threads'
+// host is derived from it by site/hosts.js), Access's sign-in host as
 // wrangler.jsonc names it, and yesterday's date, and exits non-zero with one line per address that let a stranger in.
 
 import { readFileSync } from "node:fs";
