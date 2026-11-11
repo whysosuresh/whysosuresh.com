@@ -9,7 +9,7 @@
 // /people/<n>, and the journal's /journal, a day, a week, the storylines and a storyline), every thread's address and every ask's (/ask/<slug>) answer the threads page with the site's headers (its CSP among them) and status 200, whatever the number,
 // with no sign-in; the people pages' old addresses under /threads/, and /people/, redirect to /people for good; because
 // Access guards only the threads' calls, never a thread's page; and any other path under /threads/ is what the
-// site's files make of it. The home page, /, its feed, /feed.xml, and its videos' pictures under /thumbs/ reach the code
+// site's files make of it. The home page, /, every update's page, /updates, its feed, /feed.xml, and its videos' pictures under /thumbs/ reach the code
 // too (test/home.test.ts and test/outside.test.ts hold what they say), and `"/"` in `run_worker_first` names the root alone: every file beside it, the stylesheet, a picture,
 // a script and the other pages, still comes straight from site/ with no code in its path, and /index.html keeps its
 // redirect to /.
@@ -64,6 +64,17 @@ describe("the home page and its feed", () => {
     const response = await harness.fetch(`${SITE}/feed.xml`);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("application/atom+xml; charset=utf-8");
+  });
+
+  it("answers /updates from the code (its empty line shown, which the file hides), and redirects /updates.html to it", async () => {
+    const page = await harness.fetch(`${SITE}/updates`, { redirect: "manual" });
+    expect(page.status).toBe(200);
+    const text = await page.text();
+    expect(text).toContain(`<title>${titleOf("updates.html")}</title>`);
+    expect(text).toContain("<p class=\"fine\" data-updates-empty>Nothing here yet.</p>");
+    const moved = await harness.fetch(`${SITE}/updates.html`, { redirect: "manual" });
+    expect(moved.status).toBe(307);
+    expect(new URL(moved.headers.get("location") ?? "", SITE).pathname).toBe("/updates");
   });
 
   it("serves / as the home page, and redirects /index.html to it", async () => {

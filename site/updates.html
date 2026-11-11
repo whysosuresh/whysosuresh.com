@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<!-- whysosuresh.com/updates, titled "All updates": everything on the home page's list, not only its newest ten, newest
+     first: every thread Suresh posted, his full YouTube episodes and the newest Stigmer and CapsJump releases. The
+     Worker writes the list in (src/home.ts, `handleUpdates`), the same items in the same markup as the home page's;
+     with nothing posted it shows the one line that says so. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>All updates · Suresh Attaluri</title>
+  <meta name="description" content="Everything I've posted, my YouTube episodes, and the newest Stigmer and CapsJump releases, newest first.">
+  <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
+  <link rel="canonical" href="https://whysosuresh.com/updates">
+  <link rel="alternate" type="application/atom+xml" title="What's happening" href="/feed.xml">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://whysosuresh.com/updates">
+  <meta property="og:title" content="All updates">
+  <meta property="og:description" content="Everything I've posted, my YouTube episodes, and the newest Stigmer and CapsJump releases, newest first.">
+  <meta property="og:image" content="https://whysosuresh.com/img/share.jpg">
+  <meta property="og:image:alt" content="Suresh's photo">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" type="image/png" sizes="192x192" href="/img/icon-192.png">
+  <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="bar">
+    <a class="brand" href="/">whysosuresh.com</a>
+    <a class="bar-link" href="/">Home</a>
+  </header>
+
+  <main>
+    <section class="prose" aria-labelledby="title">
+      <h1 id="title">All updates</h1>
+      <p class="lede">Everything I've posted, my YouTube episodes, and the newest Stigmer and CapsJump releases, newest first.</p>
+    </section>
+
+    <section aria-label="Every update">
+      <ol class="feed" data-feed-list></ol>
+      <p class="fine" data-updates-empty hidden>Nothing here yet.</p>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>Suresh</span>
+    <a href="/feedback">Talk to me</a>
+  </footer>
+</body>
+</html>
