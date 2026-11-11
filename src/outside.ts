@@ -71,8 +71,10 @@ function log(source: LogSource, counts: { readonly [name: string]: number }, fai
 
 /** A source that failed, and why. */
 class SourceFailure extends Error {
-  constructor(readonly reason: Reason) {
+  readonly reason: Reason;
+  constructor(reason: Reason) {
     super(String(reason));
+    this.reason = reason;
   }
 }
 
