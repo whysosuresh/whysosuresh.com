@@ -36,6 +36,7 @@ const SERVED = [
   "app/threads-store.js",
   "app/threads.js",
   "feedback.html",
+  "updates.html",
   "img/apple-touch-icon.png",
   "img/avatar.webp",
   "img/icon-192.png",
@@ -62,7 +63,7 @@ const SCRIPT_LINKS = ["https://cal.com/whysosuresh", "https://mail.google.com/ma
 const originsOf = (urls: string[]): string => [...new Set(urls.map((url) => new URL(url).origin))].join(" ");
 
 /** The pages a link can be shared to, which carry a description and a preview picture. */
-const SHARED_PAGES = ["index.html", "feedback.html"];
+const SHARED_PAGES = ["index.html", "feedback.html", "updates.html"];
 
 const ORIGIN = "https://whysosuresh.com";
 
@@ -588,8 +589,8 @@ describe("wrangler.jsonc", () => {
     expect(text).not.toContain("custom_domain");
   });
 
-  it("runs the code only at the home page, its feed and its videos' pictures, under /api/ and /threads/ and at the rooms (/me, /meetings, /people, /asks, /journal) and an ask's address, and every other page comes straight from site/", () => {
-    expect(text).toContain('"run_worker_first": ["/", "/feed.xml", "/thumbs/*", "/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"]');
+  it("runs the code only at the home page, every update's page, its feed and its videos' pictures, under /api/ and /threads/ and at the rooms (/me, /meetings, /people, /asks, /journal) and an ask's address, and every other page comes straight from site/", () => {
+    expect(text).toContain('"run_worker_first": ["/", "/updates", "/feed.xml", "/thumbs/*", "/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"]');
     expect(text.match(/"run_worker_first"/g)).toHaveLength(1);
   });
 

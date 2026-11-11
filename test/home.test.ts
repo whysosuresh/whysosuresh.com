@@ -1,14 +1,15 @@
 // The home page's feed (src/home.ts), run as production runs it: the Worker's bundle in workerd with a local D1, in
 // front of site/ with the routing wrangler.jsonc declares (test/harness.ts). What it holds: posting a thread on the
 // home page and taking it off are moves of the owner's alone, each with its event, only for a public thread (409
-// `not-public`), and unpublishing takes a thread off; the home page shows the posted public threads newest first, at
-// most 20, each with its title or number, its first block as plain text, its day in his zone and its notes above
+// `not-public`), and unpublishing takes a thread off; the home page shows the posted public threads newest first, the
+// newest ten, with "All updates" under them only when there are more, each with its title or number, its first block as plain text, its day in his zone and its notes above
 // zero, every value as text, and linked at its address, or its `?full` address when its main section is a page, so a
 // reader lands on the page full screen; a thread that isn't posted, isn't public or isn't his never shows, even when its row is
 // changed by hand; the Now line shows and an empty newest line hides it; an item from outside alone (a video or a
 // release, test/outside.test.ts) shows the list too; with nothing to show (no post, no outside item, no Now line), or
 // a failing read, the page is site/index.html byte for byte, and a rewritten one carries the site's headers and no ETag; /feed.xml is an
-// Atom feed of the same items, escaped, and a valid empty one with nothing posted; the Now line's call is the owner's
+// Atom feed of the same items, the newest twenty, escaped, and a valid empty one with nothing posted; /updates lists
+// every item in the same markup, says "Nothing here yet." with none, and answers 503 with no list while the read fails; the Now line's call is the owner's
 // alone, both ways, from his own page, one line of at most 140 characters, every line kept; and a stranger reading a
 // posted thread never learns it is posted.
 
@@ -17,7 +18,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SITE, startHarness, type Harness } from "./harness.ts";
 
 /** The most the home page and the feed show, and the longest Now line: the contract, stated here. */
-const LIMIT = 20;
+const HOME_LIMIT = 10;
+const FEED_LIMIT = 20;
 const MAX_NOW = 140;
 const MEERA = "meera@example.com";
 const INDEX = readFileSync(new URL("../site/index.html", import.meta.url), "utf8");
@@ -101,6 +103,26 @@ async function postedPage(fields: Record<string, unknown> = {}): Promise<number>
   await answer(await move(n, "publish"));
   await answer(await move(n, "post"));
   return n;
+}
+
+/** `count` posted threads, "Post 0" oldest, a minute apart. Answers their numbers, oldest first. */
+async function postedMany(count: number): Promise<number[]> {
+  const numbers: number[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const n = await posted({ title: `Post ${i}` });
+    await postedAt(n, new Date(Date.UTC(2026, 10, 1, 0, i)).toISOString());
+    numbers.push(n);
+  }
+  return numbers;
+}
+
+/** The titles of the newest `shown` of `count` posts `postedMany` made, newest first. */
+function newestTitles(count: number, shown: number): string[] {
+  return Array.from({ length: shown }, (_, i) => `Post ${count - 1 - i}`);
+}
+
+async function updates(init: RequestInit = {}): Promise<Response> {
+  return harness.fetch(`${SITE}/updates`, init);
 }
 
 /** Sets a thread's posting time by hand, so the order and the day are the test's to choose. */
@@ -212,13 +234,9 @@ describe("the home page", () => {
     expect(itemsOf(page)).toEqual([]);
   });
 
-  it("shows the posted public threads newest first, at most 20, with the site's headers and no ETag", async () => {
-    const numbers: number[] = [];
-    for (let i = 0; i < LIMIT + 1; i += 1) {
-      const n = await posted({ title: `Post ${i}` });
-      await postedAt(n, new Date(Date.UTC(2026, 10, 1, 0, i)).toISOString());
-      numbers.push(n);
-    }
+  it("shows the newest ten posted public threads, then All updates, the feed the newest twenty and /updates every one, with the site's headers and no ETag", async () => {
+    const count = FEED_LIMIT + 1;
+    const numbers = await postedMany(count);
     const response = await home();
     expect(response.status).toBe(200);
     expect(response.headers.get("etag")).toBeNull();
@@ -226,10 +244,29 @@ describe("the home page", () => {
     expect(response.headers.get("content-security-policy")).toContain("style-src 'self'");
     const page = await response.text();
     const items = itemsOf(page);
-    expect(items.map(titleOf)).toEqual(numbers.slice(1).reverse().map((_, i) => `Post ${LIMIT - i}`));
-    expect(items[0]).toContain(`href="/threads/${numbers[LIMIT]}"`);
+    expect(items.map(titleOf)).toEqual(newestTitles(count, HOME_LIMIT));
+    expect(items[0]).toContain(`href="/threads/${numbers[count - 1]}"`);
     expect(page).toMatch(/<section class="home-main" aria-labelledby="happening" data-feed>/);
+    expect(page).toContain('<p class="more" data-feed-more><a href="/updates">All updates</a></p>');
     expect(page).not.toMatch(/style="/);
+
+    const feed = await (await harness.fetch(`${SITE}/feed.xml`)).text();
+    expect([...feed.matchAll(/<title>(Post \d+)<\/title>/g)].map((match) => match[1])).toEqual(newestTitles(count, FEED_LIMIT));
+
+    const all = await updates();
+    expect(all.status).toBe(200);
+    expect(all.headers.get("etag")).toBeNull();
+    expect(all.headers.get("content-security-policy")).toContain("style-src 'self'");
+    const allPage = await all.text();
+    expect(itemsOf(allPage).map(titleOf)).toEqual(newestTitles(count, count));
+    expect(allPage).toContain('<p class="fine" data-updates-empty hidden>Nothing here yet.</p>');
+  });
+
+  it("leaves All updates hidden while everything listed fits on the page", async () => {
+    await postedMany(HOME_LIMIT);
+    const page = await (await home()).text();
+    expect(itemsOf(page)).toHaveLength(HOME_LIMIT);
+    expect(page).toContain('<p class="more" data-feed-more hidden><a href="/updates">All updates</a></p>');
   });
 
   it("links a posted page's title and Read to its full-screen address, and a posted text thread to its own", async () => {
@@ -346,6 +383,49 @@ describe("the home page", () => {
     } finally {
       await database.prepare("ALTER TABLE now_lines_aside RENAME TO now_lines").run();
     }
+  });
+});
+
+describe("/updates", () => {
+  it("says there is nothing yet while nothing is listed, with no list", async () => {
+    const response = await updates();
+    expect(response.status).toBe(200);
+    const page = await response.text();
+    expect(itemsOf(page)).toEqual([]);
+    expect(page).toContain('<p class="fine" data-updates-empty>Nothing here yet.</p>');
+  });
+
+  it("lists every item in the home page's markup, every value as text", async () => {
+    const n = await posted({ title: `<b>"Bold" & 'quoted'</b>` });
+    await postedAt(n, "2026-11-06T09:00:00.000Z");
+    const homeItems = itemsOf(await (await home()).text());
+    const items = itemsOf(await (await updates()).text());
+    expect(items).toEqual(homeItems);
+    expect(items[0]).toContain("&lt;b&gt;&quot;Bold&quot; &amp; &#39;quoted&#39;&lt;/b&gt;");
+  });
+
+  it("answers 503 with no list and no claim that nothing is there while the read fails, kept by nobody", async () => {
+    await posted();
+    const database = await harness.db();
+    await database.prepare("ALTER TABLE now_lines RENAME TO now_lines_aside").run();
+    try {
+      const response = await updates();
+      expect(response.status).toBe(503);
+      expect(response.headers.get("retry-after")).toBe("300");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      const page = await response.text();
+      expect(itemsOf(page)).toEqual([]);
+      expect(page).toContain('<p class="fine" data-updates-empty hidden>Nothing here yet.</p>');
+    } finally {
+      await database.prepare("ALTER TABLE now_lines_aside RENAME TO now_lines").run();
+    }
+  });
+
+  it("answers a HEAD as it answers a GET, with no body", async () => {
+    await posted();
+    const response = await updates({ method: "HEAD" });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("");
   });
 });
 

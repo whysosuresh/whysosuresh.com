@@ -39,7 +39,7 @@
     // The home page, "/" (the root alone: a pattern without a star names one path), gets what he posted written in, and
     // its feed is /feed.xml (src/home.ts); its videos' pictures, copied by the hourly run, are /thumbs/<id>.jpg
     // (src/outside.ts).
-    "run_worker_first": ["/", "/feed.xml", "/thumbs/*", "/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"],
+    "run_worker_first": ["/", "/updates", "/feed.xml", "/thumbs/*", "/api/*", "/threads/*", "/me", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"],
     // How the code hands over a file from ./site: the threads page, with site/_headers on it.
     "binding": "ASSETS"
   },

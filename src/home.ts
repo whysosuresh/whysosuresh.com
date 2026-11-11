@@ -1,6 +1,7 @@
 // The home page's feed: what Suresh posts, and what arrives from outside on its own (his full YouTube episodes and the
 // newest Stigmer and CapsJump releases, src/outside.ts), written into the site's own home page as one newest-first
-// list, and the same items as an Atom feed at /feed.xml; and his Now line, the one line under his greeting, which he
+// list (its newest ten, then "All updates" when there are more), every item at /updates, and the newest twenty as an
+// Atom feed at /feed.xml; and his Now line, the one line under his greeting, which he
 // sets from Today through a private call.
 //
 // `/` is site/index.html, handed over from the site's own files through the assets binding, so it carries
@@ -48,8 +49,17 @@ import type { OutsideRow } from "./outside-store.ts";
 import { homeFeed, nowLine, setNowLine, type FeedRow, type NowRow } from "./store.ts";
 import { MAX_CHANGE_BYTES, lengthRefusal, readJson, readNowLine, refuse } from "./wire.ts";
 
-/** The most items the home page and the feed show. */
+/** The most items the home page shows; with more, it links to every update. */
+export const HOME_LIMIT = 10;
+/** The most items the feed carries: a reader remembers what it has shown, so it needs only the newest. */
 export const FEED_LIMIT = 20;
+/**
+ * The most items the updates page lists: every one in practice (years of posts at his pace), bounded only so the
+ * page is always built well inside a request's CPU time.
+ */
+export const UPDATES_LIMIT = 500;
+/** Every update's page. */
+export const UPDATES_PATH = "/updates";
 /** The longest excerpt under an item's title, in UTF-16 code units. */
 export const MAX_EXCERPT = 280;
 /** The zone the dates are his days in: the feed is his diary of what happened, so his day is the one it shows. */
@@ -207,8 +217,26 @@ function itemMarkup(item: Item, today: Date): string {
   );
 }
 
-/** The home page with the feed and the Now line written in: each section shown only when it has something. */
-function rewritten(page: Response, items: readonly Item[], now: string | null): Response {
+/** A rewritten page's answer: no ETag or Last-Modified, so no browser keeps the page from before a change. */
+function unvalidated(transformed: Response, status = transformed.status): Response {
+  const headers = new Headers(transformed.headers);
+  headers.delete("ETag");
+  headers.delete("Last-Modified");
+  return new Response(transformed.body, { status, headers });
+}
+
+/** The site's own file for a request, fetched without the browser's conditional headers, so it can be rewritten. */
+function freshFile(request: Request, env: Bindings): Promise<Response> {
+  const headers = new Headers(request.headers);
+  for (const name of CONDITIONAL) headers.delete(name);
+  return env.ASSETS.fetch(new Request(request.url, { method: request.method, headers }));
+}
+
+/**
+ * The home page with the feed and the Now line written in: each section shown only when it has something, and the
+ * link to every update when there are more than it shows.
+ */
+function rewritten(page: Response, items: readonly Item[], now: string | null, more: boolean): Response {
   const today = new Date();
   const list = items.map((item) => itemMarkup(item, today)).join("");
   let rewriter = new HTMLRewriter();
@@ -222,11 +250,8 @@ function rewritten(page: Response, items: readonly Item[], now: string | null): 
       .on("[data-feed]", { element: (element) => void element.removeAttribute("hidden") })
       .on("[data-feed-list]", { element: (element) => void element.setInnerContent(list, { html: true }) });
   }
-  const transformed = rewriter.transform(page);
-  const headers = new Headers(transformed.headers);
-  headers.delete("ETag");
-  headers.delete("Last-Modified");
-  return new Response(transformed.body, { status: transformed.status, headers });
+  if (more) rewriter = rewriter.on("[data-feed-more]", { element: (element) => void element.removeAttribute("hidden") });
+  return unvalidated(rewriter.transform(page));
 }
 
 /** The Now line to show, or null: none set, or the newest set empty. */
@@ -240,17 +265,45 @@ export async function handleHome(request: Request, env: Bindings): Promise<Respo
   let items: Item[];
   let now: string | null;
   try {
-    const feed = await homeFeed(env.DB, FEED_LIMIT);
-    items = merged(feed.items, feed.outside, FEED_LIMIT);
+    // One more than it shows, from each list, tells whether there are more.
+    const feed = await homeFeed(env.DB, HOME_LIMIT + 1);
+    items = merged(feed.items, feed.outside, HOME_LIMIT + 1);
     now = shown(feed.now);
   } catch {
     return env.ASSETS.fetch(request);
   }
   if (items.length === 0 && now === null) return env.ASSETS.fetch(request);
-  const headers = new Headers(request.headers);
-  for (const name of CONDITIONAL) headers.delete(name);
-  const page = await env.ASSETS.fetch(new Request(request.url, { method: request.method, headers }));
-  return page.status === 200 ? rewritten(page, items, now) : page;
+  const page = await freshFile(request, env);
+  return page.status === 200 ? rewritten(page, items.slice(0, HOME_LIMIT), now, items.length > HOME_LIMIT) : page;
+}
+
+/**
+ * Answers `/updates`: site/updates.html with every update written in, in the home page's markup, or its one line
+ * saying there is nothing yet. While the read fails it is the file with no list, as 503, so nothing claims the list
+ * is empty and nobody keeps it.
+ */
+export async function handleUpdates(request: Request, env: Bindings): Promise<Response> {
+  if (request.method !== "GET" && request.method !== "HEAD") return env.ASSETS.fetch(request);
+  const page = await freshFile(request, env);
+  if (page.status !== 200) return page;
+  let items: Item[];
+  try {
+    const feed = await homeFeed(env.DB, UPDATES_LIMIT);
+    items = merged(feed.items, feed.outside, UPDATES_LIMIT);
+  } catch {
+    const failed = unvalidated(page, 503);
+    failed.headers.set("Retry-After", "300");
+    failed.headers.set("Cache-Control", "no-store");
+    return failed;
+  }
+  const today = new Date();
+  const rewriter =
+    items.length === 0
+      ? new HTMLRewriter().on("[data-updates-empty]", { element: (element) => void element.removeAttribute("hidden") })
+      : new HTMLRewriter().on("[data-feed-list]", {
+          element: (element) => void element.setInnerContent(items.map((item) => itemMarkup(item, today)).join(""), { html: true }),
+        });
+  return unvalidated(rewriter.transform(page));
 }
 
 /** A value as XML text or inside a double-quoted attribute: `attribute` escapes every character XML needs. */

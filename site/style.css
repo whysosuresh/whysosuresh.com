@@ -267,6 +267,9 @@ p { margin: 0; }
    first, each with its day; a post with its first lines and its notes, a video with its small picture beside its title,
    a release with its name and version. */
 .feed { margin: 0; padding: 0; list-style: none; }
+/* Under the home page's newest ten, when there are more: the way to every update (/updates). */
+.more { margin-top: 4px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 15px; }
+.more a { color: var(--ink); font-weight: 500; }
 .item {
   display: grid;
   grid-template-columns: 84px minmax(0, 1fr);

@@ -19,7 +19,7 @@
 import { handleAsks } from "./asks.ts";
 import type { Bindings } from "./bindings.ts";
 import { handleEvaluate, handleKeys } from "./evaluate.ts";
-import { FEED_PATH, handleFeed, handleHome } from "./home.ts";
+import { FEED_PATH, UPDATES_PATH, handleFeed, handleHome, handleUpdates } from "./home.ts";
 import { json } from "./json.ts";
 import { handleThumb, refreshOutside } from "./outside.ts";
 import { handlePage } from "./pages.ts";
@@ -32,6 +32,7 @@ export default {
     const { pathname } = new URL(request.url);
     if (pathname === "/") return handleHome(request, env);
     if (pathname === FEED_PATH) return handleFeed(request, env);
+    if (pathname === UPDATES_PATH) return handleUpdates(request, env);
     if (pathname.startsWith("/thumbs/")) return handleThumb(request, env);
     if (pathname === "/api/talk") {
       if (request.method !== "POST") return json(405, { reason: "method" }, { Allow: "POST" });
