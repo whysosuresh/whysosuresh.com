@@ -285,6 +285,8 @@ function locate(locator: Locator, p: Params): string {
  * leaks.
  */
 const PUBLIC = "threads.public_at IS NOT NULL AND threads.source = 'self'";
+/** A thread on the home page and in its feed: public, and posted by him. */
+const LISTED = `${PUBLIC} AND threads.feed_at IS NOT NULL`;
 
 /** Every thread: how the store itself looks a thread up after a write it made as the owner or the sync. */
 const EVERY_THREAD: Reader = { caller: "owner" };
@@ -1365,11 +1367,11 @@ export async function homeFeed(db: D1Database, limit: number): Promise<{ items: 
         `SELECT number, title, body, main, feed_at,
            (SELECT COUNT(*) FROM comments WHERE comments.thread_id = threads.id AND comments.audience = 'public' AND comments.state = 'shown'
              AND comments.question IS NULL AND comments.parent_id IS NULL) AS notes
-         FROM threads WHERE ${PUBLIC} AND threads.feed_at IS NOT NULL ORDER BY threads.feed_at DESC, threads.number DESC LIMIT ?1`,
+         FROM threads WHERE ${LISTED} ORDER BY threads.feed_at DESC, threads.number DESC LIMIT ?1`,
       )
       .bind(limit),
     db.prepare(NOW_LINE),
-    outsideItems(db, limit),
+    outsideItems(db, limit, LISTED),
   ]);
   return {
     items: (items?.results ?? []) as FeedRow[],
