@@ -20,11 +20,12 @@
 // An item is a posted thread: its title (`#<n>` when it has none), its first block as plain text read with the site's
 // own Markdown reader (never the living summary, which is his private grid of what is decided and open), the day he
 // posted it in his own zone, how many notes a stranger reads under it (shown only above zero), and its address: the
-// thread's, or its `?full` address when its main section is a page, so a reader lands on the page full screen, always
+// thread's link, by its key, never its number, or its `?full` link when its main section is a page, so a reader lands
+// on the page full screen, always
 // on the threads' host (hey.whysosuresh.com, built from the request's own origin by site/hosts.js), because threads
 // live there and this host answers none of their addresses. Only
 // public threads are ever posted, and the feed's query holds that in its own SQL, so strangers read here only what
-// they could read at the thread's own address. A video is its title, its day, "Watch on YouTube" and, once the hourly
+// they could read at the thread's own link. A video is its title, its day, "Watch on YouTube" and, once the hourly
 // run copied it, its picture from the site's own `/thumbs/<id>.jpg`, versioned by the video's `updated` so a changed
 // picture gets a new address; the picture links where the title does, out of the tab and reading order, so a keyboard
 // or screen-reader user meets each video once. A release is "Stigmer 0.1.2", its day and "Release notes", with no
@@ -121,13 +122,13 @@ interface Release {
 type Item = Post | Video | Release;
 
 /**
- * Where a posted thread is read: a page opens full screen at the thread's `?full` address, the one Share hands out
- * for answering (`fullLinkOf`, site/app/threads.js), and anything else at the thread's own address. Decided from the
- * main section as it now stands, so a thread whose main section changes after he posted it links right on the next
- * read.
+ * Where a posted thread is read: its link, by its key, so a stranger reads it as anyone he sent the link to does; a page
+ * opens full screen at the link's `?full` address, the one Share hands out for answering (`fullLinkOf`,
+ * site/app/threads.js). Decided from the main section as it now stands, so a thread whose main section changes after
+ * he posted it links right on the next read.
  */
-export function postPath(row: Pick<FeedRow, "number" | "main">): string {
-  return row.main === "page" ? `/threads/${row.number}?full` : `/threads/${row.number}`;
+export function postPath(row: Pick<FeedRow, "share_key" | "main">): string {
+  return row.main === "page" ? `/threads/${row.share_key}?full` : `/threads/${row.share_key}`;
 }
 
 function postOf(row: FeedRow, threads: string): Post {

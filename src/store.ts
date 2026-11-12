@@ -26,9 +26,14 @@
 // the threads' door and by the answer Cloudflare Access is given at sign-in (src/evaluate.ts), so the two can't
 // disagree about who is invited.
 //
-// One of his own threads may also be public (`public_at`, migrations/0011_public.sql): anyone reads it, with no
-// sign-in, through the public calls (src/public.ts), which ask their own queries here (`findPublic`,
+// One of his own threads may also be public (`public_at`, migrations/0011_public.sql): anyone with its link reads it,
+// with no sign-in, through the public calls (src/public.ts), which ask their own queries here (`findPublic`,
 // `historyPublic`, `findPublicPage`, `publicPreview`), each holding the public condition (`PUBLIC`) in its own SQL.
+// The link names the thread by its key (`share_key`, migrations/0021_share_keys.sql), 128 random bits given the first
+// time he makes it public and kept for good, never by its number, so counting numbers opens nothing: a stranger names a
+// thread by a `PublicAddress`, and `publicWhere` is the one condition that address opens. A number opens a public
+// thread only while `public_by_number` holds, which the migration set for the threads public before keys existed and
+// `unpublish` clears.
 // A stranger sees only the comments written as Public that are shown. A visitor may send a note on a public thread
 // (`addNote`), and answer the questions of its page while the page is its main section (`addAnswer`,
 // migrations/0015_visitor_answers.sql): each is a comment for anyone, shown at once, and only he drops it, or shows
@@ -115,7 +120,7 @@ export const isTab = isList;
 // order: SQLite doesn't order an aggregate, so the door sorts them, and it never emits an address; it reads one only
 // to tell an invited reader which attendee is them. A response thread reads its ask's number, slug and title the same way.
 export const COLUMNS =
-  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at, feed_at, person_id, (SELECT people.number FROM people WHERE people.id = threads.person_id) AS sender_number, meeting_when, meeting_minutes, meeting_where, (SELECT json_group_array(json_object('number', people.number, 'name', people.name, 'email', people.email, 'photo', people.photo_id)) FROM attendees JOIN people ON people.id = attendees.person_id WHERE attendees.thread_id = threads.id) AS meeting_people, ask_slug, ask_state, ask_thread_id, (SELECT asked.number FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_number, (SELECT asked.ask_slug FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_slug, (SELECT asked.title FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_title";
+  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at, feed_at, share_key, public_by_number, person_id, (SELECT people.number FROM people WHERE people.id = threads.person_id) AS sender_number, meeting_when, meeting_minutes, meeting_where, (SELECT json_group_array(json_object('number', people.number, 'name', people.name, 'email', people.email, 'photo', people.photo_id)) FROM attendees JOIN people ON people.id = attendees.person_id WHERE attendees.thread_id = threads.id) AS meeting_people, ask_slug, ask_state, ask_thread_id, (SELECT asked.number FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_number, (SELECT asked.ask_slug FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_slug, (SELECT asked.title FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_title";
 
 export interface ThreadRow {
   id: string;
@@ -144,6 +149,10 @@ export interface ThreadRow {
   public_at: string | null;
   /** When he put it on the home page, which only a public thread may be on; null while it isn't there. */
   feed_at: string | null;
+  /** The key in its public link, given the first time he made it public and kept for good; null until then. */
+  share_key: string | null;
+  /** 1 while its number opens it for strangers too (a thread public before links had keys), else 0. */
+  public_by_number: number;
   /** The person a site note or told thread is from, and their number; null for his own and a note with no address. */
   person_id: string | null;
   sender_number: number | null;
@@ -284,11 +293,41 @@ function locate(locator: Locator, p: Params): string {
 }
 
 /**
- * The condition a public thread meets, on the row `threads`: he made it public, and it is his own, because a site
- * note's and a told thread's words are someone else's. Every public query holds it, so a row changed by hand never
- * leaks.
+ * The condition a public thread meets, on the row `threads`: he made it public, it is his own, because a site note's
+ * and a told thread's words are someone else's, and it has the key its link carries, so nothing can serve or list a
+ * public thread nobody can link to. Every public query holds it, so a row changed by hand never leaks.
  */
-const PUBLIC = "threads.public_at IS NOT NULL AND threads.source = 'self'";
+const PUBLIC = "threads.public_at IS NOT NULL AND threads.source = 'self' AND threads.share_key IS NOT NULL";
+
+/** A public thread's key as its link carries it: 16 random bytes as 32 lowercase hex characters. */
+export const SHARE_KEY_SHAPE = /^[0-9a-f]{32}$/;
+
+/** A new key for a public thread's link, from the runtime's random source: 128 bits, as `SHARE_KEY_SHAPE`. */
+export function newShareKey(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * How a stranger named a thread: by its link's key, or by its number, which opens only a thread public before links
+ * had keys. Never `key`, which in the public calls is a visitor's own key.
+ */
+export type PublicAddress = { readonly shareKey: string } | { readonly number: number };
+
+/** The row an address names, on `threads`, whether or not it is public. */
+function addressed(address: PublicAddress, p: Params): string {
+  return "shareKey" in address ? `threads.share_key = ${p.add(address.shareKey)}` : `threads.number = ${p.add(address.number)}`;
+}
+
+/** What makes a thread public to an address: `PUBLIC`, and for a number, that its number still opens it. */
+function openTo(address: PublicAddress): string {
+  return "shareKey" in address ? PUBLIC : `${PUBLIC} AND threads.public_by_number = 1`;
+}
+
+/** The one condition a public read or write holds: the row the address names, public to that address. */
+function publicWhere(address: PublicAddress, p: Params): string {
+  return `${addressed(address, p)} AND ${openTo(address)}`;
+}
 /** A thread on the home page and in its feed: public, and posted by him. */
 const LISTED = `${PUBLIC} AND threads.feed_at IS NOT NULL`;
 
@@ -638,7 +677,9 @@ function ruleOf(move: Move, now: string): Rule {
       // else's words. Like `space`, it leaves the status alone.
       return {
         from: [...OPEN, "done", "dropped", "filed"],
-        sets: (p) => [`public_at = ${p.add(now)}`],
+        // Its link's key is given the first time and kept for good, so publishing again brings back the same link; the
+        // key is made only here, where `makeMove` builds the update, and never written into the event.
+        sets: (p) => [`public_at = ${p.add(now)}`, `share_key = COALESCE(share_key, ${p.add(newShareKey())})`],
         // An ask's thread is never public: strangers read an ask only through the ask calls, never its summary.
         where: "source = 'self' AND public_at IS NULL AND ask_slug IS NULL",
         only: "owner",
@@ -646,10 +687,11 @@ function ruleOf(move: Move, now: string): Rule {
       };
     case "unpublish":
       // Taking a thread back is never refused while it is public, whatever its row says. It leaves the home page in
-      // the same statement, so making it public again never lists it again unasked.
+      // the same statement, so making it public again never lists it again unasked, and its number stops opening it
+      // for good, so making it public again opens it by its link alone. Its key is kept.
       return {
         from: [...OPEN, "done", "dropped", "filed"],
-        sets: () => ["public_at = NULL", "feed_at = NULL"],
+        sets: () => ["public_at = NULL", "feed_at = NULL", "public_by_number = 0"],
         where: "public_at IS NOT NULL",
         only: "owner",
         event: () => ({ type: "unpublished", data: "json_object()" }),
@@ -722,7 +764,7 @@ export async function makeMove(
   const there = await find(db, locator, EVERY_THREAD);
   if (there === null) return "no-thread";
   if (move.action === "publish" && there.source !== "self") return "not-his-words";
-  if (move.action === "post" && (there.public_at === null || there.source !== "self")) return "not-public";
+  if (move.action === "post" && (there.public_at === null || there.source !== "self" || there.share_key === null)) return "not-public";
   return move.action === "publish" && there.ask_slug !== null ? "an-ask" : "not-from-here";
 }
 
@@ -1262,9 +1304,10 @@ export async function unattend(db: D1Database, number: number, personNumber: num
   return row.meeting_when === null ? "not-a-meeting" : "not-attending";
 }
 
-/** A public thread by its number: one of his own he made public; null for any other number. */
-export async function findPublic(db: D1Database, number: number): Promise<ThreadRow | null> {
-  return db.prepare(`SELECT ${COLUMNS} FROM threads WHERE number = ?1 AND ${PUBLIC}`).bind(number).first<ThreadRow>();
+/** A public thread by the address a stranger named it by; null for any address that doesn't open one. */
+export async function findPublic(db: D1Database, address: PublicAddress): Promise<ThreadRow | null> {
+  const p = new Params();
+  return statement(db, `SELECT ${COLUMNS} FROM threads WHERE ${publicWhere(address, p)}`, p).first<ThreadRow>();
 }
 
 /**
@@ -1302,15 +1345,15 @@ export async function historyPublic(db: D1Database, threadId: string, limit: num
  * One version of a public thread's page, while the page is its main section: a thread that moved on to a link keeps
  * its earlier pages, and those were never public.
  */
-export async function findPublicPage(db: D1Database, number: number, version: number): Promise<PageRow | null> {
-  return db
-    .prepare(
-      `SELECT pages.version, pages.object_key, pages.created_at, pages.actor, pages.bytes, pages.source_url
-       FROM pages JOIN threads ON threads.id = pages.thread_id
-       WHERE threads.number = ?1 AND pages.version = ?2 AND threads.main = 'page' AND ${PUBLIC}`,
-    )
-    .bind(number, version)
-    .first<PageRow>();
+export async function findPublicPage(db: D1Database, address: PublicAddress, version: number): Promise<PageRow | null> {
+  const p = new Params();
+  return statement(
+    db,
+    `SELECT pages.version, pages.object_key, pages.created_at, pages.actor, pages.bytes, pages.source_url
+     FROM pages JOIN threads ON threads.id = pages.thread_id
+     WHERE ${publicWhere(address, p)} AND pages.version = ${p.add(version)} AND threads.main = 'page'`,
+    p,
+  ).first<PageRow>();
 }
 
 /** What a link preview may say of a thread, and whether it is public. */
@@ -1324,20 +1367,21 @@ export interface PreviewRow {
 }
 
 /**
- * The threads page's one read (src/pages.ts): a thread's number, title, summary, main text and whether it is
- * public, asked of every number alike with one indexed query, so a private, a missing and a public number cost the
- * same. Only a public thread's answer is ever used.
+ * The threads page's one read (src/pages.ts): a thread's number, title, summary, main text and whether it is public
+ * to the address the page was asked by, asked of every address alike with one indexed query (the number's, or the
+ * key's unique index), so a private, a missing and a public thread cost the same. Only a public thread's answer is
+ * ever used.
  */
-export async function publicPreview(db: D1Database, number: number): Promise<PreviewRow | null> {
-  return db
-    .prepare(`SELECT number, title, summary, body, main, (${PUBLIC}) AS public FROM threads WHERE number = ?1`)
-    .bind(number)
-    .first<PreviewRow>();
+export async function publicPreview(db: D1Database, address: PublicAddress): Promise<PreviewRow | null> {
+  const p = new Params();
+  return statement(db, `SELECT number, title, summary, body, main, (${openTo(address)}) AS public FROM threads WHERE ${addressed(address, p)}`, p).first<PreviewRow>();
 }
 
 /** A thread on the home page, as the home page and its feed show it. */
 export interface FeedRow {
   number: number;
+  /** The key in its public link, the address a reader lands on; every listed thread has one, as `PUBLIC` holds. */
+  share_key: string;
   title: string | null;
   body: string;
   /** Its main section as it now stands, `text`, `page` or `link`, which picks the address a reader lands on. */
@@ -1368,7 +1412,7 @@ export async function homeFeed(db: D1Database, limit: number): Promise<{ items: 
   const [items, now, outside] = await db.batch([
     db
       .prepare(
-        `SELECT number, title, body, main, feed_at,
+        `SELECT number, share_key, title, body, main, feed_at,
            (SELECT COUNT(*) FROM comments WHERE comments.thread_id = threads.id AND comments.audience = 'public' AND comments.state = 'shown'
              AND comments.question IS NULL AND comments.parent_id IS NULL) AS notes
          FROM threads WHERE ${LISTED} ORDER BY threads.feed_at DESC, threads.number DESC LIMIT ?1`,
@@ -1408,18 +1452,18 @@ export interface VisitorNote {
  * because a comment is its own entry. The insert holds the public condition itself, so a note racing the thread
  * being taken back is refused, not kept: false then, and nobody is made.
  */
-export async function addNote(db: D1Database, number: number, note: VisitorNote): Promise<boolean> {
+export async function addNote(db: D1Database, address: PublicAddress, note: VisitorNote): Promise<boolean> {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   const p = new Params();
   const sender: Sender = note.email === null ? null : { by: "email", email: note.email.trim().toLowerCase(), name: note.name };
-  const isPublic = (q: Params): string => `EXISTS (SELECT 1 FROM threads WHERE threads.number = ${q.add(number)} AND ${PUBLIC})`;
+  const isPublic = (q: Params): string => `EXISTS (SELECT 1 FROM threads WHERE ${publicWhere(address, q)})`;
   const person = personOf(db, sender, now, isPublic, p);
   const insert = statement(
     db,
     `INSERT INTO comments (id, thread_id, author, body, created_at, audience, state, sender_name, sender_email, person_id)
      SELECT ${p.add(id)}, threads.id, 'visitor', ${p.list([note.body, now])}, 'public', 'shown', ${p.list([note.name, note.email])}, ${person.id}
-     FROM threads WHERE threads.number = ${p.add(number)} AND ${PUBLIC} RETURNING id`,
+     FROM threads WHERE ${publicWhere(address, p)} RETURNING id`,
     p,
   );
   const u = new Params();
@@ -1442,7 +1486,7 @@ export interface VisitorAnswer {
  * comment is its own entry. The insert holds the public condition and the page being the main section itself, so an
  * answer racing the thread being taken back, or moving on to a link, is refused, not kept: false then.
  */
-export async function addAnswer(db: D1Database, number: number, answer: VisitorAnswer): Promise<boolean> {
+export async function addAnswer(db: D1Database, address: PublicAddress, answer: VisitorAnswer): Promise<boolean> {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   const p = new Params();
@@ -1450,7 +1494,7 @@ export async function addAnswer(db: D1Database, number: number, answer: VisitorA
     db,
     `INSERT INTO comments (id, thread_id, author, body, created_at, audience, state, sender_name, question, visitor_key)
      SELECT ${p.add(id)}, threads.id, 'visitor', ${p.list([answer.body, now])}, 'public', 'shown', ${p.list([answer.name, answer.question, answer.key])}
-     FROM threads WHERE threads.number = ${p.add(number)} AND threads.main = 'page' AND ${PUBLIC} RETURNING id`,
+     FROM threads WHERE ${publicWhere(address, p)} AND threads.main = 'page' RETURNING id`,
     p,
   );
   const u = new Params();

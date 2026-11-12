@@ -604,7 +604,7 @@ describe("the threads page", () => {
     // sender (talk-send.js).
     expect(store.match(/fetch\(/g)).toHaveLength(2);
     expect(store).toContain("response = await fetch(path, { redirect: 'manual', credentials: 'omit'");
-    expect([...store.matchAll(/readPublic\(`([^`]*)`/g)].map((m) => m[1])).toEqual(["/api/threads/${number}", "/api/asks/${encodeURIComponent(slug)}"]);
+    expect([...store.matchAll(/readPublic\(`([^`]*)`/g)].map((m) => m[1])).toEqual(["/api/threads/${pathPart(address)}", "/api/asks/${encodeURIComponent(slug)}"]);
     for (const script of ["app/threads.js", "app/keys.js", "app/markdown.js", "app/standing.js", "app/byline.js"]) expect([script, read(script).includes("fetch(")]).toEqual([script, false]);
   });
 

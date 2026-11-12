@@ -9,8 +9,11 @@
 // the owner's: the owner's Today shows it waiting on him, and the invited person never sees the note. One thread of
 // his own is public ("Shipping Stigmer 0.1.0, in public"), shared with the same person, with a comment of his
 // written for anyone and two visitors' notes, one of whose words hold Markdown and a link that must show as typed;
-// signed out, its address shows the public view. The pricing page thread is public as well, and not shared, so the
-// invited person reads it in the public view too. A third public thread's page asks questions ("A cold read"), with
+// it is seeded as a thread public before links had keys (its number still open to strangers, as the migration that
+// gave keys left those threads), so signed out both its link and its number show the public view. The pricing page
+// thread is public as well, and not shared, so the invited person reads it in the public view too; it and the third
+// opens for strangers only at its link (`/threads/<key>`, the key printed at start), and their numbers say "Nothing
+// here". A third public thread's page asks questions ("A cold read"), with
 // two visitors' answers from two browsers' keys, both named Sam, so signed out the page takes answers with a name,
 // shows a visitor other people's answers once they gave their own, and opens in full screen at `?full`. All three
 // public threads are posted on the home page, a page, a text with notes and a page with answers, under his Now line,
@@ -143,6 +146,9 @@ async function seed(): Promise<void> {
   await asPerson(harness.access.memberClaims(guest), `/${who}/comments`, { body: "Happy to own pricing. I'll draft the tiers by Thursday." });
 
   const database = await harness.db();
+  /** A public thread's link key, the address strangers send its notes and answers to. */
+  const linkKey = async (number: number): Promise<string> =>
+    (await database.prepare("SELECT share_key FROM threads WHERE number = ?1").bind(number).first<{ share_key: string }>())?.share_key ?? String(number);
   /** A note sent from the site's note flow, as a visitor sends one; answers its thread's number. */
   const siteNote = async (name: string, email: string, words: string): Promise<number> => {
     const response = await harness.fetch(`${SITE}/api/talk`, {
@@ -249,12 +255,14 @@ async function seed(): Promise<void> {
   });
   await asSync(`/${shipping}/text`, { field: "summary", text: "Decided: 0.1.0 ships when the install works on all three systems.\nOpen: the Windows runner.\nNext: a fresh install on Windows on Friday." });
   await asPerson(owner, `/${shipping}`, { action: "publish" });
+  // Public before links had keys: its number stays open for strangers, as the migration leaves such a thread.
+  await (await harness.db()).prepare("UPDATE threads SET public_by_number = 1 WHERE number = ?1").bind(shipping).run();
   await asPerson(owner, `/${shipping}`, { action: "post" });
   await asPerson(owner, `/${shipping}/comments`, { body: "Day one: the install works on macOS and Linux. Windows next.", audience: "public" });
   await asPerson(owner, `/${shipping}/people`, { add: { email: guest, name: "Meera" } });
   const note = async (words: string, name: string, email: string): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 5));
-    const response = await harness.fetch(`${THREADS}/api/threads/${shipping}/notes`, {
+    const response = await harness.fetch(`${THREADS}/api/threads/${await linkKey(shipping)}/notes`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: THREADS, "CF-Connecting-IP": "203.0.113.50" },
       body: new TextEncoder().encode(JSON.stringify({ body: words, name, email, token: "pass" })),
@@ -278,7 +286,7 @@ ${"<p>A line to make the page tall.</p>".repeat(12)}</body></html>`;
   await asPerson(owner, `/${cold}`, { action: "post" });
   const visitorAnswer = async (key: string, question: string, words: string): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 5));
-    const response = await harness.fetch(`${THREADS}/api/threads/${cold}/answers`, {
+    const response = await harness.fetch(`${THREADS}/api/threads/${await linkKey(cold)}/answers`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: THREADS, "CF-Connecting-IP": "203.0.113.60" },
       body: new TextEncoder().encode(JSON.stringify({ question, body: words, name: "Sam", token: "pass", key })),
@@ -487,6 +495,11 @@ async function seedOutside(): Promise<void> {
 }
 
 await seed();
+const links = (
+  await (await harness.db())
+    .prepare("SELECT number, title, share_key, public_by_number FROM threads WHERE share_key IS NOT NULL ORDER BY number")
+    .all<{ number: number; title: string; share_key: string; public_by_number: number }>()
+).results;
 await seedJournal();
 await seedNow();
 await seedOutside();
@@ -499,6 +512,9 @@ createServer((request, response) => {
   const as = signedOut ? "signed out" : member === null ? "signed in as the owner" : `signed in as ${member}, invited to one thread`;
   console.log(`hey.whysosuresh.com, ${as}: ${LOCAL_THREADS}/ (Ctrl-C stops it)`);
   console.log(`whysosuresh.com, the home page: ${LOCAL}/`);
+  for (const link of links) {
+    console.log(`#${link.number} ${link.title}: ${LOCAL_THREADS}/threads/${link.share_key}${link.public_by_number === 1 ? `, and its number, #${link.number}, as before keys` : ""}`);
+  }
 });
 process.on("SIGINT", () => {
   void harness.dispose().then(() => process.exit(0));

@@ -3,8 +3,9 @@
 // home page and taking it off are moves of the owner's alone, each with its event, only for a public thread (409
 // `not-public`), and unpublishing takes a thread off; the home page shows the posted public threads newest first, the
 // newest ten, with "All updates" under them only when there are more, each with its title or number, its first block as plain text, its day in his zone and its notes above
-// zero, every value as text, and linked at its address on the threads' host (hey.whysosuresh.com), or its `?full`
-// address when its main section is a page, so a reader lands on the page full screen; a thread that isn't posted, isn't public or isn't his never shows, even when its row is
+// zero, every value as text, and linked at its link, by its key, on the threads' host (hey.whysosuresh.com), or its
+// `?full` link when its main section is a page, so a reader lands on the page full screen, its feed entry's id still
+// the thread's number; a thread that isn't posted, isn't public or isn't his never shows, even when its row is
 // changed by hand; the Now line shows and an empty newest line hides it; an item from outside alone (a video or a
 // release, test/outside.test.ts) shows the list too; with nothing to show (no post, no outside item, no Now line), or
 // a failing read, the page is site/index.html byte for byte, and a rewritten one carries the site's headers and no ETag; /feed.xml is an
@@ -81,6 +82,12 @@ interface Moved {
 }
 
 /** A thread of his own, made public and posted on the home page. Answers its number. */
+/** A thread's link key, as the home page links it; empty for a thread never made public. */
+async function keyOf(number: number | undefined): Promise<string> {
+  const row = await (await harness.db()).prepare("SELECT share_key FROM threads WHERE number = ?1").bind(number ?? 0).first<{ share_key: string | null }>();
+  return row?.share_key ?? "";
+}
+
 async function posted(fields: Record<string, unknown> = {}): Promise<number> {
   const n = await thread(fields);
   await answer(await move(n, "publish"));
@@ -205,7 +212,7 @@ describe("posting a thread on the home page", () => {
 
   it("is never told to a stranger reading the thread", async () => {
     const n = await posted();
-    const read = await answer<{ thread: Record<string, unknown> }>(await harness.fetch(`${THREADS}/api/threads/${n}`));
+    const read = await answer<{ thread: Record<string, unknown> }>(await harness.fetch(`${THREADS}/api/threads/${await keyOf(n)}`));
     expect(Object.keys(read.thread)).not.toContain("feedAt");
     expect(JSON.stringify(read)).not.toMatch(/feed/i);
   });
@@ -245,7 +252,7 @@ describe("the home page", () => {
     const page = await response.text();
     const items = itemsOf(page);
     expect(items.map(titleOf)).toEqual(newestTitles(count, HOME_LIMIT));
-    expect(items[0]).toContain(`href="${THREADS}/threads/${numbers[count - 1]}"`);
+    expect(items[0]).toContain(`href="${THREADS}/threads/${await keyOf(numbers[count - 1])}"`);
     expect(page).toMatch(/<section class="home-main" aria-labelledby="happening" data-feed>/);
     expect(page).toContain('<p class="more" data-feed-more><a href="/updates">All updates</a></p>');
     expect(page).not.toMatch(/style="/);
@@ -277,9 +284,10 @@ describe("the home page", () => {
     const items = itemsOf(await (await home()).text());
     expect(items.map(titleOf)).toEqual(["A story", "Plain"]);
     const links = items.map((item) => [...item.matchAll(/<a href="([^"]*)">/g)].map((match) => match[1]));
+    const [storyKey, textKey] = [await keyOf(story), await keyOf(text)];
     expect(links).toEqual([
-      [`${THREADS}/threads/${story}?full`, `${THREADS}/threads/${story}?full`],
-      [`${THREADS}/threads/${text}`, `${THREADS}/threads/${text}`],
+      [`${THREADS}/threads/${storyKey}?full`, `${THREADS}/threads/${storyKey}?full`],
+      [`${THREADS}/threads/${textKey}`, `${THREADS}/threads/${textKey}`],
     ]);
   });
 
@@ -292,11 +300,12 @@ describe("the home page", () => {
     const told = await thread({ title: "Told", source: "told", name: "Dev" });
     const hand = await harness.db();
     await hand.prepare("UPDATE threads SET feed_at = '2026-11-06T00:00:00.000Z' WHERE number IN (?1, ?2)").bind(invited, told).run();
-    await hand.prepare("UPDATE threads SET public_at = '2026-11-06T00:00:00.000Z' WHERE number = ?1").bind(told).run();
+    // With a key and its number open, as the migration leaves a thread public before keys: still not his words.
+    await hand.prepare("UPDATE threads SET public_at = '2026-11-06T00:00:00.000Z', share_key = printf('%032x', number), public_by_number = 1 WHERE number = ?1").bind(told).run();
     const shownOne = await posted({ title: "Shown" });
     const page = await (await home()).text();
     expect(itemsOf(page).map(titleOf)).toEqual(["Shown"]);
-    expect(page).toContain(`${THREADS}/threads/${shownOne}`);
+    expect(page).toContain(`${THREADS}/threads/${await keyOf(shownOne)}`);
   });
 
   it("writes every value as text: a title with markup and quotes, and a thread with no title as its number", async () => {
@@ -454,7 +463,7 @@ describe("/feed.xml", () => {
     expect(entries[0]).toContain(`<id>tag:whysosuresh.com,2026:thread-${second}</id>`);
     expect(entries[0]).toContain("<title>Fish &amp; &lt;chips&gt; &quot;today&quot;</title>");
     expect(entries[0]).toContain("<summary>A &lt; b &amp; c.</summary>");
-    expect(entries[0]).toContain(`<link rel="alternate" type="text/html" href="${THREADS}/threads/${second}"/>`);
+    expect(entries[0]).toContain(`<link rel="alternate" type="text/html" href="${THREADS}/threads/${await keyOf(second)}"/>`);
     expect(entries[0]).toContain("<updated>2026-11-06T09:00:00.000Z</updated>");
     expect(entries[1]).toContain(`<id>tag:whysosuresh.com,2026:thread-${first}</id>`);
     expect(feed).toMatch(/<\/author>\n {2}<entry>/);
@@ -470,9 +479,9 @@ describe("/feed.xml", () => {
     const entries = [...feed.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map((match) => match[1] ?? "");
     expect(entries).toHaveLength(2);
     expect(entries[0]).toContain(`<id>tag:whysosuresh.com,2026:thread-${story}</id>`);
-    expect(entries[0]).toContain(`<link rel="alternate" type="text/html" href="${THREADS}/threads/${story}?full"/>`);
+    expect(entries[0]).toContain(`<link rel="alternate" type="text/html" href="${THREADS}/threads/${await keyOf(story)}?full"/>`);
     expect(entries[1]).toContain(`<id>tag:whysosuresh.com,2026:thread-${text}</id>`);
-    expect(entries[1]).toContain(`<link rel="alternate" type="text/html" href="${THREADS}/threads/${text}"/>`);
+    expect(entries[1]).toContain(`<link rel="alternate" type="text/html" href="${THREADS}/threads/${await keyOf(text)}"/>`);
   });
 
   it("answers only GET and HEAD", async () => {

@@ -4,7 +4,8 @@
 // people pages, /people and /people/<n> with the person's name after it or not (/people/7-meera), which read nothing:
 // the asks, /asks, which reads nothing either; an ask's own address, /ask/<slug>, which anyone opens to answer it;
 // a person's address gets the plain shell whatever the number, so it never says whether that person exists; and a
-// thread, /threads/<n>, with its title after the number or not (/threads/42-who-owns-what); and Suresh's journal, /journal with a day, a week or the storylines under it,
+// thread, /threads/<n>, with its title after the number or not (/threads/42-who-owns-what), or a public thread's link,
+// /threads/<key>, its 32-character key and nothing after it; and Suresh's journal, /journal with a day, a week or the storylines under it,
 // which reads nothing either. People lived under
 // /threads/ before the rooms were peers: /threads/people and every person's address there redirect to /people for
 // good, and /people/ to /people. Each gets the one page, site/threads/index.html,
@@ -13,10 +14,12 @@
 // the calls for the thread, and a missing thread, a thread this browser may not read and a signed-out visitor all
 // see the same "Nothing here", so the address alone never tells whether a thread exists.
 //
-// A link preview (Slack, iMessage) reads only this HTML, so a public thread's address gets its own title and
-// preview tags: at a thread's address the Worker reads the thread's row with one indexed query whatever the number
-// (`publicPreview`), so a private, a missing and a public number cost the same, and only a public thread's answer
-// differs. Its title, `og:` and `twitter:` tags are written as text or escaped attributes, never as markup; the
+// A link preview (Slack, iMessage) reads only this HTML, so a public thread's link gets its own title and preview
+// tags: at a thread's address the Worker reads the thread's row with one indexed query whatever the address
+// (`publicPreview`, by the number or by the key), so a private, a missing and a public thread cost the same, and only
+// a thread public to that address answers differently: its key, or the number of a thread public before links had
+// keys. A thread made public since gets the shell byte for byte at its number, exactly as a private one. The preview's
+// `og:url` is the address it was asked by, so a number never leads to a key, which would outlive the number. Its title, `og:` and `twitter:` tags are written as text or escaped attributes, never as markup; the
 // description is plain text from the site's own Markdown reader (site/app/markdown.js): the living summary, else the
 // first paragraph of the text when the text is what the thread shows. That answer is fetched without the browser's
 // conditional headers and carries no ETag, because the shell's ETag would let a browser keep a stale title, or the
@@ -33,15 +36,15 @@
 import { parse, type Inline } from "../site/app/markdown.js";
 import type { Bindings } from "./bindings.ts";
 import { SLUG_SHAPE } from "./asks.ts";
-import { findAsk, publicPreview, type PreviewRow } from "./store.ts";
+import { findAsk, publicPreview, type PreviewRow, type PublicAddress } from "./store.ts";
 
 /**
  * The root (Today), the meetings, the asks, everyone and a person by their number, the list, a thread by its number with any title
- * after it, an ask by its slug, and the journal's (his alone, drawn only once the calls say he is the owner): the list,
+ * after it or by its link's key (a key is 32 characters and a number at most nine digits, so the two never overlap), an ask by its slug, and the journal's (his alone, drawn only once the calls say he is the owner): the list,
  * a day or a week by its key, the storylines and one storyline by its name's slug. A key is matched by its shape, so an
  * impossible day gets the shell like any other and says "Nothing here" itself.
  */
-const PAGE = /^(?:\/|\/meetings|\/asks|\/journal(?:\/(?:\d{4}-\d{2}-\d{2}|\d{4}-W\d{2}|storylines(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?))?|\/people(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?)?|\/ask\/([^/]+))$/;
+const PAGE = /^(?:\/|\/meetings|\/asks|\/journal(?:\/(?:\d{4}-\d{2}-\d{2}|\d{4}-W\d{2}|storylines(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?))?|\/people(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?)?|\/threads\/([0-9a-f]{32})|\/ask\/([^/]+))$/;
 
 /** What an ask's preview says beside its title, the same for every ask. */
 export const ASK_DESCRIPTION = "A few questions from Suresh";
@@ -118,9 +121,10 @@ interface Preview {
   readonly description: string;
 }
 
-/** A public thread's preview. */
-function threadPreview(row: PreviewRow, origin: string): Preview {
-  return { title: titleOf(row), type: "article", url: `${origin}/threads/${row.number}`, description: description(row) };
+/** A public thread's preview, its address the one it was asked by. */
+function threadPreview(row: PreviewRow, address: PublicAddress, origin: string): Preview {
+  const at = "shareKey" in address ? address.shareKey : String(row.number);
+  return { title: titleOf(row), type: "article", url: `${origin}/threads/${at}`, description: description(row) };
 }
 
 /** The shell with a preview's title and tags. */
@@ -158,12 +162,13 @@ export async function handlePage(request: Request, env: Bindings): Promise<Respo
   }
   const page = PAGE.exec(url.pathname);
   if (page === null || (request.method !== "GET" && request.method !== "HEAD")) return env.ASSETS.fetch(request);
-  const [, number, slug] = page;
+  const [, number, shareKey, slug] = page;
   if (slug !== undefined && !SLUG_SHAPE.test(slug)) return env.ASSETS.fetch(request);
   const shell = new URL(SHELL, url.origin);
   let preview: Preview | null = null;
   try {
-    preview = number !== undefined ? await threadOf(env, Number(number), url.origin) : slug !== undefined ? await askOf(env, slug, url.origin) : null;
+    const address: PublicAddress | null = number !== undefined ? { number: Number(number) } : shareKey !== undefined ? { shareKey } : null;
+    preview = address !== null ? await threadOf(env, address, url.origin) : slug !== undefined ? await askOf(env, slug, url.origin) : null;
   } catch {
     preview = null;
   }
@@ -174,10 +179,10 @@ export async function handlePage(request: Request, env: Bindings): Promise<Respo
   return plain.status === 200 ? rewritten(plain, preview) : plain;
 }
 
-/** A thread's preview when it is public, else null. */
-async function threadOf(env: Bindings, number: number, origin: string): Promise<Preview | null> {
-  const row = await publicPreview(env.DB, number);
-  return row === null || row.public !== 1 ? null : threadPreview(row, origin);
+/** A thread's preview when it is public to the address asked, else null. */
+async function threadOf(env: Bindings, address: PublicAddress, origin: string): Promise<Preview | null> {
+  const row = await publicPreview(env.DB, address);
+  return row === null || row.public !== 1 ? null : threadPreview(row, address, origin);
 }
 
 /** An ask's preview while it is open or closed, else null: its title and the fixed line, never its summary. */

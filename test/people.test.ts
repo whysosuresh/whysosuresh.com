@@ -99,8 +99,10 @@ async function published(): Promise<number> {
   return n;
 }
 
+/** A visitor's note on a public thread, sent to its link. */
 async function noteOn(number: number, name: string, email: string, body = "A public note."): Promise<void> {
-  const response = await harness.fetch(`${THREADS}/api/threads/${number}/notes`, {
+  const row = await (await harness.db()).prepare("SELECT share_key FROM threads WHERE number = ?1").bind(number).first<{ share_key: string }>();
+  const response = await harness.fetch(`${THREADS}/api/threads/${row?.share_key ?? number}/notes`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Origin: THREADS, "CF-Connecting-IP": network() },
     body: new TextEncoder().encode(JSON.stringify({ body, name, email, token: "pass" })),
@@ -213,7 +215,8 @@ describe("who is a person", () => {
     await noteOn(n, "Not Meera", "Meera@example.com");
     const note = (await answer<{ comments: { id: string; name: string; personNumber?: number }[] }>(await call(`/threads/${n}`))).comments[0];
     expect([note?.name, note?.personNumber]).toEqual(["Not Meera", 1]);
-    const read = await answer<{ comments: { name: string }[] }>(await harness.fetch(`${THREADS}/api/threads/${n}`));
+    const key = (await (await harness.db()).prepare("SELECT share_key FROM threads WHERE number = ?1").bind(n).first<{ share_key: string }>())?.share_key;
+    const read = await answer<{ comments: { name: string }[] }>(await harness.fetch(`${THREADS}/api/threads/${key}`));
     expect(read.comments.map((one) => one.name)).toEqual(["Not Meera"]);
     const theirs = await answer<{ comments: Record<string, unknown>[] }>(await call(`/threads/${n}`, { as: { email: MEERA } }));
     expect(theirs.comments).toEqual([expect.objectContaining({ name: "Not Meera" })]);

@@ -24,11 +24,13 @@
 // arrives from outside: it starts empty, so nothing is listed before the first hourly run, a row is a video or a
 // release, its picture flag is 0 or 1 and starts at 0, an id is kept once, and the home page reads it by date. For
 // 0020, the avatars' photos: nobody has a photo or has been looked up yet, he has none, a person's photo is one that
-// is there, and a photo's object is kept once.
+// is there, and a photo's object is kept once. For 0021, public links: every thread of his that is public gets its
+// own 32-character key and keeps its number open for strangers, while a private one, one taken back, a site note made
+// public by hand and an ask get neither, and no two threads share a key; the old public thread then opens by both.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
-import { SITE, THREADS, startHarness, type Harness } from "./harness.ts";
+import { SITE, THREADS, startHarness, type Harness, type Statement } from "./harness.ts";
 
 let harness: Harness | null = null;
 
@@ -264,8 +266,8 @@ describe("0007, the inbox retired a deploy later", () => {
     expect((await database.prepare("SELECT COUNT(*) AS n FROM threads WHERE origin_ref = 'chat:twice'").first<{ n: number }>())?.n).toBe(1);
     expect(await thread(harness, "00000000-0000-4000-8000-000000000007")).toBeNull();
     const after = (await database.prepare("SELECT * FROM threads WHERE id NOT IN (?1, ?2, ?3) ORDER BY number").bind("00000000-0000-4000-8000-000000000003", "00000000-0000-4000-8000-000000000005", "00000000-0000-4000-8000-000000000006").all<Record<string, unknown>>()).results;
-    // Later migrations add a thread's last activity, its main section, who it is from, its meeting, its ask and its place
-    // on the home page; everything 0007 found stays as it was.
+    // Later migrations add a thread's last activity, its main section, who it is from, its meeting, its ask, its place
+    // on the home page and its public link; everything 0007 found stays as it was.
     expect(
       after.map(
         ({
@@ -282,6 +284,8 @@ describe("0007, the inbox retired a deploy later", () => {
           ask_slug: _slug,
           ask_state: _state,
           ask_thread_id: _asked,
+          share_key: _key,
+          public_by_number: _byNumber,
           ...rest
         }) => rest,
       ),
@@ -629,5 +633,39 @@ describe("0020, the avatars' photos", () => {
     // His history names a photo that may since be gone, so it holds no key on it, and a null is no photo.
     await database.prepare("INSERT INTO owner_photos (photo_id, set_at) VALUES ('gone', '2026-11-01T00:00:00.000Z'), (NULL, '2026-11-02T00:00:00.000Z')").run();
     expect(await database.prepare("SELECT photo_id FROM owner_photos ORDER BY id DESC LIMIT 1").first()).toEqual({ photo_id: null });
+  });
+});
+
+describe("0021, public threads' links", () => {
+  it("gives every public thread of his its own key and its number, and nothing else either", async () => {
+    harness = await startHarness({ through: "0020" });
+    const database = await harness.db();
+    const row = (id: string, number: number, source: string, publicAt: string | null, slug: string | null = null): Statement =>
+      database
+        .prepare("INSERT INTO threads (id, number, created_at, source, body, status, public_at, ask_slug) VALUES (?1, ?2, '2026-11-01T00:00:00.000Z', ?3, 'x', 'act', ?4, ?5)")
+        .bind(id, number, source, publicAt, slug);
+    const when = "2026-11-02T00:00:00.000Z";
+    await database.batch([
+      row("public-1", 1, "self", when),
+      row("public-2", 2, "self", when),
+      row("private", 3, "self", null),
+      row("taken-back", 4, "self", null),
+      row("note-by-hand", 5, "talk", when),
+      row("ask", 6, "self", null, "demo"),
+    ]);
+    await harness.migrate();
+    const after = (await database.prepare("SELECT id, share_key, public_by_number FROM threads ORDER BY number").all<{ id: string; share_key: string | null; public_by_number: number }>()).results;
+    expect(after.map((one) => [one.id, one.share_key === null ? null : /^[0-9a-f]{32}$/.test(one.share_key), one.public_by_number])).toEqual([
+      ["public-1", true, 1],
+      ["public-2", true, 1],
+      ["private", null, 0],
+      ["taken-back", null, 0],
+      ["note-by-hand", null, 0],
+      ["ask", null, 0],
+    ]);
+    expect(after[0]?.share_key).not.toBe(after[1]?.share_key);
+    await expect(database.prepare("UPDATE threads SET share_key = ?1 WHERE id = 'private'").bind(after[0]?.share_key ?? "").run()).rejects.toThrow(/UNIQUE/);
+    // The old public thread opens for a stranger by its key and by its number.
+    for (const at of [after[0]?.share_key ?? "", "1"]) expect([at, (await harness.fetch(`${THREADS}/api/threads/${at}`)).status]).toEqual([at, 200]);
   });
 });

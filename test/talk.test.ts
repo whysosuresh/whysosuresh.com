@@ -111,6 +111,8 @@ describe("a good note", () => {
       link_title: null,
       public_at: null,
       feed_at: null,
+      share_key: null,
+      public_by_number: 0,
       person_id: expect.any(String),
       meeting_when: null,
       meeting_minutes: null,

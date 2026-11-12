@@ -332,6 +332,21 @@ describe("what an invited person sees", () => {
     expect(JSON.stringify(seen)).not.toMatch(/asha@example\.com|meera@|dev@|Junk|Private first draft/);
   });
 
+  it("never carries a public thread's link, which he and the sync hand out, and they read", async () => {
+    const n = await thread({ source: "self" });
+    await invite(n, MEERA);
+    expect((await call(`/threads/${n}`, { body: { action: "publish" } })).status).toBe(200);
+    const theirs = await answer<Shown>(await call(`/threads/${n}`, { as: { email: MEERA } }));
+    expect(theirs.thread).not.toHaveProperty("shareKey");
+    expect(theirs.thread).not.toHaveProperty("publicByNumber");
+    const key = (await answer<Shown>(await call(`/threads/${n}`))).thread.shareKey;
+    expect(key).toMatch(/^[0-9a-f]{32}$/);
+    expect((await answer<Shown>(await call(`/threads/${n}`, { as: "sync" }))).thread).toMatchObject({ shareKey: key, publicByNumber: false });
+    expect(JSON.stringify(await answer<unknown>(await call(`/threads/${n}`, { as: { email: MEERA } })))).not.toContain(String(key));
+    const list = await answer<{ threads: Record<string, unknown>[] }>(await call("/threads", { as: { email: MEERA } }));
+    expect(JSON.stringify(list)).not.toContain(String(key));
+  });
+
   it("is the history without earlier texts, reply marks, imports, reasons or ids", async () => {
     const n = await shared();
     const seen = await answer<Shown>(await call(`/threads/${n}`, { as: { email: MEERA } }));

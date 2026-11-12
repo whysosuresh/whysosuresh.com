@@ -12,7 +12,8 @@
 // the Worker's reason when it gave one. The page's writes carry JSON, which a form on another site can't send.
 //
 // A thread Suresh made public is also read with no sign-in, from the public call outside Access (`showPublic`,
-// /api/threads/<n>, src/public.ts): what the thread says and the comments written as Public that are shown, in the
+// /api/threads/<key>, src/public.ts), by its link's key, or by its number for a thread public before links had keys
+// (`PublicAddress`): what the thread says and the comments written as Public that are shown, in the
 // private answer's own field names, so one renderer draws both. Its page loads from the public address too. A visitor
 // who answers the page's questions sends their browser's key with the read (`X-Visitor-Key`), so the call says which
 // answers are theirs and opens other people's under a question they answered. His ruling on a visitor's note or answer
@@ -39,6 +40,10 @@
 // since overtaken is refused as Failed `stale`, whose `detail` names the newest version, and nothing is written.
 // `answerJournal` keeps a typed answer to a day's question. A photo loads from its own address (`journalPhoto`).
 //
+// A public thread's link carries its key (`shareKey`, given the first time he makes it public and kept for good), which
+// only he and the sync read on a thread; `publicByNumber` says its number still opens it for strangers, as for a thread
+// public before links had keys. Invited people read neither.
+//
 // His home page shows the threads he posts there (`feedAt` on every thread, set by the `post` move and cleared by
 // `unpost` or `unpublish`) under his Now line, one line he sets from Today: `readNow` and `saveNow` (/threads/api/now,
 // src/home.ts), his alone; an empty line takes it off the home page.
@@ -58,6 +63,7 @@
  *   ref: string | null, filedLink: string | null, movedAt: string | null, activityAt: string,
  *   main: 'text' | 'page' | 'link', link: { url: string, title: string | null } | null, publicAt: string | null,
  *   feedAt?: string | null, senderNumber?: number | null, shared?: number, waiting?: boolean,
+ *   shareKey?: string | null, publicByNumber?: boolean,
  *   meeting?: import('./meetings.js').Meeting | null, ask?: AskMark | null
  * }} Thread
  * @typedef {'draft' | 'open' | 'closed'} AskState
@@ -304,14 +310,35 @@ async function readPublic(path, key) {
 }
 
 /**
- * A public thread, as anyone reads it with no sign-in: Missing for any number that isn't one. `key` is the visitor's
- * browser's key, when it has one, which the call reads to say which answers are theirs.
- * @param {number} number
+ * How a stranger names a public thread: by its link's key, or by the number of a thread public before links had keys.
+ * @typedef {{ shareKey: string } | { number: number }} PublicAddress
+ */
+
+/**
+ * How a public address names its thread in a path: its key, or its number.
+ * @param {PublicAddress} address
+ */
+function pathPart(address) {
+  return 'shareKey' in address ? address.shareKey : String(address.number);
+}
+
+/**
+ * A public thread's calls' address: `/api/threads/` and its key or number.
+ * @param {PublicAddress} address
+ */
+export function publicThreadAddress(address) {
+  return `/api/threads/${pathPart(address)}`;
+}
+
+/**
+ * A public thread, as anyone reads it with no sign-in: Missing for any address that doesn't open one. `key` is the
+ * visitor's browser's key, when it has one, which the call reads to say which answers are theirs.
+ * @param {PublicAddress} address
  * @param {string | null} key
  * @returns {Promise<PublicShown>}
  */
-export async function showPublic(number, key) {
-  return /** @type {PublicShown} */ (await readPublic(`/api/threads/${number}`, key));
+export async function showPublic(address, key) {
+  return /** @type {PublicShown} */ (await readPublic(`/api/threads/${pathPart(address)}`, key));
 }
 
 /**
@@ -363,11 +390,11 @@ export async function markAskRead(number) {
 
 /**
  * The address a public thread's page frame loads one version from, outside Access, sealed as the private one is.
- * @param {number} number
+ * @param {PublicAddress} address
  * @param {number} version
  */
-export function publicPageAddress(number, version) {
-  return `/api/threads/${number}/pages/${version}`;
+export function publicPageAddress(address, version) {
+  return `${publicThreadAddress(address)}/pages/${version}`;
 }
 
 /**

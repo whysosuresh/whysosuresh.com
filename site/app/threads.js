@@ -40,14 +40,21 @@
 // shared with you now" rather than sent round the sign-in again.
 //
 // One of his own threads can be public (Share's switch). Anyone who isn't in it (signed out, signed in to other
-// threads, or removed from every one) then reads it at its address in the public view: the thread as the public call
+// threads, or removed from every one) then reads it at its link in the public view, `/threads/<key>`, the key the
+// Worker gave it the first time he made it public; its number opens it for strangers only while it was public before
+// links had keys. A link's key is resolved to its thread's number once, before the page opens anything
+// (`resolveShared`): from the threads already loaded when it is one of his, else by the public read, which the public
+// view then draws from. Whoever is in the thread gets the thread itself; anyone else the public view, its calls going
+// to the address it was read by; and a key that opens nothing is "Nothing here" for everyone, him included. Every link
+// he copies of a public thread (the address bar, the Link row, Copy link, Copy full-screen link) is the key's
+// (`linkOf`); everything that navigates, and an invitation, keeps the number. The public view: the thread as the public call
 // answers it (`showPublic`, outside Access), the comments written as Public, and "Send Suresh a note on this", a form
 // with the site's bot check (../talk-send.js) whose note shows at once. When its page asks questions, a visitor
 // answers them too, with no sign-in: they type their name once (in a line above the page, or in the page's bar in full
 // screen), and their browser keeps a random key with it (`localStorage`, or for the visit when storage is off), which
 // the public call reads to say which answers are theirs; under each question the page shows their answer, and other
-// people's once they gave their own. A thread's address with `?full` opens its page in full screen at once, which is
-// the link Share offers for answering. On his side a visitor's note is a comment with Drop and Reply by email, a
+// people's once they gave their own. A thread's link with `?full` opens its page in full screen at once, which is the
+// link Share offers for answering. On his side a visitor's note is a comment with Drop and Reply by email, a
 // visitor's answer sits under its question and has a line in the history with Drop, and Drop's Undo shows it again;
 // a visitor's word makes the thread wait on him, and a globe marks a public thread in every list. A comment on a
 // public thread is written for anyone by default (Public), or for the people here, or for him alone. A visitor's words
@@ -131,7 +138,7 @@ import { PHOTO_SHEET, VIA, photoProblem, photoSaved, startedLine, viaClaude, wri
 import { ASKS_PATH, ASK_PATH, CLOSED_LINE, DRAFTS_HINT, agoWords, FIRST_ANSWERERS, answeredHead, answererName, answerersShown, askEventWords, askLink, askShown, countLine, foldWaiting, foldedTitle, foldedWho, markReadLabel, markedWords, nobodyLine, savedLine, stateWords, summaryNoteFor, talkLinkFor, topicLine, visitorHint } from './asks.js';
 import { DRAFT, KEY, discussionFor, helloFor, placesOf, readPageMessage, stack, takesAnswers } from './page-talk.js';
 import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, saidOn, takenLine } from './people.js';
-import { addressOf, feedLines, invitation, invitationProblem, isAddress, levelOf, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
+import { addressOf, feedLines, invitation, invitationProblem, isAddress, levelOf, linkShown, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
 import { prepare as prepareBotCheck, sendTo } from '../talk-send.js';
 import {
   Failed,
@@ -166,6 +173,7 @@ import {
   setPhoto,
   saveJournal,
   publicPageAddress,
+  publicThreadAddress,
   search,
   show,
   showAsk,
@@ -217,7 +225,9 @@ import {
  * @typedef {import('./keys.js').Command} Command
  * @typedef {{ view: 'today' } | { view: 'list', tab: Tab, only: Open | null, space: string | null } | { view: 'thread', number: number } | { view: 'people' }
  *   | { view: 'person', number: number } | { view: 'meetings' } | { view: 'asks' } | { view: 'ask', slug: string }
- *   | { view: 'journal' } | { view: 'entry', key: string } | { view: 'storylines' } | { view: 'storyline', slug: string }} Route
+ *   | { view: 'journal' } | { view: 'entry', key: string } | { view: 'storylines' } | { view: 'storyline', slug: string }
+ *   | { view: 'shared', shareKey: string }} Route
+ * @typedef {import('./threads-store.js').PublicAddress} PublicAddress
  * @typedef {{ to: string, subject: string, body: string }} Draft
  * @typedef {{ title: string, summary: string, body: string }} Editing
  * @typedef {{ title: string, space: string, status: 'received' | 'act' | 'discuss', body: string }} NewDraft
@@ -297,6 +307,11 @@ function repliable(said) {
 const MAX_NOTE = 4000;
 /** A thread's own address, with its title after the number or not. */
 const THREAD_PATH = /^\/threads\/([1-9]\d{0,8})(?:-[^/]*)?$/;
+/**
+ * A public thread's link: its key, 32 lowercase hex characters, the Worker's `SHARE_KEY_SHAPE` (src/store.ts), which
+ * this page can't import. A number is at most nine digits, so the two never overlap.
+ */
+const SHARED_PATH = /^\/threads\/([0-9a-f]{32})$/;
 /** The door everyone signed in enters by: Today for him, their threads for a person he invited. */
 const ME = '/';
 /** The home page, on its own host: where the site's name leads from every bar. */
@@ -449,6 +464,15 @@ function slugOf(thread) {
 /** @param {Thread} thread */
 function threadPath(thread) {
   return `/threads/${slugOf(thread)}`;
+}
+
+/**
+ * The link to hand out for a thread: a public thread's key link when this reader holds its key (only he does), which
+ * opens it for anyone; else its own address, which opens it for him and the people he invited.
+ * @param {Thread} thread
+ */
+function linkOf(thread) {
+  return thread.publicAt !== null && thread.shareKey ? `/threads/${thread.shareKey}` : threadPath(thread);
 }
 
 /** The line under a row's title: the summary's first line without its label, or the text's. @param {Thread} thread */
@@ -631,7 +655,7 @@ function saidOf(thread, action) {
 
 /** @param {string} address */
 function isThreadAddress(address) {
-  return THREAD_PATH.test(address);
+  return THREAD_PATH.test(address) || SHARED_PATH.test(address);
 }
 
 /** Everyone's address or a person's, which a signed-out page treats as a room. @param {string} address */
@@ -717,6 +741,8 @@ function shortLeft(left) {
 
 /** @param {Location} at @returns {Route} */
 function routeOf(at) {
+  const shared = SHARED_PATH.exec(at.pathname);
+  if (shared) return { view: 'shared', shareKey: shared[1] ?? '' };
   const thread = THREAD_PATH.exec(at.pathname);
   if (thread) return { view: 'thread', number: Number(thread[1]) };
   if (PEOPLE_PATH.test(at.pathname)) return { view: 'people' };
@@ -751,6 +777,7 @@ function pathOf(route, threads, people = []) {
     return someone ? personPath(someone) : `${PEOPLE}/${route.number}`;
   }
   if (route.view === 'list') return listPath(route.tab, route.only, route.space);
+  if (route.view === 'shared') return `/threads/${route.shareKey}`;
   const thread = threads.get(route.number);
   return thread ? threadPath(thread) : `/threads/${route.number}`;
 }
@@ -1013,6 +1040,10 @@ class Threads {
     this.audience = null;
     /** A public thread, as the public view shows it. @type {PublicShown | null} */
     this.publicShown = null;
+    /** The address the public view read its thread by, which its page, notes and answers go to. @type {PublicAddress | null} */
+    this.publicAddress = null;
+    /** The thread the address's link named, by its number and key, once resolved. @type {{ number: number, shareKey: string } | null} */
+    this.sharedAs = null;
     /** The public view's note, as it is being written. @type {NoteForm} */
     this.note = { name: '', email: '', body: '', sent: false, busy: false, problem: '' };
     /** Who answers a public page from this browser. @type {Visitor} */
@@ -1156,12 +1187,14 @@ class Threads {
    * for the owner, theirs for an invited person.
    */
   async start() {
-    const route = this.route;
     // An ask is answered by anyone, signed in or not, so its page asks nobody who is calling.
-    if (route.view === 'ask') {
-      await this.startAsk(route.slug);
+    if (this.route.view === 'ask') {
+      await this.startAsk(this.route.slug);
       return;
     }
+    // A link names its thread by key: resolved once, here, so everything after it sees a thread's number.
+    if (this.route.view === 'shared') this.route = await this.resolveShared(this.route);
+    const route = this.route;
     const inviting = route.view === 'thread' && new URLSearchParams(location.search).has('invite');
     if (route.view === 'list') {
       this.tab = route.tab;
@@ -1205,13 +1238,44 @@ class Threads {
    */
   async tryPublic(route) {
     if (route.view !== 'thread') return false;
-    try {
-      this.publicShown = await showPublic(route.number, this.visitor.key);
-    } catch {
-      return false;
+    // Reached by its link, it is read by its key, never its number, which may not open it.
+    /** @type {PublicAddress} */
+    const address = this.sharedAs?.number === route.number ? { shareKey: this.sharedAs.shareKey } : { number: route.number };
+    const read = this.publicShown?.thread.number === route.number && sameAddress(this.publicAddress, address);
+    if (!read) {
+      try {
+        this.publicShown = await showPublic(address, this.visitor.key);
+      } catch {
+        return false;
+      }
     }
+    this.publicAddress = address;
     this.renderPublic();
     return true;
+  }
+
+  /**
+   * A link's thread, as a route by its number: one of the threads loaded when he holds its key, else the public read's,
+   * which is kept for the public view. A key that opens nothing (wrong, or of a thread he took back) stays as it is,
+   * and shows "Nothing here".
+   * @param {{ view: 'shared', shareKey: string }} route
+   * @returns {Promise<Route>}
+   */
+  async resolveShared(route) {
+    const known = [...this.threads.values()].find((thread) => thread.publicAt !== null && thread.shareKey === route.shareKey);
+    if (known) {
+      this.sharedAs = { number: known.number, shareKey: route.shareKey };
+      return { view: 'thread', number: known.number };
+    }
+    try {
+      const shown = await showPublic({ shareKey: route.shareKey }, this.visitor.key);
+      this.publicShown = shown;
+      this.publicAddress = { shareKey: route.shareKey };
+      this.sharedAs = { number: shown.thread.number, shareKey: route.shareKey };
+      return { view: 'thread', number: shown.thread.number };
+    } catch {
+      return route;
+    }
   }
 
   async loadAll() {
@@ -1442,6 +1506,8 @@ class Threads {
    * @param {boolean} [push]
    */
   async go(route, push = true) {
+    this.sharedAs = null;
+    if (route.view === 'shared') route = await this.resolveShared(route);
     if (this.member && isHis(route)) route = { view: 'today' };
     this.closeOverlay();
     this.pageFull = false;
@@ -1670,7 +1736,10 @@ class Threads {
       if (this.overlay === 'discussion') this.renderDiscussion();
       const thread = this.shown?.thread;
       document.title = thread ? `#${thread.number} ${titleOf(thread)} · Threads` : 'Threads';
-      if (thread && location.pathname !== threadPath(thread)) history.replaceState(null, '', threadPath(thread));
+      if (thread && location.pathname !== linkOf(thread)) history.replaceState(null, '', linkOf(thread));
+    } else if (this.route.view === 'shared') {
+      this.main.replaceChildren(this.goneView());
+      document.title = 'Nothing here · Threads';
     } else if (this.route.view === 'people') {
       this.main.replaceChildren(this.peopleView());
       document.title = 'People · Threads';
@@ -2869,6 +2938,17 @@ class Threads {
     ]);
   }
 
+  /** "Nothing here", at a link that opens no thread: a wrong key, or one of a thread he took back from public. */
+  goneView() {
+    return el('div', { class: 't-wrap' }, [
+      el('div', { class: 't-missing' }, [
+        el('h1', {}, ['Nothing here']),
+        el('p', {}, [this.member ? "There's no public thread at this link." : "There's no public thread at this link. If you took it back, the thread is still in your list."]),
+        el('a', { href: ME, 'data-go': 'today' }, [this.member ? 'Back to your threads' : 'Back to Today']),
+      ]),
+    ]);
+  }
+
   threadView() {
     if (this.missing !== null || this.shown === null) {
       return el('div', { class: 't-wrap' }, [
@@ -3164,7 +3244,7 @@ class Threads {
     const tell = (/** @type {boolean} */ ok, /** @type {string | null} */ problem) =>
       frame instanceof HTMLIFrameElement ? frame.contentWindow?.postMessage({ [KEY]: 'saved', question, ok, ...(problem === null ? {} : { problem }) }, '*') : undefined;
     try {
-      await sendTo(`/api/threads/${number}/answers`, { question, body, name: this.visitor.name, key: this.visitor.key });
+      await sendTo(`${publicThreadAddress(this.publicAddress ?? { number })}/answers`, { question, body, name: this.visitor.name, key: this.visitor.key });
     } catch (error) {
       const reason = error instanceof Error && 'reason' in error ? error.reason : 'failed';
       tell(
@@ -3181,10 +3261,10 @@ class Threads {
     await this.refreshPublic(number);
   }
 
-  /** Reads a public thread again, as this visitor, and draws it, its page and what the page is told. @param {number} number */
+  /** Reads a public thread again, as this visitor, by the address it was read by, and draws it, its page and what the page is told. @param {number} number */
   async refreshPublic(number) {
     try {
-      this.publicShown = await showPublic(number, this.visitor.key);
+      this.publicShown = await showPublic(this.publicAddress ?? { number }, this.visitor.key);
     } catch {
       return;
     }
@@ -4507,7 +4587,7 @@ class Threads {
     const row = (label, value, wide = false) => el('div', { class: 't-drow', ...(wide ? { 'data-wide': '' } : {}) }, [el('span', { class: 't-dlabel' }, [label]), ...value]);
     const origin = originOf(thread);
     const issue = issueOf(thread.filedLink);
-    const address = shownAddress(location.origin, `/threads/${thread.number}`);
+    const address = shownAddress(location.origin, linkOf(thread));
     return el('aside', { class: 't-details', 'aria-label': 'About this thread' }, [
       row('Where it stands', [
         el('span', { class: 't-dval' }, [STATUS_NAMES[thread.status], ...(thread.status === 'dropped' && thread.dropReason ? [el('span', { class: 't-chip' }, [thread.dropReason])] : [])]),
@@ -4543,7 +4623,7 @@ class Threads {
   memberDetails(thread) {
     /** @param {string} label @param {(Node | string)[]} value @param {boolean} [wide] */
     const row = (label, value, wide = false) => el('div', { class: 't-drow', ...(wide ? { 'data-wide': '' } : {}) }, [el('span', { class: 't-dlabel' }, [label]), ...value]);
-    const address = shownAddress(location.origin, `/threads/${thread.number}`);
+    const address = shownAddress(location.origin, linkOf(thread));
     return el('aside', { class: 't-details', 'aria-label': 'About this thread' }, [
       row('Where it stands', [el('span', { class: 't-dval' }, [STATUS_NAMES[thread.status]])]),
       ...(thread.publicAt ? [row('Who can see it', [this.level(thread)])] : []),
@@ -5164,7 +5244,7 @@ class Threads {
    */
   publicSwitch(thread) {
     const on = thread.publicAt !== null;
-    const said = publicLines(location.origin, thread.number, thread.source, on);
+    const said = publicLines(location.origin, thread, on);
     return el('div', { class: 't-switch-row', ...(said.allowed ? {} : { 'aria-disabled': 'true' }) }, [
       el('b', { id: 'public-label' }, [icon('globe'), ' ', said.label]),
       el('button', {
@@ -5178,6 +5258,15 @@ class Threads {
         ...(said.allowed ? {} : { disabled: '' }),
       }),
       el('small', { id: 'public-note' }, [said.note]),
+      // The link sits under the switch once the Worker gave it; a first publish shows it when its answer arrives.
+      ...(said.link === null
+        ? []
+        : [
+            el('div', { class: 't-full-link' }, [
+              el('span', {}, [el('b', {}, ['Link']), ' ', el('span', { class: 't-linkline' }, [said.link])]),
+              el('button', { type: 'button', class: 't-btn', 'data-act': 'copy-link' }, ['Copy link']),
+            ]),
+          ]),
       ...(on && thread.main === 'page'
         ? [
             el('div', { class: 't-full-link' }, [
@@ -5597,7 +5686,7 @@ class Threads {
       ...(page.versions.length > 1 && !naming ? [el('button', { type: 'button', class: 't-btn', 'data-act': 'public-versions' }, ['Versions'])] : []),
       el('button', { type: 'button', class: naming ? 't-text-btn' : 't-btn', 'data-act': 'page-full' }, [this.pageFull ? (naming ? 'Thread' : 'Back to thread') : 'Full screen']),
     ]);
-    const frame = el('iframe', { class: 't-page-frame', sandbox: PAGE_SANDBOX, src: publicPageAddress(number, at), title: `Page, version ${at}`, loading: 'lazy' });
+    const frame = el('iframe', { class: 't-page-frame', sandbox: PAGE_SANDBOX, src: publicPageAddress(this.publicAddress ?? { number }, at), title: `Page, version ${at}`, loading: 'lazy' });
     return el('section', { class: 't-page', 'aria-label': 'Page', 'data-page-key': `${number}-${at}`, 'data-full': String(this.pageFull) }, [bar, frame]);
   }
 
@@ -5711,7 +5800,7 @@ class Threads {
     this.note = { ...note, busy: true, problem: '' };
     this.renderNote();
     try {
-      await sendTo(`/api/threads/${shown.thread.number}/notes`, { body, name: note.name.trim(), email: note.email.trim() });
+      await sendTo(`${publicThreadAddress(this.publicAddress ?? { number: shown.thread.number })}/notes`, { body, name: note.name.trim(), email: note.email.trim() });
     } catch (error) {
       const reason = error instanceof Error && 'reason' in error ? error.reason : 'failed';
       const problem =
@@ -6166,7 +6255,7 @@ class Threads {
       case 'copy-full-link':
         if (thread) {
           navigator.clipboard.writeText(`${location.origin}${fullLinkOf(thread)}`).then(
-            () => this.say(`Copied ${shownAddress(location.origin, fullLinkOf(thread))}`, null),
+            () => this.say(`Copied ${linkShown(location.origin, fullLinkOf(thread))}`, null),
             () => this.say("Couldn't copy the link.", null),
           );
         }
@@ -6196,8 +6285,8 @@ class Threads {
         break;
       case 'copy-link':
         if (thread) {
-          navigator.clipboard.writeText(`${location.origin}/threads/${thread.number}`).then(
-            () => this.say(`Copied ${shownAddress(location.origin, `/threads/${thread.number}`)}`, null),
+          navigator.clipboard.writeText(`${location.origin}${linkOf(thread)}`).then(
+            () => this.say(`Copied ${linkShown(location.origin, linkOf(thread))}`, null),
             () => this.say("Couldn't copy the link.", null),
           );
         }
@@ -6644,9 +6733,15 @@ function rememberSignedIn() {
   }
 }
 
-/** A thread's address that opens its page in full screen, for answering: its number, its title's words, `?full`. @param {Thread} thread */
+/** A thread's link that opens its page in full screen, for answering: its link (`linkOf`) with `?full`. @param {Thread} thread */
 function fullLinkOf(thread) {
-  return `${threadPath(thread)}?full`;
+  return `${linkOf(thread)}?full`;
+}
+
+/** Whether two public addresses name a thread the same way. @param {PublicAddress | null} a @param {PublicAddress} b */
+function sameAddress(a, b) {
+  if (a === null) return false;
+  return 'shareKey' in a ? 'shareKey' in b && a.shareKey === b.shareKey : 'number' in b && a.number === b.number;
 }
 
 /** Takes `?full` off the address once the page leaves full screen, so a reload or a copied address is the plain one. */

@@ -327,10 +327,10 @@ describe("answering an ask", () => {
   it("leaves the asks' budgets to asks: a public page's answer never spends them", async () => {
     const n = await thread();
     expect((await savePage(n, QUESTIONS)).status).toBe(201);
-    await answer(await call(`/threads/${n}`, { body: { action: "publish" } }));
+    const made = await answer<{ thread: { shareKey: string } }>(await call(`/threads/${n}`, { body: { action: "publish" } }));
     const headers = { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.7", Origin: THREADS };
     const body = { question: "fit", body: "In CI.", name: "Sam", token: "pass", key: KEY_A };
-    expect((await harness.fetch(`${THREADS}/api/threads/${n}/answers`, { method: "POST", headers, body: JSON.stringify(body) })).status).toBe(201);
+    expect((await harness.fetch(`${THREADS}/api/threads/${made.thread.shareKey}/answers`, { method: "POST", headers, body: JSON.stringify(body) })).status).toBe(201);
     expect(await spent()).toEqual({ notes: 0, answers: 1, askThreads: 0, askAnswers: 0 });
   });
 

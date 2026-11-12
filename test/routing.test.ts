@@ -71,6 +71,7 @@ describe("each host answers only its own addresses", () => {
     "/threads/api/journal",
     "/threads/",
     "/threads/42",
+    "/threads/0123456789abcdef0123456789abcdef",
     "/meetings",
     "/people",
     "/people/7",
@@ -79,6 +80,7 @@ describe("each host answers only its own addresses", () => {
     "/journal",
     "/journal/2026-11-06",
     "/api/threads/1",
+    "/api/threads/0123456789abcdef0123456789abcdef",
     "/api/asks/demo",
     "/api/access/keys",
   ])("the home page's host answers the threads' %s with the code's JSON 404", async (path) => {
@@ -181,6 +183,7 @@ describe("the site's own files", () => {
     "/threads/42",
     "/threads/42-who-owns-what",
     "/threads/999999999",
+    "/threads/0123456789abcdef0123456789abcdef",
     "/meetings",
     "/people",
     "/people/7",
@@ -241,7 +244,7 @@ describe("the site's own files", () => {
     expect(new URL(response.headers.get("location") ?? "", THREADS).pathname).toBe("/threads/");
   });
 
-  it.each(["/threads/042", "/threads/42/comments", "/threads/0", "/threads/nope", "/threads/people/07", "/threads/people/7/threads", "/threads/peoples", "/mex", "/people/07", "/people/7/threads", "/peoples", "/meetings/7", "/meetingsx", "/ask", "/ask/", "/askx", "/asksx", "/asks/7", "/ask/Upper", "/ask/-lead", "/ask/demo/7", "/journalx", "/journal/today", "/journal/2026-11-6", "/journal/2026-w44", "/journal/2026-11-06/edit", "/journal/storylines/", "/journal/storylines/The-Demo", "/journal/storylines/a/b"])("answer %s on the threads' host with the site's 404 page", async (path) => {
+  it.each(["/threads/042", "/threads/42/comments", "/threads/0123456789abcdef0123456789abcdef-title", "/threads/0123456789abcdef0123456789abcdef/x", "/threads/0123456789ABCDEF0123456789ABCDEF", "/threads/0", "/threads/nope", "/threads/people/07", "/threads/people/7/threads", "/threads/peoples", "/mex", "/people/07", "/people/7/threads", "/peoples", "/meetings/7", "/meetingsx", "/ask", "/ask/", "/askx", "/asksx", "/asks/7", "/ask/Upper", "/ask/-lead", "/ask/demo/7", "/journalx", "/journal/today", "/journal/2026-11-6", "/journal/2026-w44", "/journal/2026-11-06/edit", "/journal/storylines/", "/journal/storylines/The-Demo", "/journal/storylines/a/b"])("answer %s on the threads' host with the site's 404 page", async (path) => {
     const response = await harness.fetch(`${THREADS}${path}`, { redirect: "manual" });
     expect(response.status).toBe(404);
     expect(response.headers.get("content-type")).toContain("text/html");

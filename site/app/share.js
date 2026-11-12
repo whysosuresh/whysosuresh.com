@@ -3,9 +3,11 @@
 // passes before it is sent, the lines that tell him what an invited person will see and how many people have access,
 // and the invitation itself, a draft his own Gmail opens for him to send; nothing is sent from the site. The link in
 // it is the thread's own address with `?invite`, which takes a signed-out reader straight to Cloudflare's code page
-// and back. Below the people, one switch makes the thread public: anyone reads it at its address with no sign-in,
-// and only his own threads may be (`publicLines` says what the switch says, and why it is off for someone else's
-// words). Under it, a second switch lists a public thread on his home page, under What's happening and in its feed
+// and back. Below the people, one switch makes the thread public: anyone with its link reads it with no sign-in, the
+// link carrying the key the Worker gives it the first time and keeps for good, and only his own threads may be
+// (`publicLines` says what the switch says, the link under it, why it is off for someone else's words, and, for a
+// thread public before links had keys, that its number still opens it for anyone). The invitation keeps the number,
+// which opens the thread for the person invited whether or not it is public. Under it, a second switch lists a public thread on his home page, under What's happening and in its feed
 // (`feedLines`): public alone is readable by its link, never listed, so listing is its own act, and only a public thread
 // can be listed. A visitor's note on a public thread is answered from his own Gmail too (`noteReply`). Plain data and
 // pure functions, so a test can read them without a page.
@@ -121,19 +123,23 @@ export function levelOf(publicAt, people) {
 }
 
 /**
- * What the Public switch says: its label, the line under it for where it stands, and whether it can be turned on.
- * Only his own threads can be public; a site note's and a told thread's words are someone else's.
+ * What the Public switch says: its label, the line under it for where it stands, the link under it while it is on and
+ * the Worker has given its key (null until then), and whether it can be turned on. Only his own threads can be public;
+ * a site note's and a told thread's words are someone else's. A thread public before links had keys
+ * (`publicByNumber`) says its number still opens it for anyone.
  * @param {string} origin the threads' own origin
- * @param {number} number
- * @param {string} source `self`, `talk` or `told`
+ * @param {{ number: number, source: string, shareKey?: string | null, publicByNumber?: boolean }} thread
  * @param {boolean} on
- * @returns {{ label: string, note: string, allowed: boolean }}
+ * @returns {{ label: string, note: string, link: string | null, allowed: boolean }}
  */
-export function publicLines(origin, number, source, on) {
-  const label = `Public: anyone can read it at ${shownAddress(origin, `/threads/${number}`)}`;
+export function publicLines(origin, thread, on) {
+  const { number, source } = thread;
+  const key = thread.shareKey ?? null;
+  const label = 'Public: anyone with its link can read it';
   if (source !== 'self') {
     return {
       label,
+      link: null,
       allowed: false,
       note:
         source === 'talk'
@@ -141,13 +147,33 @@ export function publicLines(origin, number, source, on) {
           : "Something someone told you can't be public: the words are theirs. Start a thread of your own and quote them, with their OK.",
     };
   }
+  if (!on) {
+    return {
+      label,
+      link: null,
+      allowed: true,
+      note: key === null ? 'Off: only you and the people above read it.' : 'Off: only you and the people above read it. Turn it on again and its link works again, the same link.',
+    };
+  }
+  const byNumber = thread.publicByNumber
+    ? `It was public before links had keys, so its number, #${number}, still opens it for anyone. Turn Public off and on again to make the link the only way in.`
+    : `Its number, #${number}, opens it only for you and the people above.`;
   return {
     label,
+    link: key === null ? null : shownAddress(origin, `/threads/${key}`),
     allowed: true,
-    note: on
-      ? "Anyone who opens the link or tries the number reads the title, the summary, the text and the comments you write as Public, and with no sign-in can send you a note and answer its page's questions. What they write shows at once; you can drop it. Earlier comments, Only me notes, the people and the history stay yours. Search engines are told not to list it."
-      : 'Off: only you and the people above read it.',
+    note: `Anyone with the link reads the title, the summary, the text and the comments you write as Public, and with no sign-in can send you a note and answer its page's questions. What they write shows at once; you can drop it. Earlier comments, Only me notes, the people and the history stay yours. ${byNumber} Search engines are told not to list it.`,
   };
+}
+
+/**
+ * A link as a toast says it once copied: the address as shown, a key cut to its first and last four characters, so
+ * the line fits a phone ("hey.whysosuresh.com/threads/3f9a…c41e?full").
+ * @param {string} origin
+ * @param {string} path
+ */
+export function linkShown(origin, path) {
+  return shownAddress(origin, path).replace(/\/threads\/([0-9a-f]{4})[0-9a-f]{24}([0-9a-f]{4})(?=$|\?)/, '/threads/$1…$2');
 }
 
 /**
