@@ -17,8 +17,10 @@
 // them of one, and a visitor's note is never an invited person's own, even sent under their address. A visitor's words make the thread wait on him. The sync never writes for anyone. Nobody replies under
 // a public comment or a visitor's note, and invited people's answers, comments on words and replies never reach a
 // stranger, nor does a meeting or anyone in it. A public thread's link carries its title and preview tags, escaped,
-// with no ETag, its `og:url` the address asked (an old thread's number never leads to its key); a private, a missing
-// and a new public thread's number, and a wrong key, get the shell byte for byte.
+// with no ETag, its `og:url` the address asked (an old thread's number never leads to its key), its description the
+// text's first paragraph and never the living summary, and its picture large: the card his page drew, at its own
+// address, which carries no key, or the site's card before one; a private, a missing and a new public thread's
+// number, and a wrong key, get the shell byte for byte.
 
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -750,7 +752,7 @@ describe("a public thread's address", () => {
   });
 
   it("carries the thread's title and preview tags, escaped, with no ETag, never answered from a revalidation", async () => {
-    const n = await published({ title: `Quotes "<b>&</b>" and 'more'` });
+    const n = await published({ title: `Quotes "<b>&</b>" and 'more'`, body: "The plan, *in short*.\n\nMore after." });
     await answer(await call(`/threads/${n}/text`, { body: { field: "summary", text: "Decided: **ship** it, see [the plan](https://example.org) and #3." } }));
     const shell = await page("/threads/");
     const key = await at(n);
@@ -761,16 +763,25 @@ describe("a public thread's address", () => {
     const html = await response.text();
     expect(html).toContain(`<title>#${n} Quotes &quot;&lt;b&gt;&amp;&lt;/b&gt;&quot; and &#39;more&#39; · whysosuresh.com</title>`.replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
     expect(html).toContain(`<meta property="og:title" content="#${n} Quotes &quot;&lt;b&gt;&amp;&lt;/b&gt;&quot; and &#39;more&#39; · whysosuresh.com">`);
-    expect(html).toContain('<meta property="og:description" content="Decided: ship it, see the plan and #3.">');
+    // The living summary is a status he keeps for himself ("Waiting on: you"), never what a stranger's preview says.
+    expect(html).toContain('<meta property="og:description" content="The plan, in short.">');
+    expect(html).not.toContain("Decided");
     expect(html).toContain(`<meta property="og:url" content="${THREADS}/threads/${key}">`);
     expect(html).toContain('<meta property="og:type" content="article">');
-    expect(html).toContain('<meta name="twitter:card" content="summary">');
+    expect(html).toContain(`<meta property="og:image" content="${THREADS}/img/card.png">`);
+    expect(html).toContain('<meta property="og:image:type" content="image/png">');
+    expect(html).toContain('<meta property="og:image:width" content="1200">');
+    expect(html).toContain('<meta property="og:image:height" content="630">');
+    expect(html).toContain(`<meta property="og:image:alt" content="#${n} Quotes &quot;&lt;b&gt;&amp;&lt;/b&gt;&quot; and &#39;more&#39; · whysosuresh.com">`);
+    expect(html).toContain('<meta name="twitter:card" content="summary_large_image">');
+    expect(html).not.toContain('content="summary"');
     expect(html).toContain('<meta name="robots" content="noindex">');
     expect(html).not.toContain("<b>&</b>");
   });
 
-  it("describes a thread by its text's first paragraph only while the text is what it shows", async () => {
+  it("describes a thread by its text's first paragraph only while the text is what it shows, never by its summary", async () => {
     const n = await published({ body: "First *paragraph* here.\n\nSecond one." });
+    await answer(await call(`/threads/${n}/text`, { body: { field: "summary", text: "Waiting on: you, to make it public." } }));
     expect(await (await page(`/threads/${await at(n)}`)).text()).toContain('<meta property="og:description" content="First paragraph here.">');
     await savePage(n, "<!doctype html><p>A page</p>");
     const html = await (await page(`/threads/${await at(n)}`)).text();
@@ -803,6 +814,29 @@ describe("a public thread's address", () => {
     const n = await published({ title: "Key only" });
     const shell = await (await page("/threads/")).text();
     for (const path of [`/threads/${n}`, `/threads/${n}-key-only`, "/threads/0123456789abcdef0123456789abcdef"]) expect([path, await (await page(path)).text()]).toEqual([path, shell]);
+  });
+
+  it("shows the card his page drew once there is one, at its own address on the key and an old thread's number alike", async () => {
+    const n = await published({ title: "With a card" });
+    const key = await at(n);
+    await (await harness.db()).prepare("UPDATE threads SET public_by_number = 1 WHERE number = ?1").bind(n).run();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    const uploaded = await harness.fetch(`${THREADS}/threads/api/threads/${n}/card?stamp=${"e".repeat(64)}`, {
+      method: "POST",
+      headers: { "Cf-Access-Jwt-Assertion": token("owner"), "Content-Type": "image/png", Origin: THREADS },
+      body: png,
+    });
+    const card = (await answer<{ card: string }>(uploaded)).card;
+    for (const path of [`/threads/${key}`, `/threads/${n}`]) {
+      const html = await (await page(path)).text();
+      expect([path, html.includes(`<meta property="og:image" content="${THREADS}/api/cards/${card}">`)]).toEqual([path, true]);
+      expect(html).toContain('<meta name="twitter:card" content="summary_large_image">');
+      expect(html).not.toContain("/img/card.png");
+    }
+    // The card's address is its own random id: a number address never leads to the key through it.
+    expect(card).not.toContain(key);
+    const image = await harness.fetch(`${THREADS}/api/cards/${card}`);
+    expect([image.status, image.headers.get("Content-Type")]).toEqual([200, "image/png"]);
   });
 
   it("carries an old public thread's preview at both its key and its number, each at its own address", async () => {

@@ -583,6 +583,9 @@ describe("an ask's address", () => {
     expect(html).toContain(`<meta property="og:url" content="${THREADS}/ask/previewed">`);
     expect(html).not.toContain("lukewarm");
     expect(html).not.toContain(`#${n}`);
+    // An ask has no card: its preview stays the small one, with no picture.
+    expect(html).toContain('<meta name="twitter:card" content="summary">');
+    expect(html).not.toContain("og:image");
   });
 
   it("is the plain shell for a draft and a slug nobody has, and for Asks", async () => {

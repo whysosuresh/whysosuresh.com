@@ -27,6 +27,8 @@ const SERVED = [
   "_redirects",
   "app/asks.js",
   "app/byline.js",
+  "app/card-paint.js",
+  "app/card.js",
   "app/journal.js",
   "app/keys.js",
   "app/markdown.js",
@@ -41,6 +43,7 @@ const SERVED = [
   "updates.html",
   "img/apple-touch-icon.png",
   "img/avatar.webp",
+  "img/card.png",
   "img/icon-192.png",
   "img/share.jpg",
   "index.html",
@@ -527,6 +530,17 @@ describe.each(SHARED_PAGES)("%s, as a shared link", (page) => {
   });
 });
 
+describe("the card a public thread's preview shows before its own", () => {
+  it("is a 1200 x 630 PNG under 300 KB, served at the address the Worker names", () => {
+    const png = readFileSync(join(siteDir, "img/card.png"));
+    expect([...png.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    expect(png.subarray(12, 16).toString("latin1")).toBe("IHDR");
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([1200, 630]);
+    expect(png.byteLength).toBeLessThan(300 * 1024);
+    expect(readFileSync(join(root, "src/pages.ts"), "utf8")).toContain('export const SITE_CARD = "/img/card.png";');
+  });
+});
+
 describe("_headers", () => {
   const rules = parseHeaders(read("_headers"));
 
@@ -605,7 +619,7 @@ describe("the threads page", () => {
     expect(store.match(/fetch\(/g)).toHaveLength(2);
     expect(store).toContain("response = await fetch(path, { redirect: 'manual', credentials: 'omit'");
     expect([...store.matchAll(/readPublic\(`([^`]*)`/g)].map((m) => m[1])).toEqual(["/api/threads/${pathPart(address)}", "/api/asks/${encodeURIComponent(slug)}"]);
-    for (const script of ["app/threads.js", "app/keys.js", "app/markdown.js", "app/standing.js", "app/byline.js"]) expect([script, read(script).includes("fetch(")]).toEqual([script, false]);
+    for (const script of ["app/threads.js", "app/keys.js", "app/markdown.js", "app/standing.js", "app/byline.js", "app/card.js", "app/card-paint.js"]) expect([script, read(script).includes("fetch(")]).toEqual([script, false]);
   });
 
   it("holds no form and no inline script or style, which the CSP would refuse", async () => {

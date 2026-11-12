@@ -26,7 +26,9 @@
 // 0020, the avatars' photos: nobody has a photo or has been looked up yet, he has none, a person's photo is one that
 // is there, and a photo's object is kept once. For 0021, public links: every thread of his that is public gets its
 // own 32-character key and keeps its number open for strangers, while a private one, one taken back, a site note made
-// public by hand and an ask get neither, and no two threads share a key; the old public thread then opens by both.
+// public by hand and an ask get neither, and no two threads share a key; the old public thread then opens by both. For
+// 0022, preview cards: no thread has one yet, so every public thread's preview shows the site's card; a card names a
+// thread that is there, a thread has at most one, and a card's id and object are each kept once.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -667,5 +669,31 @@ describe("0021, public threads' links", () => {
     await expect(database.prepare("UPDATE threads SET share_key = ?1 WHERE id = 'private'").bind(after[0]?.share_key ?? "").run()).rejects.toThrow(/UNIQUE/);
     // The old public thread opens for a stranger by its key and by its number.
     for (const at of [after[0]?.share_key ?? "", "1"]) expect([at, (await harness.fetch(`${THREADS}/api/threads/${at}`)).status]).toEqual([at, 200]);
+  });
+});
+
+describe("0022, preview cards", () => {
+  it("starts with no card, and keeps one per thread that is there, its id and object once each", async () => {
+    harness = await startHarness({ through: "0021" });
+    const database = await harness.db();
+    await database
+      .prepare("INSERT INTO threads (id, number, created_at, source, body, status, public_at, share_key) VALUES ('t1', 1, '2026-11-01T00:00:00.000Z', 'self', 'x', 'act', '2026-11-02T00:00:00.000Z', ?1)")
+      .bind("c".repeat(32))
+      .run();
+    await harness.migrate();
+    expect(await database.prepare("SELECT COUNT(*) AS n FROM cards").first<{ n: number }>()).toEqual({ n: 0 });
+    // The public thread's preview shows the site's card until his page draws its own.
+    expect(await (await harness.fetch(`${THREADS}/threads/${"c".repeat(32)}`)).text()).toContain(`<meta property="og:image" content="${THREADS}/img/card.png">`);
+    const card = (thread: string, id: string, key: string): Promise<unknown> =>
+      database
+        .prepare("INSERT INTO cards (thread_id, id, object_key, bytes, stamp, created_at) VALUES (?1, ?2, ?3, 9, ?4, '2026-11-03T00:00:00.000Z')")
+        .bind(thread, id, key, "d".repeat(64))
+        .run();
+    await expect(card("none-such", "a", "cards/a.png")).rejects.toThrow(/FOREIGN KEY/);
+    await card("t1", "a", "cards/a.png");
+    await expect(card("t1", "b", "cards/b.png")).rejects.toThrow(/UNIQUE/);
+    await database.prepare("INSERT INTO threads (id, number, created_at, source, body, status) VALUES ('t2', 2, '2026-11-01T00:00:00.000Z', 'self', 'x', 'act')").run();
+    await expect(card("t2", "a", "cards/c.png")).rejects.toThrow(/UNIQUE/);
+    await expect(card("t2", "c", "cards/a.png")).rejects.toThrow(/UNIQUE/);
   });
 });

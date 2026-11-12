@@ -1,5 +1,6 @@
 // What the site takes as an image, in one place: the journal's photos (src/journal.ts), his own photo and the
-// Gravatars the hourly run copies (src/photos.ts) all agree on it. An image is a JPEG or a PNG by its own first bytes,
+// Gravatars the hourly run copies (src/photos.ts), and the preview cards his page draws (src/cards.ts, which then takes
+// a PNG alone) all agree on it. An image is a JPEG or a PNG by its own first bytes,
 // and only when that is the type it was declared as, because it is served as itself. An upload must declare its
 // length, at most the cap its caller gives (411 `length`, 413 `too-large`), and its type (415 `type`), each refused
 // before a byte is read; the bytes are counted again once read.
@@ -14,7 +15,7 @@ export const IMAGES = [
 
 export type Image = (typeof IMAGES)[number];
 
-/** A photo's id: the UUID it was given. */
+/** A photo's id, and a preview card's: the UUID it was given. */
 export const PHOTO_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** The media type a header declares, lowercased, without its parameters. */

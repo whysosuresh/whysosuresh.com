@@ -35,6 +35,8 @@
 //   GET  /threads/api/journal[/...], POST /threads/api/journal/...             owner and sync; never invited people (src/journal.ts)
 //   GET  /threads/api/now, POST /threads/api/now  {"text"}                    owner: the home page's Now line (src/home.ts)
 //   POST /threads/api/photo (a JPEG or PNG), DELETE /threads/api/photo       owner: his photo (src/photos.ts)
+//   GET  /threads/api/cards                                                   owner: every public thread's card stamp (src/cards.ts)
+//   POST /threads/api/threads/<n>/card?stamp=<hex>   a PNG                    owner: a public thread's preview card (src/cards.ts)
 //
 // An invited person reads only the threads they are in: every read takes the caller as its reader, and the
 // store's queries see no other thread, so one they aren't in answers 404 `no-thread`, exactly as a number never
@@ -121,6 +123,7 @@ import { servePage, withSkeleton } from "./page.ts";
 import { handleNow } from "./home.ts";
 import { handleJournal } from "./journal.ts";
 import { handlePeople, personView } from "./people.ts";
+import { addCard, listCards } from "./cards.ts";
 import { handlePhoto } from "./photos.ts";
 import { ownerPhotoId, personPhotoId } from "./photos-store.ts";
 import { SLUG_SHAPE } from "./asks.ts";
@@ -822,6 +825,7 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
   }
   if (url.pathname === "/threads/api/now") return handleNow(request, env, who);
   if (url.pathname === "/threads/api/photo") return handlePhoto(request, env, who);
+  if (url.pathname === "/threads/api/cards") return listCards(request, env, who);
   if (url.pathname === "/threads/api/search" || url.pathname === "/threads/api/sign-in" || url.pathname === "/threads/api/me") {
     if (request.method !== "GET") return json(405, { reason: "method" }, { Allow: "GET" });
     if (url.pathname === "/threads/api/me") return me(who, env);
@@ -852,7 +856,7 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
     const [, number = "", noteId = ""] = ruling;
     return NUMBER_SHAPE.test(number) ? judge(request, Number(number), noteId, env, who) : refuse(404, "no-thread");
   }
-  const route = /^\/threads\/api\/threads\/([^/]+)(?:\/(comments|text|pages|link|people|meeting|attendees|ask))?$/.exec(url.pathname);
+  const route = /^\/threads\/api\/threads\/([^/]+)(?:\/(comments|text|pages|link|people|meeting|attendees|ask|card))?$/.exec(url.pathname);
   if (route === null) return json(404, { reason: "not-found" });
   const [, given = "", part] = route;
   const readable = part === undefined || part === "people";
@@ -871,6 +875,8 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
     if (who.caller !== "owner") return refuse(403, "owner-only");
     return reading ? readPeople(number, env, who) : changePeople(request, number, env, who);
   }
+  // A card is drawn by his page alone; the sync and an invited person are refused in it before anything is read.
+  if (part === "card") return addCard(request, url, number, env, who);
   if (reading) return show(number, env, who);
   if (part === "comments") return addComment(request, number, env, who);
   if (who.caller === "member") return refuse(403, "owner-only");

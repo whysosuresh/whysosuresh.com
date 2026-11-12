@@ -33,7 +33,9 @@
 // time he makes it public and kept for good, never by its number, so counting numbers opens nothing: a stranger names a
 // thread by a `PublicAddress`, and `publicWhere` is the one condition that address opens. A number opens a public
 // thread only while `public_by_number` holds, which the migration set for the threads public before keys existed and
-// `unpublish` clears.
+// `unpublish` clears. A public thread's preview card (`cards`, migrations/0022_cards.sql), the picture his page draws
+// for its link, is read and kept here too, beside the preview (`cardsOf`, `findCard`, `setCard`), because each of its
+// queries holds `PUBLIC`: a card is served, listed and kept only while its thread is public.
 // A stranger sees only the comments written as Public that are shown. A visitor may send a note on a public thread
 // (`addNote`), and answer the questions of its page while the page is its main section (`addAnswer`,
 // migrations/0015_visitor_answers.sql): each is a comment for anyone, shown at once, and only he drops it, or shows
@@ -1364,17 +1366,85 @@ export interface PreviewRow {
   body: string;
   main: Main;
   public: number;
+  /** Its card's id, the address of the picture its preview shows, or null while his page hasn't drawn one. */
+  card: string | null;
 }
 
 /**
- * The threads page's one read (src/pages.ts): a thread's number, title, summary, main text and whether it is public
- * to the address the page was asked by, asked of every address alike with one indexed query (the number's, or the
- * key's unique index), so a private, a missing and a public thread cost the same. Only a public thread's answer is
- * ever used.
+ * The threads page's one read (src/pages.ts): a thread's number, title, summary, main text, its card and whether it
+ * is public to the address the page was asked by, asked of every address alike with one indexed query (the number's,
+ * or the key's unique index, and the card's by its thread), so a private, a missing and a public thread cost the same.
+ * Only a public thread's answer is ever used.
  */
 export async function publicPreview(db: D1Database, address: PublicAddress): Promise<PreviewRow | null> {
   const p = new Params();
-  return statement(db, `SELECT number, title, summary, body, main, (${openTo(address)}) AS public FROM threads WHERE ${addressed(address, p)}`, p).first<PreviewRow>();
+  return statement(
+    db,
+    `SELECT number, title, summary, body, main, (SELECT cards.id FROM cards WHERE cards.thread_id = threads.id) AS card, (${openTo(address)}) AS public
+     FROM threads WHERE ${addressed(address, p)}`,
+    p,
+  ).first<PreviewRow>();
+}
+
+/** A public thread as his page draws its card: its number and title, and the stamp of the card it has, or null. */
+export interface CardDue {
+  number: number;
+  title: string | null;
+  stamp: string | null;
+}
+
+/** Every public thread with the stamp of its card, oldest number first: what his page checks its cards against. */
+export async function cardsOf(db: D1Database): Promise<CardDue[]> {
+  return (
+    await db
+      .prepare(`SELECT threads.number, threads.title, cards.stamp FROM threads LEFT JOIN cards ON cards.thread_id = threads.id WHERE ${PUBLIC} ORDER BY threads.number`)
+      .all<CardDue>()
+  ).results;
+}
+
+/** A card as it is kept: its object in the pages bucket and its size. */
+export interface CardRow {
+  id: string;
+  object_key: string;
+  bytes: number;
+}
+
+/** A card by its id while its thread is public, else null: a thread taken back keeps its card, unserved. */
+export async function findCard(db: D1Database, id: string): Promise<CardRow | null> {
+  return db
+    .prepare(`SELECT cards.id, cards.object_key, cards.bytes FROM cards JOIN threads ON threads.id = cards.thread_id WHERE cards.id = ?1 AND ${PUBLIC}`)
+    .bind(id)
+    .first<CardRow>();
+}
+
+/** What keeping a card did: whether it is the thread's card now, and the object of the card it replaced. */
+export interface CardKept {
+  readonly kept: boolean;
+  readonly replaced: string | null;
+}
+
+/**
+ * Makes `card` the card of the thread with this number, while that thread is public, in one batch, which D1 runs as
+ * one transaction: the object of the card it replaces is read first, then the row is written by thread only under
+ * `PUBLIC`. So the object answered as replaced is exactly the one the new row took the place of, and two uploads for
+ * one thread never answer the same one; when the row isn't written (the thread isn't public now) nothing is replaced.
+ */
+export async function setCard(db: D1Database, number: number, card: CardRow & { stamp: string }): Promise<CardKept> {
+  const [before, written] = await db.batch([
+    db.prepare("SELECT cards.object_key FROM cards JOIN threads ON threads.id = cards.thread_id WHERE threads.number = ?1").bind(number),
+    db
+      .prepare(
+        `INSERT INTO cards (thread_id, id, object_key, bytes, stamp, created_at)
+         SELECT threads.id, ?2, ?3, ?4, ?5, ?6 FROM threads WHERE threads.number = ?1 AND ${PUBLIC}
+         ON CONFLICT (thread_id) DO UPDATE SET id = excluded.id, object_key = excluded.object_key, bytes = excluded.bytes,
+           stamp = excluded.stamp, created_at = excluded.created_at
+         RETURNING id`,
+      )
+      .bind(number, card.id, card.object_key, card.bytes, card.stamp, new Date().toISOString()),
+  ]);
+  const kept = (written?.results.length ?? 0) > 0;
+  const replaced = (before?.results[0] as { object_key: string } | undefined)?.object_key ?? null;
+  return { kept, replaced: kept ? replaced : null };
 }
 
 /** A thread on the home page, as the home page and its feed show it. */

@@ -35,6 +35,8 @@ export const MAX_JOURNAL_BYTES = 400 * 1024;
 export const MAX_ANSWER = 4000;
 /** The largest journal photo: the sync shrinks each to about 250 KB, so 4 MiB is any photo it would ever send. */
 export const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
+/** The largest preview card: a 1200 x 630 PNG of flat colour and type is 20 to 120 KB, so 1 MiB is any card his page draws. */
+export const MAX_CARD_BYTES = 1024 * 1024;
 const MAX_NAME = 80;
 const MAX_LINK = 200;
 /** The longest drop reason, in UTF-16 code units of the trimmed text. */
