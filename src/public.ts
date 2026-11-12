@@ -14,7 +14,9 @@
 // public thread says is a few of the fields the private call gives, under the same names, so the threads page draws
 // one shape: never its status, source, sender, origin, people, history, ids or last activity, which a visitor's
 // words move; and its comments are those written as Public that are shown, each by author and name only, with the
-// question an answer answers and whether it is the reader's own.
+// question an answer answers and whether it is the reader's own. His photo is said once (`ownerPhoto`), for his own
+// comments, and an invited person's comment carries theirs (`photo`); a visitor's never does, because anyone may
+// type any address. A photo itself is served at /api/photos/<id> (src/photos.ts).
 //
 // A note runs every visitor note's checks (src/note.ts), the bot check before the thread is read, and counts against
 // the same daily limits as the note flow's. It is kept as a comment for anyone, shown at once, with the name and
@@ -31,6 +33,7 @@ import type { Bindings } from "./bindings.ts";
 import { json, type JsonValue } from "./json.ts";
 import { checkBot, readAnswer, readFields, readNote, takeLimit, VISITOR_KEY_SHAPE } from "./note.ts";
 import { servePage } from "./page.ts";
+import { ownerPhotoId } from "./photos-store.ts";
 import { addAnswer, addNote, findPublic, findPublicPage, historyPublic, pagesOf, type CommentRow, type ThreadRow } from "./store.ts";
 
 /** The most comments one answer holds; `truncated` says there are more. */
@@ -85,18 +88,24 @@ export async function readerKey(request: Request): Promise<string | null> {
 
 /**
  * A public comment: who wrote it, by name ("Suresh", the invited person's, or the visitor's typed name), its words,
- * the question it answers (null for a note or a comment), and whether it is the reader's own answer.
+ * the question it answers (null for a note or a comment), whether it is the reader's own answer, and an invited
+ * person's photo.
  */
 function publicComment(row: CommentRow, key: string | null): { readonly [key: string]: JsonValue } {
   const name = row.author === "owner" ? OWNER_NAME : (row.person_name ?? row.sender_name);
-  return { author: row.author, name, body: row.body, createdAt: row.created_at, question: row.question, mine: key !== null && row.visitor_key === key };
+  const said = { author: row.author, name, body: row.body, createdAt: row.created_at, question: row.question, mine: key !== null && row.visitor_key === key };
+  return row.author === "member" ? { ...said, photo: row.person_photo } : said;
 }
 
 async function read(request: Request, number: number, env: Bindings): Promise<Response> {
   const row = await findPublic(env.DB, number);
   if (row === null) return noThread();
   const key = await readerKey(request);
-  const [comments, pages] = await Promise.all([historyPublic(env.DB, row.id, HISTORY + 1, key), row.main === "page" ? pagesOf(env.DB, row.id) : Promise.resolve([])]);
+  const [comments, pages, ownerPhoto] = await Promise.all([
+    historyPublic(env.DB, row.id, HISTORY + 1, key),
+    row.main === "page" ? pagesOf(env.DB, row.id) : Promise.resolve([]),
+    ownerPhotoId(env.DB),
+  ]);
   const newest = pages[pages.length - 1];
   return answer(200, {
     thread: publicThread(row),
@@ -107,6 +116,7 @@ async function read(request: Request, number: number, env: Bindings): Promise<Re
         : { version: newest.version, savedAt: newest.created_at, versions: pages.map((page) => ({ version: page.version, savedAt: page.created_at })) },
     comments: comments.slice(0, HISTORY).map((comment) => publicComment(comment, key)),
     truncated: comments.length > HISTORY,
+    ownerPhoto,
   });
 }
 

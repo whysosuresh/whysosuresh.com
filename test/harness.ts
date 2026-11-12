@@ -1,4 +1,4 @@
-// The Worker in Cloudflare's own runtime, for the Worker tests (test/talk.test.ts, test/threads-door.test.ts,
+// The Worker in Cloudflare's own runtime, for the Worker tests (test/talk.test.ts, test/photos.test.ts, test/threads-door.test.ts,
 // test/threads.test.ts, test/members.test.ts, test/evaluate.test.ts, test/routing.test.ts, test/migrations.test.ts)
 // and the signed-in local site (test/dev-signed-in.ts): Miniflare (pinned to the version the
 // pinned wrangler itself runs, so the runtime and compatibility date are production's) runs the exact bundle

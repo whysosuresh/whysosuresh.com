@@ -109,7 +109,7 @@ describe("inviting", () => {
   it("keeps the person once, by their address lowercased, with an event naming them and never their address", async () => {
     const n = await thread();
     const first = await invite(n, "Meera@Example.com", "  Meera  ");
-    expect(first.people).toEqual([{ id: expect.any(String), number: 1, name: "Meera", email: MEERA, addedAt: expect.any(String) }]);
+    expect(first.people).toEqual([{ id: expect.any(String), number: 1, name: "Meera", email: MEERA, addedAt: expect.any(String), photo: null }]);
     expect(first.invitedCount).toBe(1);
     const shown = await answer<Shown>(await call(`/threads/${n}`));
     const invited = shown.events.filter((event) => event.type === "invited");
@@ -193,9 +193,9 @@ describe("who gets in", () => {
 
   it("admits an invited person as themselves", async () => {
     await invite(await thread(), MEERA);
-    expect(await answer(await call("/me", { as: { email: "MEERA@example.com" } }))).toEqual({ caller: "member", email: MEERA });
-    expect(await answer(await call("/me"))).toEqual({ caller: "owner", email: OWNER });
-    expect(await answer(await call("/me", { as: "sync" }))).toEqual({ caller: "sync", email: null });
+    expect(await answer(await call("/me", { as: { email: "MEERA@example.com" } }))).toEqual({ caller: "member", email: MEERA, ownerPhoto: null, photo: null });
+    expect(await answer(await call("/me"))).toEqual({ caller: "owner", email: OWNER, ownerPhoto: null });
+    expect(await answer(await call("/me", { as: "sync" }))).toEqual({ caller: "sync", email: null, ownerPhoto: null });
   });
 
   it("refuses a person removed from their last thread on their next call, and keeps one still in another", async () => {
@@ -354,7 +354,7 @@ describe("what an invited person sees", () => {
     const n = await shared();
     const seen = await answer<Shown>(await call(`/threads/${n}`, { as: { email: MEERA } }));
     expect(seen.comments.map((comment) => comment.body)).toEqual(["For everyone."]);
-    expect(seen.people).toEqual([{ name: "Suresh", owner: true }, { name: "Meera" }, { name: "Dev" }]);
+    expect(seen.people).toEqual([{ name: "Suresh", owner: true }, { name: "Meera", photo: null }, { name: "Dev", photo: null }]);
     const his = await answer<Shown>(await call(`/threads/${n}`));
     expect(his.comments.map((comment) => [comment.author, comment.audience, comment.body])).toEqual([
       ["owner", "thread", "For everyone."],
@@ -477,7 +477,7 @@ describe("a meeting, as an invited person sees it", () => {
 
   it("is its when, length and where, and its people by name only, on their thread and their list", async () => {
     const { n } = await stage();
-    const meeting = { when: "2026-11-09T09:30:00.000Z", minutes: 45, where: "Meet", attendees: [{ name: "Dev" }, { name: "Leela" }] };
+    const meeting = { when: "2026-11-09T09:30:00.000Z", minutes: 45, where: "Meet", attendees: [{ name: "Dev", photo: null }, { name: "Leela", photo: null }] };
     expect((await answer<Shown>(await call(`/threads/${n}`, { as: { email: MEERA } }))).thread.meeting).toEqual(meeting);
     const listed = await answer<{ threads: Record<string, unknown>[] }>(await call("/threads", { as: { email: MEERA } }));
     expect(listed.threads.map((row) => row.meeting)).toEqual([meeting]);
@@ -504,7 +504,7 @@ describe("a meeting, as an invited person sees it", () => {
     // A namesake with no address is someone else, never "you".
     await answer(await call(`/threads/${n}/attendees`, { body: { add: { name: "Meera" } } }));
     const seen = await answer<Shown>(await call(`/threads/${n}`, { as: { email: MEERA } }));
-    expect((seen.thread.meeting as { attendees: unknown[] }).attendees).toEqual([{ name: "Dev" }, { name: "Leela" }, { name: "Meera", you: true }, { name: "Meera" }]);
+    expect((seen.thread.meeting as { attendees: unknown[] }).attendees).toEqual([{ name: "Dev", photo: null }, { name: "Leela", photo: null }, { name: "Meera", photo: null, you: true }, { name: "Meera", photo: null }]);
     const listed = JSON.stringify(await answer(await call("/threads", { as: { email: MEERA } })));
     expect(listed).toContain('"you":true');
     expect(JSON.stringify(seen)).not.toMatch(/meera@|dev@/);

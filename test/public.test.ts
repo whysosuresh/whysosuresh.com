@@ -287,6 +287,7 @@ describe("a public thread, as anyone reads it", () => {
       page: null,
       comments: [],
       truncated: false,
+      ownerPhoto: null,
     });
     const text = JSON.stringify(read);
     for (const word of ["example.com", "status", "ref", "people", "events", "activityAt", "\"id\"", "Meera"]) expect(text).not.toContain(word);
@@ -318,7 +319,7 @@ describe("a public thread, as anyone reads it", () => {
     const general = { createdAt: expect.any(String), question: null, mine: false };
     expect(read.comments).toEqual([
       { author: "owner", name: "Suresh", body: "For anyone.", ...general },
-      { author: "member", name: "Meera", body: "Agreed, publicly.", ...general },
+      { author: "member", name: "Meera", body: "Agreed, publicly.", ...general, photo: null },
       { author: "visitor", name: "Tomás", body: "Loved this. **not bold**", ...general },
     ]);
     expect(JSON.stringify(read)).not.toContain("tomas@example.com");

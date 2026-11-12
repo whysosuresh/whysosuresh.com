@@ -42,6 +42,11 @@
 // His home page shows the threads he posts there (`feedAt` on every thread, set by the `post` move and cleared by
 // `unpost` or `unpublish`) under his Now line, one line he sets from Today: `readNow` and `saveNow` (/threads/api/now,
 // src/home.ts), his alone; an empty line takes it off the home page.
+//
+// Avatars show photos (src/photos.ts): his own, which `me` and a public thread's read name (`ownerPhoto`) and he sets
+// or removes with `setPhoto` and `removePhoto` (/threads/api/photo, his alone), and a person's Gravatar, which the
+// site copied once they were invited (`photo` on a person, an invited person's comment and a meeting's people). A
+// photo loads from the site itself (`photoAddress`, /api/photos/<id>), never from Gravatar.
 
 /**
  * @typedef {import('./standing.js').List} List
@@ -69,7 +74,7 @@
  *   id: string, author: 'owner' | 'sync' | 'member' | 'visitor' | string, name: string | null, audience: Audience | string,
  *   state: 'shown' | 'dropped' | string, body: string, createdAt: string, senderEmail?: string | null,
  *   personNumber?: number, parent?: string | null, question?: string | null, quote?: Quote | null, mine?: boolean,
- *   visitor?: string
+ *   visitor?: string, photo?: string | null
  * }} Comment
  * @typedef {{ text: string, prefix: string, suffix: string, version: number }} Quote
  * @typedef {{ parent: string } | { question: string } | { quote: string, prefix: string, suffix: string, version: number }} Place
@@ -78,14 +83,14 @@
  *   body: string | null, link: { url: string, title: string | null } | null, createdAt: string
  * }} PublicThread
  * @typedef {{ version: number, savedAt: string, versions: { version: number, savedAt: string }[] }} PublicPage
- * @typedef {{ author: 'owner' | 'member' | 'visitor' | string, name: string | null, body: string, createdAt: string, question?: string | null, mine?: boolean }} PublicComment
- * @typedef {{ thread: PublicThread, page: PublicPage | null, comments: PublicComment[], truncated: boolean }} PublicShown
+ * @typedef {{ author: 'owner' | 'member' | 'visitor' | string, name: string | null, body: string, createdAt: string, question?: string | null, mine?: boolean, photo?: string | null }} PublicComment
+ * @typedef {{ thread: PublicThread, page: PublicPage | null, comments: PublicComment[], truncated: boolean, ownerPhoto?: string | null }} PublicShown
  * @typedef {'show' | 'drop'} Judgement
- * @typedef {{ id?: string, number?: number, name: string | null, email?: string, addedAt?: string, owner?: boolean }} Person
+ * @typedef {{ id?: string, number?: number, name: string | null, email?: string, addedAt?: string, owner?: boolean, photo?: string | null }} Person
  * @typedef {{ sent: number, told: number, invited: number, removed: number, commented: number, noted: number, met?: number }} Counts
  * @typedef {{
  *   number: number, name: string | null, email: string | null, createdAt: string, lastContact: string,
- *   invited: boolean, dropped: boolean, counts: Counts, note?: string | null
+ *   invited: boolean, dropped: boolean, counts: Counts, note?: string | null, photo?: string | null
  * }} Someone
  * @typedef {Thread & { roles: string[] }} TheirThread
  * @typedef {{
@@ -96,7 +101,7 @@
  * @typedef {{ name: string } | { email: string } | { note: string }} PersonChange
  * @typedef {{ threads: Thread[], people: Someone[] }} Found
  * @typedef {{ people: Person[], invitedCount: number }} People
- * @typedef {{ caller: 'owner' | 'sync' | 'member', email: string | null }} Me
+ * @typedef {{ caller: 'owner' | 'sync' | 'member', email: string | null, ownerPhoto?: string | null, photo?: string | null }} Me
  * @typedef {{ id: number, at: string, actor: 'owner' | 'sync' | 'visitor' | 'import' | string, type: string, data: Record<string, unknown> }} Event
  * @typedef {{ thread: Thread, page: Page | null, people: Person[], comments: Comment[], events: Event[], truncated: boolean, answeredBy?: Answerer[] }} Shown
  * @typedef {{ threads: Thread[], counts: Record<List, number>, next: number | null }} Listing
@@ -525,4 +530,20 @@ export async function readNow() {
 /** Sets the Now line; an empty one takes it off the home page. @param {string} text @returns {Promise<NowLine | null>} */
 export async function saveNow(text) {
   return /** @type {{ now: NowLine | null }} */ (await post('/now', { text })).now;
+}
+
+/** Makes an image his photo, sent as its own bytes; answers its id. @param {Blob} file @returns {Promise<string>} */
+export async function setPhoto(file) {
+  return /** @type {{ photo: string }} */ (await call('/photo', { method: 'POST', headers: { 'Content-Type': file.type }, body: file })).photo;
+}
+
+/** Takes his photo down, so his initial shows again. @returns {Promise<null>} */
+export async function removePhoto() {
+  await call('/photo', { method: 'DELETE' });
+  return null;
+}
+
+/** Where a photo loads from: the site itself, with no sign-in, because a public thread shows his. @param {string} id */
+export function photoAddress(id) {
+  return `/api/photos/${encodeURIComponent(id)}`;
 }

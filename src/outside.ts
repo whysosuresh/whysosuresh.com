@@ -63,14 +63,14 @@ const JPEG = [0xff, 0xd8, 0xff];
 
 /** What a log line may name: a source, and why it failed. Nothing else reaches a log line. */
 type LogSource = "youtube" | "pictures" | "bucket" | Repo;
-type Reason = number | "timeout" | "network" | "too-large" | "unparseable" | "no-valid-entry" | "not-jpeg" | "error";
+export type Reason = number | "timeout" | "network" | "too-large" | "unparseable" | "no-valid-entry" | "not-jpeg" | "error";
 
 function log(source: LogSource, counts: { readonly [name: string]: number }, failed?: Reason): void {
   console.log(JSON.stringify({ outside: source, ...counts, ...(failed === undefined ? {} : { failed }) }));
 }
 
-/** A source that failed, and why. */
-class SourceFailure extends Error {
+/** A source that failed, and why; the Gravatar sweep (src/photos.ts) fails the same way. */
+export class SourceFailure extends Error {
   readonly reason: Reason;
   constructor(reason: Reason) {
     super(String(reason));
@@ -78,8 +78,8 @@ class SourceFailure extends Error {
   }
 }
 
-/** Fetches one outside address with the run's timeout, its failures said as a reason. */
-async function fetchOutside(url: string, headers: Record<string, string> = {}): Promise<Response> {
+/** Fetches one outside address with the run's timeout, never following a redirect, its failures said as a reason. */
+export async function fetchOutside(url: string, headers: Record<string, string> = {}): Promise<Response> {
   try {
     return await fetch(url, { headers: { "User-Agent": USER_AGENT, ...headers }, signal: AbortSignal.timeout(TIMEOUT_MS), redirect: "manual" });
   } catch (error) {

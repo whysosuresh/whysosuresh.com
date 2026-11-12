@@ -115,7 +115,7 @@ export const isTab = isList;
 // order: SQLite doesn't order an aggregate, so the door sorts them, and it never emits an address; it reads one only
 // to tell an invited reader which attendee is them. A response thread reads its ask's number, slug and title the same way.
 export const COLUMNS =
-  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at, feed_at, person_id, (SELECT people.number FROM people WHERE people.id = threads.person_id) AS sender_number, meeting_when, meeting_minutes, meeting_where, (SELECT json_group_array(json_object('number', people.number, 'name', people.name, 'email', people.email)) FROM attendees JOIN people ON people.id = attendees.person_id WHERE attendees.thread_id = threads.id) AS meeting_people, ask_slug, ask_state, ask_thread_id, (SELECT asked.number FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_number, (SELECT asked.ask_slug FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_slug, (SELECT asked.title FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_title";
+  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at, feed_at, person_id, (SELECT people.number FROM people WHERE people.id = threads.person_id) AS sender_number, meeting_when, meeting_minutes, meeting_where, (SELECT json_group_array(json_object('number', people.number, 'name', people.name, 'email', people.email, 'photo', people.photo_id)) FROM attendees JOIN people ON people.id = attendees.person_id WHERE attendees.thread_id = threads.id) AS meeting_people, ask_slug, ask_state, ask_thread_id, (SELECT asked.number FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_number, (SELECT asked.ask_slug FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_slug, (SELECT asked.title FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_title";
 
 export interface ThreadRow {
   id: string;
@@ -151,7 +151,7 @@ export interface ThreadRow {
   meeting_when: string | null;
   meeting_minutes: number | null;
   meeting_where: string | null;
-  /** Its meeting's people, as a JSON array of `{number, name, email}` in no promised order; the address is never shown. */
+  /** Its meeting's people, as a JSON array of `{number, name, email, photo}` in no promised order; the address is never shown. */
   meeting_people: string;
   /** His own thread as an ask: its slug and state (`AskState`); null on every other thread. */
   ask_slug: string | null;
@@ -203,6 +203,8 @@ export interface CommentRow {
   person_id: string | null;
   person_name: string | null;
   person_number: number | null;
+  /** The photo of an invited person's comment only (`member`); null for every other, a visitor's under their address included. */
+  person_photo: string | null;
   /**
    * A visitor's comment only: the name and email they typed, each null when not given. An ask answer carries its
    * thread's name and no email; its person is the thread's.
@@ -245,6 +247,8 @@ export interface PersonRow {
   email: string;
   name: string | null;
   added_at: string;
+  /** Their photo (src/photos.ts), null while they have none. */
+  photo_id: string | null;
 }
 
 export interface EventRow {
@@ -526,7 +530,7 @@ export async function listShared(db: D1Database, email: string, limit: number): 
  * which the door reads only to tell a reader which comments are their own.
  */
 const COMMENT_COLUMNS =
-  "comments.id, comments.thread_id, comments.author, comments.body, comments.created_at, comments.audience, comments.state, comments.person_id, CASE WHEN comments.author = 'member' THEN people.name END AS person_name, people.number AS person_number, comments.sender_name, comments.sender_email, comments.parent_id, comments.question, comments.quote, comments.quote_prefix, comments.quote_suffix, comments.page_version, people.email AS person_email, comments.visitor_key";
+  "comments.id, comments.thread_id, comments.author, comments.body, comments.created_at, comments.audience, comments.state, comments.person_id, CASE WHEN comments.author = 'member' THEN people.name END AS person_name, people.number AS person_number, CASE WHEN comments.author = 'member' THEN people.photo_id END AS person_photo, comments.sender_name, comments.sender_email, comments.parent_id, comments.question, comments.quote, comments.quote_prefix, comments.quote_suffix, comments.page_version, people.email AS person_email, comments.visitor_key";
 
 /**
  * Events an invited person never sees: the owner's mail opening, the copy from the old inbox, a visitor's note
@@ -990,7 +994,7 @@ export async function peopleOf(db: D1Database, threadId: string): Promise<Person
   return (
     await db
       .prepare(
-        `SELECT people.id, people.number, people.email, people.name, members.added_at FROM members JOIN people ON people.id = members.person_id
+        `SELECT people.id, people.number, people.email, people.name, members.added_at, people.photo_id FROM members JOIN people ON people.id = members.person_id
          WHERE members.thread_id = ?1 AND members.removed_at IS NULL ORDER BY members.added_at, people.id`,
       )
       .bind(threadId)
@@ -1509,6 +1513,8 @@ export interface PeopleRow {
   name: string | null;
   note: string | null;
   created_at: string;
+  /** Their Gravatar, which the hourly run copies once they were invited (src/photos.ts); null while they have none. */
+  photo_id: string | null;
   /**
    * Site notes they sent, things they told him, threads shared with them now and taken back, their comments and
    * notes, and the meetings they are in.
@@ -1536,7 +1542,7 @@ export interface PeopleRow {
  * stamps: a day counts from its start in UTC, a few hours early or late in another zone, close enough for when they
  * were last in touch.
  */
-const PEOPLE_COLUMNS = `people.id, people.number, people.email, people.name, people.note, people.created_at,
+const PEOPLE_COLUMNS = `people.id, people.number, people.email, people.name, people.note, people.created_at, people.photo_id,
   (SELECT COUNT(*) FROM threads WHERE threads.person_id = people.id AND threads.source = 'talk') AS sent,
   (SELECT COUNT(*) FROM threads WHERE threads.person_id = people.id AND threads.source = 'told') AS told,
   (SELECT COUNT(*) FROM members WHERE members.person_id = people.id AND members.removed_at IS NULL) AS invited,

@@ -513,6 +513,10 @@ a.topic { text-decoration: none; }
 .t-nav-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t-nav-count { margin-left: auto; font-size: 11.5px; font-variant-numeric: tabular-nums; color: var(--faint); }
 .t-side-foot { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 8px; font-size: 12px; }
+/* Who is signed in: his opens his photo sheet, a person he invited's only names them. */
+.t-side-me { display: flex; align-items: center; gap: 8px; min-width: 0; margin: -4px; padding: 4px; border: 0; border-radius: 8px; background: none; color: var(--ink); font: inherit; text-align: left; }
+button.t-side-me:hover { background: var(--hover); }
+.t-side-who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t-side-who small { display: block; color: var(--muted); font-size: 11px; }
 .t-icon-button { margin-left: auto; display: inline-grid; place-items: center; padding: 4px; border: 0; border-radius: 6px; background: none; color: var(--muted); }
 .t-icon-button:hover { color: var(--ink); background: var(--hover); }
@@ -525,7 +529,10 @@ a.topic { text-decoration: none; }
   background: var(--accent-soft); color: var(--ink); font-size: 11px; font-weight: 700; border: 1px solid var(--line);
 }
 .t-av-me { background: var(--ink); color: var(--accent-ink); border-color: var(--ink); }
-.t-av-agent { background: var(--surface); border: 1.5px dashed var(--muted); }
+/* A photo fills the same circle, cropped to it, at every size the initial takes. */
+.t-av-photo { padding: 0; object-fit: cover; background: var(--accent-soft); }
+/* "via Claude": quiet words beside his name, where the sync wrote for him; never a chip, which carries meaning. */
+.t-via { color: var(--faint); font-size: 11.5px; font-weight: 500; white-space: nowrap; }
 
 /* Shared pieces. */
 .t-wrap { max-width: 820px; margin: 0 auto; padding: 22px 24px 48px; display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 18px; }
@@ -761,6 +768,12 @@ textarea.t-field { resize: vertical; line-height: 1.5; }
 .t-pick:hover, .t-pick:focus-visible { border-color: var(--muted); }
 .t-pick[aria-current="true"] { border-color: var(--ink); }
 .t-pick kbd { margin-left: auto; }
+.t-pick-photo .t-av { width: 18px; height: 18px; font-size: 9px; }
+/* His photo sheet: the photo, or his initial, large beside what it is for; the file input is driven by Choose. */
+.t-photo-preview { display: flex; align-items: center; gap: 14px; }
+.t-photo-preview p { margin: 0; color: var(--muted); font-size: 13px; }
+.t-av-xl { width: 64px; height: 64px; font-size: 24px; }
+.t-photo-file { display: none; }
 .t-keys { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 20px; }
 .t-keys h3 { margin: 0 0 4px; font-size: 10.5px; color: var(--faint); letter-spacing: 0.08em; text-transform: uppercase; }
 .t-key-row { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 3px 0; font-size: 12.5px; }

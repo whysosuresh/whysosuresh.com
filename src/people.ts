@@ -11,7 +11,8 @@
 // from his own page: an invited person is refused 403 `owner-only` on every call, and the sync on a change, before
 // anything is read, so the refusal says nothing about a number. A number nobody has answers 404 `no-person`.
 //
-// Everyone is answered whoever was last in touch first, each with how he knows them (the counts) and whether
+// Everyone is answered whoever was last in touch first, each with their photo (`photo`, a Gravatar the hourly run
+// copied once they were invited, src/photos.ts), how he knows them (the counts) and whether
 // anything of theirs is live (`dropped` when it isn't: only ever in threads he dropped). A person's call adds his
 // own notes on them, every thread they are in with how (`roles`: `sent` a site note, `told` him, `invited`, their
 // invitation `removed`, `wrote` a comment or note there, `met` in its meeting), shaped as the threads' calls shape a
@@ -47,6 +48,7 @@ export function personView(row: PeopleRow): { readonly [key: string]: JsonValue 
     number: row.number,
     name: row.name,
     email: row.email,
+    photo: row.photo_id,
     createdAt: row.created_at,
     lastContact: row.last_contact,
     invited: row.invited > 0,

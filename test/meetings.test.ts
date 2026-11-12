@@ -193,7 +193,7 @@ describe("a meeting's when", () => {
     const n = await thread({ title: "Plan the demo" });
     await meet(n, { when: "2026-11-09" });
     await attendees(n, { add: { person: asha } });
-    const expected = { when: "2026-11-09", minutes: null, where: null, attendees: [{ number: asha, name: "Asha" }] };
+    const expected = { when: "2026-11-09", minutes: null, where: null, attendees: [{ number: asha, name: "Asha", photo: null }] };
     const tab = await answer<{ threads: Thread[] }>(await call("/threads?tab=act"));
     expect(tab.threads.find((row) => row.number === n)?.meeting).toEqual(expected);
     expect(tab.threads.filter((row) => row.number !== n).every((row) => row.meeting === null)).toBe(true);
@@ -269,7 +269,7 @@ describe("a meeting's people", () => {
     const set = await meet(n, { when: "2026-11-09" });
     await tick();
     const added = await attendees(n, { add: { person: asha } });
-    expect(added.meeting?.attendees).toEqual([{ number: asha, name: "Asha" }]);
+    expect(added.meeting?.attendees).toEqual([{ number: asha, name: "Asha", photo: null }]);
     expect(added.activityAt > set.activityAt).toBe(true);
     const again = await attendees(n, { add: { person: asha } }, "sync");
     expect(again).toEqual(added);
@@ -311,7 +311,7 @@ describe("a meeting's people", () => {
     await attendees(n, { add: { person: asha } });
     await attendees(n, { add: { person: dev } });
     const left = await attendees(n, { remove: asha }, "sync");
-    expect(left.meeting?.attendees).toEqual([{ number: dev, name: "Dev" }]);
+    expect(left.meeting?.attendees).toEqual([{ number: dev, name: "Dev", photo: null }]);
     expect((await meetingEvents(n)).at(-1)).toMatchObject({ actor: "sync", type: "attendee-removed", data: { person: asha, name: "Asha" } });
     const before = await count("SELECT COUNT(*) AS n FROM events");
     expect(await reasonOf(await call(`/threads/${n}/attendees`, { body: { remove: asha } }))).toEqual([409, "not-attending"]);
@@ -370,7 +370,7 @@ describe("who may change a meeting", () => {
     expect((await shown(n)).thread.meeting).toBeNull();
     expect((await answer<{ thread: Thread }>(await call(`/threads/${n}/meeting`, { as: "sync", body, origin: null }))).thread.meeting?.when).toBe("2026-11-09");
     expect((await answer<{ thread: Thread }>(await call(`/threads/${n}/attendees`, { as: "sync", body: { add: { name: "Leela" } }, origin: null }))).thread.meeting?.attendees).toEqual([
-      { number: 1, name: "Leela" },
+      { number: 1, name: "Leela", photo: null },
     ]);
   });
 

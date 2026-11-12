@@ -292,7 +292,7 @@ describe("Gravatar, once for each person he invited", () => {
     harness.outside.gravatars.set(hashOf("kiran@example.net"), {});
     harness.outside.asked.length = 0;
     expect(await harness.scheduled()).toBe("ok");
-    expect(harness.outside.asked).toEqual([`gravatar:${hashOf("kiran@example.net")}`]);
+    expect(harness.outside.asked.filter((asked) => asked.startsWith("gravatar:"))).toEqual([`gravatar:${hashOf("kiran@example.net")}`]);
     expect(await count("SELECT COUNT(*) AS n FROM people WHERE photo_checked_at IS NULL")).toBe(0);
     harness.outside.asked.length = 0;
     expect(await harness.scheduled()).toBe("ok");

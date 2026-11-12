@@ -34,6 +34,7 @@
 //   GET  /threads/api/people[/<n>], POST /threads/api/people/<n>               owner and sync read; owner writes (src/people.ts)
 //   GET  /threads/api/journal[/...], POST /threads/api/journal/...             owner and sync; never invited people (src/journal.ts)
 //   GET  /threads/api/now, POST /threads/api/now  {"text"}                    owner: the home page's Now line (src/home.ts)
+//   POST /threads/api/photo (a JPEG or PNG), DELETE /threads/api/photo       owner: his photo (src/photos.ts)
 //
 // An invited person reads only the threads they are in: every read takes the caller as its reader, and the
 // store's queries see no other thread, so one they aren't in answers 404 `no-thread`, exactly as a number never
@@ -120,6 +121,8 @@ import { servePage, withSkeleton } from "./page.ts";
 import { handleNow } from "./home.ts";
 import { handleJournal } from "./journal.ts";
 import { handlePeople, personView } from "./people.ts";
+import { handlePhoto } from "./photos.ts";
+import { ownerPhotoId, personPhotoId } from "./photos-store.ts";
 import { SLUG_SHAPE } from "./asks.ts";
 import { TOPICS } from "../site/talk-topics.js";
 import { sameOrigin } from "./request.ts";
@@ -281,6 +284,7 @@ interface MeetingPerson {
   readonly number: number;
   readonly name: string | null;
   readonly email: string | null;
+  readonly photo: string | null;
 }
 
 /** Names compared ignoring case, someone with no name after everyone named, then by number: one order for every reader. */
@@ -305,15 +309,18 @@ function meetingView(row: ThreadRow, reader: Reader): JsonValue {
     where: row.meeting_where,
     attendees:
       reader.caller === "member"
-        ? people.map((person) => (person.email !== null && person.email === reader.email ? { name: person.name, you: true } : { name: person.name }))
-        : people.map((person) => ({ number: person.number, name: person.name })),
+        ? people.map((person) => (person.email !== null && person.email === reader.email ? { name: person.name, photo: person.photo, you: true } : { name: person.name, photo: person.photo }))
+        : people.map((person) => ({ number: person.number, name: person.name, photo: person.photo })),
   };
 }
 
-/** The people on a thread: by id, number, name and address to the owner and the sync; by name only, the owner first, to the people themselves. */
+/**
+ * The people on a thread: by id, number, name, address and photo to the owner and the sync; by name and photo only,
+ * the owner first, to the people themselves, who read his photo from who is calling.
+ */
 function peopleView(people: readonly PersonRow[], reader: Reader): JsonValue {
-  if (reader.caller === "member") return [{ name: OWNER_NAME, owner: true }, ...people.map((person) => ({ name: person.name }))];
-  return people.map((person) => ({ id: person.id, number: person.number, name: person.name, email: person.email, addedAt: person.added_at }));
+  if (reader.caller === "member") return [{ name: OWNER_NAME, owner: true }, ...people.map((person) => ({ name: person.name, photo: person.photo_id }))];
+  return people.map((person) => ({ id: person.id, number: person.number, name: person.name, email: person.email, addedAt: person.added_at, photo: person.photo_id }));
 }
 
 /**
@@ -346,8 +353,10 @@ function claudeAddress(value: unknown): string | null {
 
 /**
  * A comment, with who may read it, its state, and the name of who wrote it: the invited person's, or the name a
- * visitor typed (null for the owner's and the sync's, and a visitor who gave none). A visitor's email, and the number
- * of the person who wrote it, reach the owner and the sync only.
+ * visitor typed (null for the owner's and the sync's, and a visitor who gave none). An invited person's comment carries
+ * their photo (`photo`); no other does, because his own and the sync's show his (`ownerPhoto`), and a visitor's
+ * address was only ever typed. A visitor's email, and the number of the person who wrote it, reach the owner and the
+ * sync only.
  */
 function commentView(row: CommentRow, reader: Reader): { readonly [key: string]: JsonValue } {
   const said = {
@@ -366,6 +375,7 @@ function commentView(row: CommentRow, reader: Reader): { readonly [key: string]:
         : { text: row.quote, prefix: row.quote_prefix ?? "", suffix: row.quote_suffix ?? "", version: row.page_version },
     mine: isMine(row, reader),
     ...(row.visitor_key === null ? {} : { visitor: row.visitor_key.slice(0, 16) }),
+    ...(row.author === "member" ? { photo: row.person_photo } : {}),
   };
   if (reader.caller === "member") return said;
   const owners = row.person_number === null ? said : { ...said, personNumber: row.person_number };
@@ -400,9 +410,14 @@ function eventView(row: EventRow, reader: Reader): { readonly [key: string]: Jso
   return { id: row.id, at: row.at, actor: row.actor, type: row.type, data: shown };
 }
 
-/** Who is calling, for the threads page: the caller, and their address (none for the sync). */
-function me(caller: Caller): Response {
-  return json(200, { caller: caller.caller, email: caller.caller === "sync" ? null : caller.email });
+/**
+ * Who is calling, for the threads page: the caller, their address (none for the sync), his photo (`ownerPhoto`, which
+ * his own and the sync's words show), and to an invited person their own photo.
+ */
+async function me(caller: Caller, env: Bindings): Promise<Response> {
+  const ownerPhoto = await ownerPhotoId(env.DB);
+  if (caller.caller !== "member") return json(200, { caller: caller.caller, email: caller.caller === "sync" ? null : caller.email, ownerPhoto });
+  return json(200, { caller: caller.caller, email: caller.email, ownerPhoto, photo: await personPhotoId(env.DB, caller.email) });
 }
 
 /** An invited person's threads: every one they are in, most recently active first. */
@@ -801,9 +816,10 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
     return handleJournal(request, url, env, who);
   }
   if (url.pathname === "/threads/api/now") return handleNow(request, env, who);
+  if (url.pathname === "/threads/api/photo") return handlePhoto(request, env, who);
   if (url.pathname === "/threads/api/search" || url.pathname === "/threads/api/sign-in" || url.pathname === "/threads/api/me") {
     if (request.method !== "GET") return json(405, { reason: "method" }, { Allow: "GET" });
-    if (url.pathname === "/threads/api/me") return me(who);
+    if (url.pathname === "/threads/api/me") return me(who, env);
     return url.pathname === "/threads/api/search" ? lookUp(url, env, who) : signedIn(url);
   }
   if (url.pathname === "/threads/api/asks") {

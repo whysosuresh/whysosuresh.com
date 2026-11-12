@@ -18,7 +18,7 @@
 // bucket, test/fixtures/thumb.jpg, one without) and a made-up release of each product, so http://localhost:8790/
 // shows every shape of item and /feed.xml its feed. Everyone in the seed is a person: Asha wrote
 // from the site and was then invited to the meetup thread, Dev K. told him something in person, Meera is invited
-// (with his own notes on her), Tomás wrote on the public thread with an address (Priya gave none, so she is no
+// (with his own notes on her, and a photo, as the hourly run copies an invited person's Gravatar), Tomás wrote on the public thread with an address (Priya gave none, so she is no
 // person), and Rex's only note was junk he dropped, so Rex sits under the people only in dropped threads. Four
 // threads are meetings, set as the sync sets them, relative to now so Today always has some coming up: "Who owns
 // what" later today (with Meera, who is invited, and Dev K., who has no address), the review next Wednesday (with
@@ -169,6 +169,14 @@ async function seed(): Promise<void> {
   };
   const meera = (await database.prepare("SELECT number FROM people WHERE email = ?1").bind(guest).first<{ number: number }>())?.number ?? 0;
   await toPerson(meera, { note: "Met at the infra meetup in October.\n\n- prefers async, writes long\n- owns pricing from Friday" });
+  // Meera has a Gravatar, kept as the hourly run keeps one for a person he invited (src/photos.ts), so a person's
+  // photo shows on her comments, her page, the people and the thread's Share.
+  const meeraPhoto = crypto.randomUUID();
+  await (await harness.pages()).put(`photos/${meeraPhoto}.jpg`, THUMB, { httpMetadata: { contentType: "image/jpeg" } });
+  await database.batch([
+    database.prepare("INSERT INTO photos (id, object_key, type, bytes, created_at) VALUES (?1, ?2, 'image/jpeg', ?3, ?4)").bind(meeraPhoto, `photos/${meeraPhoto}.jpg`, THUMB.byteLength, new Date().toISOString()),
+    database.prepare("UPDATE people SET photo_id = ?1, photo_checked_at = ?2 WHERE email = ?3").bind(meeraPhoto, new Date().toISOString(), guest),
+  ]);
   const page = async (number: number, html: Uint8Array, from: string | null): Promise<void> => {
     const query = from === null ? "" : `?${new URLSearchParams({ from }).toString()}`;
     const response = await harness.fetch(`${THREADS}/threads/api/threads/${number}/pages${query}`, {
