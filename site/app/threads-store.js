@@ -315,11 +315,19 @@ async function readPublic(path, key) {
  */
 
 /**
+ * How a public address names its thread in a path: its key, or its number.
+ * @param {PublicAddress} address
+ */
+function pathPart(address) {
+  return 'shareKey' in address ? address.shareKey : String(address.number);
+}
+
+/**
  * A public thread's calls' address: `/api/threads/` and its key or number.
  * @param {PublicAddress} address
  */
 export function publicThreadAddress(address) {
-  return `/api/threads/${'shareKey' in address ? address.shareKey : address.number}`;
+  return `/api/threads/${pathPart(address)}`;
 }
 
 /**
@@ -330,7 +338,7 @@ export function publicThreadAddress(address) {
  * @returns {Promise<PublicShown>}
  */
 export async function showPublic(address, key) {
-  return /** @type {PublicShown} */ (await readPublic(publicThreadAddress(address), key));
+  return /** @type {PublicShown} */ (await readPublic(`/api/threads/${pathPart(address)}`, key));
 }
 
 /**
