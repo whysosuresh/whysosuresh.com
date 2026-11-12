@@ -42,6 +42,7 @@ describe("the privacy probe", () => {
     expect(asked).toContain("/threads/api/journal/2026-11-06?version=1");
     expect(asked).toContain("/journal/2026-W45");
     expect(asked).toContain("/threads/api/photo");
+    expect(asked).toContain("/threads/api/cards");
     expect(asked).toContain("/");
     expect(asked.filter((path) => path.startsWith("home:"))).toEqual(["home:/threads/api/me", "home:/threads/api/journal", "home:/journal", "home:/me"]);
   });

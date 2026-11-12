@@ -52,6 +52,11 @@
 // or removes with `setPhoto` and `removePhoto` (/threads/api/photo, his alone), and a person's Gravatar, which the
 // site copied once they were invited (`photo` on a person, an invited person's comment and a meeting's people). A
 // photo loads from the site itself (`photoAddress`, /api/photos/<id>), never from Gravatar.
+//
+// Each public thread's link shows its own preview card (src/cards.ts), which his page draws (site/app/card.js):
+// `listCards` reads every public thread's number, title and the stamp of the card it has, and `setCard` uploads a
+// drawn card as its PNG with the stamp of what it shows (/threads/api/cards and /threads/api/threads/<n>/card, his
+// alone).
 
 /**
  * @typedef {import('./standing.js').List} List
@@ -108,6 +113,7 @@
  * @typedef {{ threads: Thread[], people: Someone[] }} Found
  * @typedef {{ people: Person[], invitedCount: number }} People
  * @typedef {{ caller: 'owner' | 'sync' | 'member', email: string | null, ownerPhoto?: string | null, photo?: string | null }} Me
+ * @typedef {{ number: number, title: string | null, stamp: string | null }} CardDue
  * @typedef {{ id: number, at: string, actor: 'owner' | 'sync' | 'visitor' | 'import' | string, type: string, data: Record<string, unknown> }} Event
  * @typedef {{ thread: Thread, page: Page | null, people: Person[], comments: Comment[], events: Event[], truncated: boolean, answeredBy?: Answerer[] }} Shown
  * @typedef {{ threads: Thread[], counts: Record<List, number>, next: number | null }} Listing
@@ -568,6 +574,20 @@ export async function setPhoto(file) {
 export async function removePhoto() {
   await call('/photo', { method: 'DELETE' });
   return null;
+}
+
+/** Every public thread with the stamp of its preview card, null while it has none. @returns {Promise<CardDue[]>} */
+export async function listCards() {
+  return /** @type {{ cards: CardDue[] }} */ (await call('/cards', { method: 'GET' })).cards;
+}
+
+/**
+ * Makes a drawn PNG a public thread's preview card, with the stamp of what it shows; answers its id.
+ * @param {number} number @param {string} stamp @param {Blob} png @returns {Promise<string>}
+ */
+export async function setCard(number, stamp, png) {
+  const path = `/threads/${number}/card?stamp=${encodeURIComponent(stamp)}`;
+  return /** @type {{ card: string }} */ (await call(path, { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: png })).card;
 }
 
 /** Where a photo loads from: the site itself, with no sign-in, because a public thread shows his. @param {string} id */

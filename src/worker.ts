@@ -10,6 +10,8 @@
 // read and a note sent on it under /api/threads/ (src/public.ts), outside Access too, with no sign-in; an ask, a
 // questions page anyone answers by its link, read and answered under /api/asks/ (src/asks.ts), outside Access too;
 // an avatar's photo under /api/photos/ (src/photos.ts), outside Access too, because a public thread shows his photo;
+// a public thread's preview card under /api/cards/ (src/cards.ts), outside Access too, because a chat's preview
+// fetcher signs in to nothing;
 // and the threads page (src/pages.ts) at its root, Today, the door everyone signed in enters by, at the rooms
 // (/meetings, /asks, /people and a person under it, /journal and everything under it), at an ask's own address
 // (/ask/<slug>) and at every other path under /threads/, handed over from site/ with no sign-in, because Access
@@ -21,6 +23,7 @@
 // without stopping the other, and awaits both, so Cloudflare's record of each run says how it ended.
 
 import { isThreadsHost } from "../site/hosts.js";
+import { serveCard } from "./cards.ts";
 import { handleAsks } from "./asks.ts";
 import type { Bindings } from "./bindings.ts";
 import { handleEvaluate, handleKeys } from "./evaluate.ts";
@@ -60,6 +63,7 @@ function threads(request: Request, env: Bindings, pathname: string): Promise<Res
   if (pathname.startsWith("/api/threads/")) return handlePublic(request, env);
   if (pathname.startsWith("/api/asks/")) return handleAsks(request, env);
   if (pathname.startsWith("/api/photos/")) return servePhoto(request, env);
+  if (pathname.startsWith("/api/cards/")) return serveCard(request, env);
   if (pathname.startsWith("/threads/api/")) return handleThreads(request, env);
   if (pathname === "/" || pathname.startsWith("/threads/") || pathname.startsWith("/people/") || pathname === "/meetings" || pathname === "/people") return handlePage(request, env);
   if (pathname === "/asks" || pathname.startsWith("/ask/")) return handlePage(request, env);

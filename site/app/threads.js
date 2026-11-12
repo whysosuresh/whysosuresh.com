@@ -112,6 +112,13 @@
 // threads' sign-in call and comes back to the same address. When the sign-in ends mid-use, a line says so and nothing typed
 // is lost. Every element is built with DOM calls and every text is set as text, so nothing anyone wrote becomes
 // markup; Markdown is parsed into blocks first (markdown.js). The CSP allows no inline script or style attribute.
+//
+// Each public thread's link shows its own preview card in a chat (site/app/card.js, src/cards.ts), and his page is
+// what draws it, in the background, with nothing shown: on every visit it asks which public threads' cards are
+// missing or show something else now (a title the sync rewrote, his old photo, an older layout), by each card's stamp,
+// and draws and uploads those one at a time (`refreshCards`); it asks again when he makes a thread public, saves a
+// public thread's title, or changes his photo. A card that fails is drawn on a later visit; until a thread has its
+// own, its preview shows the site's card.
 
 import { homeOrigin, shownAddress } from '../hosts.js';
 import { SPACES } from '../spaces.js';
@@ -134,6 +141,7 @@ import {
   weekDays,
   weekOf,
 } from './journal.js';
+import { CARD_NAME, cardBlob, cardStamp } from './card.js';
 import { PHOTO_SHEET, VIA, photoProblem, photoSaved, startedLine, viaClaude, writerName } from './byline.js';
 import { ASKS_PATH, ASK_PATH, CLOSED_LINE, DRAFTS_HINT, agoWords, FIRST_ANSWERERS, answeredHead, answererName, answerersShown, askEventWords, askLink, askShown, countLine, foldWaiting, foldedTitle, foldedWho, markReadLabel, markedWords, nobodyLine, savedLine, stateWords, summaryNoteFor, talkLinkFor, topicLine, visitorHint } from './asks.js';
 import { DRAFT, KEY, discussionFor, helloFor, placesOf, readPageMessage, stack, takesAnswers } from './page-talk.js';
@@ -168,6 +176,8 @@ import {
   pageAddress,
   people,
   photoAddress,
+  listCards,
+  setCard,
   readJournal,
   removePhoto,
   setPhoto,
@@ -1035,6 +1045,9 @@ class Threads {
     this.myPhoto = null;
     /** His photo sheet: a save on its way, and why the last one wasn't kept. */
     this.photoBusy = false;
+    /** A run drawing preview cards, and whether another was asked for while it ran. */
+    this.cardsBusy = false;
+    this.cardsAgain = false;
     this.photoProblem = '';
     /** Who the comment being written is for, when the writer chose; null for the thread's own default. @type {Audience | null} */
     this.audience = null;
@@ -1290,6 +1303,7 @@ class Threads {
       void this.loadAsks();
       void this.loadJournal();
       void this.loadNow();
+      void this.refreshCards();
     }
     this.loaded = true;
   }
@@ -4775,6 +4789,59 @@ class Threads {
     this.keepScroll = true;
     this.render();
     this.say(photoSaved(this.ownerPhoto !== null), null);
+    // Every card shows his photo, so each is drawn again with the new one.
+    void this.refreshCards();
+  }
+
+  /**
+   * Draws and uploads every public thread's preview card that is missing or shows something else now, for him alone,
+   * one run at a time: asked while a run is going, it runs once more after it, so a thread made public meanwhile is
+   * never missed. A failure ends a run with nothing said: the card is a picture beside a link, the next visit tries
+   * again, and the site's card is shown until then.
+   */
+  async refreshCards() {
+    if (this.caller !== 'owner') return;
+    if (this.cardsBusy) {
+      this.cardsAgain = true;
+      return;
+    }
+    this.cardsBusy = true;
+    do {
+      this.cardsAgain = false;
+      try {
+        await this.drawCards();
+      } catch {
+        // Left for the next run; see above.
+      }
+    } while (this.cardsAgain);
+    this.cardsBusy = false;
+  }
+
+  /**
+   * One run: each public thread's card stamp against what its card would show now (the layout, its number and title,
+   * his photo as this page knows it), and each that differs drawn and uploaded in turn. His photo is loaded once; if
+   * it doesn't load the run stops, because a card drawn with his initial but stamped with his photo would never be
+   * drawn again. The font is the page's own, and isn't in the stamp, so another device never redraws every card.
+   */
+  async drawCards() {
+    const photo = this.ownerPhoto;
+    /** @type {{ card: { number: number, title: string | null }, stamp: string }[]} */
+    const stale = [];
+    for (const due of await listCards()) {
+      const card = { number: due.number, title: due.title };
+      const stamp = await cardStamp(card, photo);
+      if (stamp !== due.stamp) stale.push({ card, stamp });
+    }
+    if (stale.length === 0) return;
+    await document.fonts.ready;
+    let face = null;
+    if (photo !== null) {
+      face = new Image();
+      face.src = photoAddress(photo);
+      await face.decode();
+    }
+    const style = { family: getComputedStyle(document.documentElement).getPropertyValue('--font').trim(), name: CARD_NAME };
+    for (const { card, stamp } of stale) await setCard(card.number, stamp, await cardBlob(card, style, face));
   }
 
   /** Says in the sheet why a photo wasn't kept. @param {string} reason */
@@ -5331,6 +5398,8 @@ class Threads {
     }
     this.remember(saved, { acted: true });
     this.clearProblem();
+    // A thread just made public gets its card drawn now, so its link's preview shows it within seconds.
+    if (saved.publicAt !== null) void this.refreshCards();
     await this.refreshShown(saved.number);
     this.renderShare();
     const back = inverse(thread, action);
@@ -5927,6 +5996,8 @@ class Threads {
     this.editing = null;
     this.editPreview = false;
     this.clearProblem();
+    // A public thread's card shows its title, so a new title draws it again; the summary and text aren't on it.
+    if (saved.includes('title') && this.threads.get(thread.number)?.publicAt) void this.refreshCards();
     await this.refreshShown(thread.number);
     this.say(saved.length > 0 ? `Saved the ${saved.join(', ')}. The earlier ${saved.length > 1 ? 'versions are' : 'one is'} in the history` : 'Nothing changed', null);
   }

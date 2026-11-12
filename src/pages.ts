@@ -20,8 +20,12 @@
 // a thread public to that address answers differently: its key, or the number of a thread public before links had
 // keys. A thread made public since gets the shell byte for byte at its number, exactly as a private one. The preview's
 // `og:url` is the address it was asked by, so a number never leads to a key, which would outlive the number. Its title, `og:` and `twitter:` tags are written as text or escaped attributes, never as markup; the
-// description is plain text from the site's own Markdown reader (site/app/markdown.js): the living summary, else the
-// first paragraph of the text when the text is what the thread shows. That answer is fetched without the browser's
+// description is plain text from the site's own Markdown reader (site/app/markdown.js): the first paragraph of the
+// text when the text is what the thread shows, else none, and never the living summary, which is a status he keeps
+// for himself ("Waiting on: you"), as the home page never lists a post by it. Its picture is the thread's own card,
+// large (`summary_large_image`, 1200 x 630): the one his page drew and uploaded (src/cards.ts), at its own random
+// address, which carries neither the key nor anything a number address doesn't already say, or, until his page has
+// drawn it, the site's one fixed card (`SITE_CARD`), never the square face. That answer is fetched without the browser's
 // conditional headers and carries no ETag, because the shell's ETag would let a browser keep a stale title, or the
 // plain shell, as a 304. Every other answer is the shell byte for byte. The `noindex` stays on every thread: a
 // public thread is kept out of search results, and found by its link. Any other path under /threads/ is answered by
@@ -58,6 +62,11 @@ const JOURNAL_SLASH = "/journal/";
 
 /** The page's own address among the site's files. */
 const SHELL = "/threads/";
+
+/** The picture a public thread's preview shows until its own card is drawn: his face and name, the card's size. */
+export const SITE_CARD = "/img/card.png";
+/** A preview card's size, as site/app/card.js draws it and site/img/card.png is. */
+const CARD_SIZE = { width: "1200", height: "630" };
 
 /** The longest preview description, in UTF-16 code units. */
 export const MAX_DESCRIPTION = 200;
@@ -97,10 +106,12 @@ export function clip(text: string, max: number): string {
   return `${(space > max / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
 
-/** A preview's description: at most `MAX_DESCRIPTION` code units, cut at a space with an ellipsis when longer. */
-export function description(row: Pick<PreviewRow, "summary" | "body" | "main">): string {
-  const text = row.summary !== null && row.summary.trim() !== "" ? plainText(row.summary, true) : row.main === "text" ? plainText(row.body, false) : "";
-  return clip(text, MAX_DESCRIPTION);
+/**
+ * A preview's description: a text thread's first paragraph, at most `MAX_DESCRIPTION` code units, cut at a space with
+ * an ellipsis when longer; none for a thread whose main section is a page or a link. Never the living summary.
+ */
+export function description(row: Pick<PreviewRow, "body" | "main">): string {
+  return row.main === "text" ? clip(plainText(row.body, false), MAX_DESCRIPTION) : "";
 }
 
 /** A value inside a double-quoted attribute, escaped so it can't end the attribute or start markup. */
@@ -113,18 +124,21 @@ export function titleOf(row: Pick<PreviewRow, "number" | "title">): string {
   return `#${row.number}${row.title === null ? "" : ` ${row.title}`} · whysosuresh.com`;
 }
 
-/** What a preview says: the page's title, its type, its address and a description (none when empty). */
+/** What a preview says: the page's title, its type, its address, a description (none when empty) and its picture. */
 interface Preview {
   readonly title: string;
   readonly type: string;
   readonly url: string;
   readonly description: string;
+  /** A large card's absolute address, or null for a preview with no picture. */
+  readonly image: string | null;
 }
 
-/** A public thread's preview, its address the one it was asked by. */
+/** A public thread's preview, its address the one it was asked by, its picture its card or the site's. */
 function threadPreview(row: PreviewRow, address: PublicAddress, origin: string): Preview {
   const at = "shareKey" in address ? address.shareKey : String(row.number);
-  return { title: titleOf(row), type: "article", url: `${origin}/threads/${at}`, description: description(row) };
+  const image = row.card === null ? `${origin}${SITE_CARD}` : `${origin}/api/cards/${row.card}`;
+  return { title: titleOf(row), type: "article", url: `${origin}/threads/${at}`, description: description(row), image };
 }
 
 /** The shell with a preview's title and tags. */
@@ -135,7 +149,16 @@ function rewritten(shell: Response, preview: Preview): Response {
     ["property", "og:type", preview.type],
     ["property", "og:url", preview.url],
     ...(said === "" ? [] : [["property", "og:description", said]]),
-    ["name", "twitter:card", "summary"],
+    ...(preview.image === null
+      ? [["name", "twitter:card", "summary"]]
+      : [
+          ["property", "og:image", preview.image],
+          ["property", "og:image:type", "image/png"],
+          ["property", "og:image:width", CARD_SIZE.width],
+          ["property", "og:image:height", CARD_SIZE.height],
+          ["property", "og:image:alt", title],
+          ["name", "twitter:card", "summary_large_image"],
+        ]),
   ]
     .map(([kind = "", name = "", content = ""]) => `<meta ${kind}="${attribute(name)}" content="${attribute(content)}">`)
     .join("");
@@ -189,5 +212,5 @@ async function threadOf(env: Bindings, address: PublicAddress, origin: string): 
 async function askOf(env: Bindings, slug: string, origin: string): Promise<Preview | null> {
   const ask = await findAsk(env.DB, slug);
   if (ask === null || ask.state === "draft") return null;
-  return { title: `${ask.title ?? UNTITLED_ASK} · whysosuresh.com`, type: "website", url: `${origin}/ask/${slug}`, description: ASK_DESCRIPTION };
+  return { title: `${ask.title ?? UNTITLED_ASK} · whysosuresh.com`, type: "website", url: `${origin}/ask/${slug}`, description: ASK_DESCRIPTION, image: null };
 }

@@ -4,7 +4,7 @@
 // unless each stops at Cloudflare Access's sign-in, never answering a word. His journal's calls are all asked, every
 // kind of address under /threads/api/journal (the list, a day, an earlier version, a week, the storylines, a photo),
 // and the threads' own private calls beside them (a tab's list, the people, the asks, a thread, the home page's Now
-// line, his photo). The journal's pages are asked too: each must be the same shell as the threads' root, Today, byte for byte,
+// line, his photo, the public threads' card stamps). The journal's pages are asked too: each must be the same shell as the threads' root, Today, byte for byte,
 // because a page holds no words and reads them only from the calls after sign-in. A recent day's address is asked
 // whatever the date, since the shell is the same for a day written or not. The home page's host is asked for the
 // threads' old addresses there, each of which must be gone (404), so the old door stays shut. This module is the
@@ -35,7 +35,7 @@ const PHOTO = "00000000-0000-4000-8000-000000000000";
 /** Every address the probe asks, for a day it names (`YYYY-MM-DD`) and that day's ISO week (`YYYY-Www`). */
 export function probes(day: string, week: string): Probe[] {
   const journal = ["", `/${day}`, `/${day}?version=1`, `/${week}`, "/storylines", `/photos/${PHOTO}`].map((rest) => `/threads/api/journal${rest}`);
-  const threads = ["/threads/api/threads?tab=look", "/threads/api/threads/1", "/threads/api/people", "/threads/api/asks", "/threads/api/me", "/threads/api/now", "/threads/api/photo"];
+  const threads = ["/threads/api/threads?tab=look", "/threads/api/threads/1", "/threads/api/people", "/threads/api/asks", "/threads/api/me", "/threads/api/now", "/threads/api/photo", "/threads/api/cards"];
   return [
     ...[...journal, ...threads].map((path): Probe => ({ path, host: "threads", expect: "sign-in" })),
     { path: "/threads/api/journal", host: "threads", expect: "sign-in", headers: FORGED_TOKEN },
