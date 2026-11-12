@@ -141,7 +141,8 @@ import {
   weekDays,
   weekOf,
 } from './journal.js';
-import { CARD_NAME, cardBlob, cardStamp } from './card.js';
+import { CARD_NAME, cardStamp } from './card.js';
+import { cardBlob } from './card-paint.js';
 import { PHOTO_SHEET, VIA, photoProblem, photoSaved, startedLine, viaClaude, writerName } from './byline.js';
 import { ASKS_PATH, ASK_PATH, CLOSED_LINE, DRAFTS_HINT, agoWords, FIRST_ANSWERERS, answeredHead, answererName, answerersShown, askEventWords, askLink, askShown, countLine, foldWaiting, foldedTitle, foldedWho, markReadLabel, markedWords, nobodyLine, savedLine, stateWords, summaryNoteFor, talkLinkFor, topicLine, visitorHint } from './asks.js';
 import { DRAFT, KEY, discussionFor, helloFor, placesOf, readPageMessage, stack, takesAnswers } from './page-talk.js';

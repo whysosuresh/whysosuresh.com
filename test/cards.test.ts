@@ -161,7 +161,9 @@ describe("his page's cards", () => {
 
   it("are listed for him alone: every public thread with its card's stamp, or none yet", async () => {
     const carded = await published({ title: "Has a card" });
-    const bare = await published({ title: null });
+    // A thread with no title, as a site note's is; the sync always gives one, so it is cleared by hand.
+    const bare = await published();
+    await (await harness.db()).prepare("UPDATE threads SET title = NULL WHERE number = ?1").bind(bare).run();
     await thread({ title: "Private" });
     const taken = await published({ title: "Taken back" });
     await move(taken, "unpublish");

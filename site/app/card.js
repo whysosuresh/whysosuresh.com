@@ -3,16 +3,17 @@
 // hey.whysosuresh.com, black, on a 1200 x 630 canvas his own page draws and uploads (`refreshCards` in
 // site/app/threads.js; the Worker only checks and keeps the bytes, src/cards.ts). Two halves: `layoutCard` decides
 // every line, size, wrap and ellipsis from a measuring function alone, so a test runs it in Node with no canvas;
-// `paintCard` only paints what the layout says. A card with no number is the site's own card, his face large with his
-// name, which a thread's preview shows until its own card is drawn: `site/img/card.png`, exported once from this code
-// in a browser (`cardBlob` with `{ number: null, title: null }`, his photo and the page's `--font`, saved as is), and
-// exported again only when this look or his photo changes. Sizes are chosen for the phone: a chat shows the card
-// about a quarter size, so nothing is under 40 px here (10 px there).
+// site/app/card-paint.js only paints what the layout says, the one half that needs a browser. A card with no number
+// is the site's own card, his face large with his name, which a thread's preview shows until its own card is drawn:
+// `site/img/card.png`, exported once from this code in Chrome (`cardBlob` with `{ number: null, title: null }`, his
+// photo and the page's `--font`, the PNG saved as it came), and exported again only when this look or his photo
+// changes. Sizes are chosen for the phone: a chat shows the card about a quarter size, so nothing is under 40 px here
+// (10 px there).
 //
 // `cardStamp` is the record of what a drawn card shows (the layout's version, the thread's number and title, and his
 // photo's id), kept beside the card by the Worker, so his page redraws exactly the cards whose stamp differs. The
 // font family is left out on purpose: opening the site on another device must not redraw every card. A card asks
-// the network for nothing; the page hands it his photo already loaded.
+// the network for nothing.
 
 /** The card's size, the large preview size chats ask for (1.91:1). */
 export const CARD_WIDTH = 1200;
@@ -205,46 +206,6 @@ export function layoutCard(card, style, measure) {
 }
 
 /**
- * Paints a laid-out card: the background, each line, and his photo cropped round (or his initial on a disc in the
- * card's text colour). Decides nothing.
- * @param {CanvasRenderingContext2D} context @param {CardLayout} layout
- * @param {HTMLImageElement | ImageBitmap | null} face his photo, or null for his initial
- */
-export function paintCard(context, layout, face) {
-  const tone = (/** @type {Tone} */ name) => layout[name];
-  context.save();
-  context.fillStyle = layout.background;
-  context.fillRect(0, 0, layout.width, layout.height);
-  context.textBaseline = 'alphabetic';
-  for (const line of layout.lines) {
-    context.font = line.font;
-    context.fillStyle = tone(line.tone);
-    context.textAlign = line.align;
-    context.fillText(line.text, line.x, line.y);
-  }
-  const { x, y, size, initial } = layout.face;
-  context.beginPath();
-  context.arc(x + size / 2, y + size / 2, size / 2, 0, Math.PI * 2);
-  context.closePath();
-  context.clip();
-  if (face !== null) {
-    const width = 'naturalWidth' in face ? face.naturalWidth : face.width;
-    const height = 'naturalHeight' in face ? face.naturalHeight : face.height;
-    const side = Math.min(width, height);
-    context.imageSmoothingQuality = 'high';
-    context.drawImage(face, (width - side) / 2, (height - side) / 2, side, side, x, y, size, size);
-  } else {
-    context.fillStyle = layout.ink;
-    context.fillRect(x, y, size, size);
-    context.font = initial.font;
-    context.fillStyle = tone(initial.tone);
-    context.textAlign = initial.align;
-    context.fillText(initial.text, initial.x, initial.y);
-  }
-  context.restore();
-}
-
-/**
  * What a drawn card shows, as 64 lowercase hex characters: the SHA-256 of `[CARD_LAYOUT, number, title, photo]` as
  * JSON. Two cards with the same stamp are the same picture on any device but for its fonts.
  * @param {Card} card @param {string | null} photo his photo's id, or null for his initial @returns {Promise<string>}
@@ -253,24 +214,4 @@ export async function cardStamp(card, photo) {
   const said = JSON.stringify([CARD_LAYOUT, card.number, card.title, photo]);
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(said)));
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-/**
- * The card as a PNG, drawn on a canvas of its own with that canvas's own measure. The only part that needs a browser.
- * @param {Card} card @param {CardStyle} style @param {HTMLImageElement | ImageBitmap | null} face
- * @returns {Promise<Blob>}
- */
-export function cardBlob(card, style, face) {
-  const canvas = document.createElement('canvas');
-  canvas.width = CARD_WIDTH;
-  canvas.height = CARD_HEIGHT;
-  const context = canvas.getContext('2d');
-  if (context === null) return Promise.reject(new Error('no canvas'));
-  /** @type {Measure} */
-  const measure = (text, font) => {
-    context.font = font;
-    return context.measureText(text).width;
-  };
-  paintCard(context, layoutCard(card, style, measure), face);
-  return new Promise((resolve, reject) => canvas.toBlob((blob) => (blob === null ? reject(new Error('no picture')) : resolve(blob)), 'image/png'));
 }
