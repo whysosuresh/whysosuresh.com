@@ -172,6 +172,8 @@ describe("an add", () => {
       feedAt: null,
       meeting: null,
       ask: null,
+      shareKey: null,
+      publicByNumber: false,
     });
     const again = await call("", { body: { ...body, title: "Another title" } });
     expect(again.status).toBe(200);

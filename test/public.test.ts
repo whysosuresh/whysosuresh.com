@@ -1,7 +1,10 @@
 // Public threads, run as production runs them: the Worker's bundle in workerd (test/harness.ts), with a local D1 and
 // R2, Turnstile played, and Cloudflare Access played for the private calls. What it holds: making a thread public
-// and taking it back are moves, the owner's alone, and only his own threads may be public. Every number that isn't
-// a public thread (private, shared with people, a site note, a told thread, missing, not a number) answers the same
+// and taking it back are moves, the owner's alone, and only his own threads may be public. A public thread is read at
+// its link, by a 32-character key given on its first publish and never changed (never in its history), and its number
+// opens it for strangers only while it was public before links had keys, until he takes it back. Every address that
+// isn't a public thread's (a new public thread's number, private, shared with people, a site note, a told thread, a
+// thread taken back by its number or its key, a wrong key, a malformed one, missing, not a number) answers the same
 // 404 bytes on the thread, its page, its notes and its answers. A public answer holds no email, status, origin,
 // people, events, ids, last activity or page source, and only the comments written as Public that are shown. A page
 // version is served only while the page is the thread's main section. A visitor's note is shown at once, answers no
@@ -13,8 +16,9 @@
 // holds them; members see shown ones and never a waiting or dropped one, an email, or the events that would tell
 // them of one, and a visitor's note is never an invited person's own, even sent under their address. A visitor's words make the thread wait on him. The sync never writes for anyone. Nobody replies under
 // a public comment or a visitor's note, and invited people's answers, comments on words and replies never reach a
-// stranger, nor does a meeting or anyone in it. A public thread's address carries its title and preview tags,
-// escaped, with no ETag; a private and a missing number get the shell byte for byte.
+// stranger, nor does a meeting or anyone in it. A public thread's link carries its title and preview tags, escaped,
+// with no ETag, its `og:url` the address asked (an old thread's number never leads to its key); a private, a missing
+// and a new public thread's number, and a wrong key, get the shell byte for byte.
 
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -102,16 +106,29 @@ async function publicRead(path: string, init: RequestInit = {}): Promise<Respons
   return harness.fetch(`${THREADS}/api/threads/${path}`, init);
 }
 
+/** A thread's key, as the owner reads it; null until it was first made public, and for a number no thread has. */
+async function keyOf(number: number): Promise<string | null> {
+  const response = await call(`/threads/${number}`);
+  if (response.status === 404) return null;
+  return (await answer<{ thread: { shareKey: string | null } }>(response)).thread.shareKey;
+}
+
+/** How a stranger names a thread: its link's key once it has one, else its number, which then opens nothing. */
+async function at(number: number): Promise<string> {
+  return (await keyOf(number)) ?? String(number);
+}
+
 /** A public thread's comments as a visitor with `key` reads them (none for no key). */
 async function readAs(number: number, key: string | null): Promise<Record<string, unknown>[]> {
   const headers: Record<string, string> = key === null ? {} : { "X-Visitor-Key": key };
-  return (await answer<{ comments: Record<string, unknown>[] }>(await publicRead(String(number), { headers }))).comments;
+  return (await answer<{ comments: Record<string, unknown>[] }>(await publicRead(await at(number), { headers }))).comments;
 }
 
 async function sendAnswer(number: number | string, fields: Record<string, unknown> = {}, options: { ip?: string } = {}): Promise<Response> {
   const headers = { "Content-Type": "application/json", "CF-Connecting-IP": options.ip ?? "203.0.113.7", Origin: THREADS };
   const body = { question: "first-job", body: "It ran in **two** minutes.", name: "Sam", token: "pass", key: KEY_A, ...fields };
-  return harness.fetch(`${THREADS}/api/threads/${number}/answers`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(body)) });
+  const where = typeof number === "number" ? await at(number) : number;
+  return harness.fetch(`${THREADS}/api/threads/${where}/answers`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(body)) });
 }
 
 interface Note {
@@ -126,7 +143,8 @@ async function sendNote(number: number | string, note: Note = {}, options: { ip?
   const headers: Record<string, string> = { "Content-Type": "application/json", "CF-Connecting-IP": options.ip ?? "203.0.113.7" };
   if (options.origin !== null) headers.Origin = options.origin ?? THREADS;
   const body = { body: "Loved this. **not bold**", name: "Tomás", email: "tomas@example.com", token: "pass", ...note };
-  return harness.fetch(`${THREADS}/api/threads/${number}/notes`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(body)) });
+  const where = typeof number === "number" ? await at(number) : number;
+  return harness.fetch(`${THREADS}/api/threads/${where}/notes`, { method: "POST", headers, body: new TextEncoder().encode(JSON.stringify(body)) });
 }
 
 interface Shown {
@@ -234,8 +252,8 @@ describe("making a thread public", () => {
   });
 });
 
-describe("a number that isn't a public thread", () => {
-  /** Every kind of number a stranger may try that isn't public, each staged. */
+describe("an address that isn't a public thread's", () => {
+  /** Every kind of address a stranger may try that isn't a public thread's, each staged. */
   async function notPublic(): Promise<string[]> {
     const priv = await thread();
     const invited = await thread();
@@ -244,9 +262,19 @@ describe("a number that isn't a public thread", () => {
     const told = await thread({ source: "told", name: "Ravi" });
     const taken = await published();
     await answer(await move(taken, "unpublish"));
-    // A site note and a told thread made public by hand still never show.
-    await (await harness.db()).prepare("UPDATE threads SET public_at = '2026-11-05T00:00:00.000Z' WHERE number IN (?1, ?2)").bind(talk, told).run();
-    return [String(priv), String(invited), String(talk), String(told), String(taken), "999", "0", "042", "abc"];
+    const fresh = await published();
+    // A site note and a told thread made public by hand, with a key and their numbers open as the migration would
+    // leave a thread public before keys, still never show: only his own words are public.
+    await (await harness.db())
+      .prepare("UPDATE threads SET public_at = '2026-11-05T00:00:00.000Z', share_key = printf('%032x', number), public_by_number = 1 WHERE number IN (?1, ?2)")
+      .bind(talk, told)
+      .run();
+    const keys = [talk, told, taken].map((n) => n.toString(16).padStart(32, "0"));
+    keys[2] = (await keyOf(taken)) ?? "";
+    // A thread made public now opens by its key alone: its number is as closed as a private one.
+    const wrong = "0123456789abcdef0123456789abcdef";
+    const malformed = ["0123456789ABCDEF0123456789ABCDEF", "0123456789abcdef0123456789abcde", "0123456789abcdef0123456789abcdef0", "0123456789abcdeg0123456789abcdef"];
+    return [String(priv), String(invited), String(talk), String(told), String(taken), String(fresh), ...keys, wrong, ...malformed, "999", "0", "042", "abc"];
   }
 
   it("answers the same 404 bytes on the thread, its page, its notes and its answers", async () => {
@@ -265,11 +293,11 @@ describe("a number that isn't a public thread", () => {
 
   it("answers any other path under /api/threads/ the same way, and other methods with 405", async () => {
     const n = await published();
-    expect(await (await publicRead(`${n}/people`)).text()).toBe(JSON.stringify({ reason: "no-thread" }));
-    expect((await publicRead(`${n}`, { method: "POST" })).status).toBe(405);
-    expect((await publicRead(`${n}/notes`)).status).toBe(405);
-    expect((await publicRead(`${n}/answers`)).status).toBe(405);
-    expect((await publicRead(`${n}`, { method: "HEAD" })).status).toBe(200);
+    expect(await (await publicRead(`${await at(n)}/people`)).text()).toBe(JSON.stringify({ reason: "no-thread" }));
+    expect((await publicRead(`${await at(n)}`, { method: "POST" })).status).toBe(405);
+    expect((await publicRead(`${await at(n)}/notes`)).status).toBe(405);
+    expect((await publicRead(`${await at(n)}/answers`)).status).toBe(405);
+    expect((await publicRead(`${await at(n)}`, { method: "HEAD" })).status).toBe(200);
   });
 });
 
@@ -278,7 +306,7 @@ describe("a public thread, as anyone reads it", () => {
     const n = await published({ title: "Shipping 0.1.0, in public", body: "## Why\n\nBecause." });
     await answer(await call(`/threads/${n}/text`, { body: { field: "summary", text: "Decided: ship Friday." } }));
     await answer(await call(`/threads/${n}/people`, { body: { add: { email: MEERA, name: "Meera" } } }));
-    const response = await publicRead(String(n));
+    const response = await publicRead(await at(n));
     expect(response.headers.get("x-robots-tag")).toBe("noindex");
     expect(response.headers.get("cache-control")).toBe("no-store");
     const read = await answer<{ thread: Record<string, unknown>; page: unknown; comments: unknown[]; truncated: boolean }>(response);
@@ -295,10 +323,10 @@ describe("a public thread, as anyone reads it", () => {
 
   it("says nothing of a meeting, though the thread is one, with people in it", async () => {
     const n = await published({ title: "A talk at the meetup" });
-    const plain = await answer<Record<string, unknown>>(await publicRead(String(n)));
+    const plain = await answer<Record<string, unknown>>(await publicRead(await at(n)));
     await answer(await call(`/threads/${n}/meeting`, { body: { when: "2026-11-28T12:30:00+05:30", minutes: 20, where: "Bengaluru, the meetup's hall" } }));
     await answer(await call(`/threads/${n}/attendees`, { body: { add: { name: "Leela" } } }));
-    const read = await answer<Record<string, unknown>>(await publicRead(String(n)));
+    const read = await answer<Record<string, unknown>>(await publicRead(await at(n)));
     expect(read).toEqual(plain);
     const text = JSON.stringify(read);
     for (const word of ["meeting", "2026-11-28", "Bengaluru", "Leela", "attendees", "minutes"]) expect(text).not.toContain(word);
@@ -315,7 +343,7 @@ describe("a public thread, as anyone reads it", () => {
     await noteOn(n);
     const dropped = await noteOn(n, { body: "Spam." });
     await answer(await judge(n, dropped, "drop"));
-    const read = await answer<{ comments: Record<string, unknown>[] }>(await publicRead(String(n)));
+    const read = await answer<{ comments: Record<string, unknown>[] }>(await publicRead(await at(n)));
     const general = { createdAt: expect.any(String), question: null, mine: false };
     expect(read.comments).toEqual([
       { author: "owner", name: "Suresh", body: "For anyone.", ...general },
@@ -328,14 +356,14 @@ describe("a public thread, as anyone reads it", () => {
   it("names a visitor who gave no name as null", async () => {
     const n = await published();
     expect((await sendNote(n, { name: "", email: "" })).status).toBe(201);
-    const read = await answer<{ comments: Record<string, unknown>[] }>(await publicRead(String(n)));
+    const read = await answer<{ comments: Record<string, unknown>[] }>(await publicRead(await at(n)));
     expect(read.comments).toEqual([{ author: "visitor", name: null, body: "Loved this. **not bold**", createdAt: expect.any(String), question: null, mine: false }]);
   });
 
   it("shows a link only while the link is the main section, and the text only while the text is", async () => {
     const n = await published();
     await answer(await call(`/threads/${n}/link`, { body: { url: "https://claude.ai/artifact/abc", title: "The plan" } }));
-    const read = await answer<{ thread: Record<string, unknown> }>(await publicRead(String(n)));
+    const read = await answer<{ thread: Record<string, unknown> }>(await publicRead(await at(n)));
     expect(read.thread).toMatchObject({ main: "link", body: null, link: { url: "https://claude.ai/artifact/abc", title: "The plan" } });
   });
 
@@ -343,19 +371,19 @@ describe("a public thread, as anyone reads it", () => {
     const n = await published();
     await savePage(n, "<!doctype html><p>One</p>");
     await savePage(n, "<!doctype html><p>Two</p>");
-    const read = await answer<{ thread: Record<string, unknown>; page: unknown }>(await publicRead(String(n)));
+    const read = await answer<{ thread: Record<string, unknown>; page: unknown }>(await publicRead(await at(n)));
     expect(read.thread).toMatchObject({ main: "page", body: null });
     expect(read.page).toEqual({ version: 2, savedAt: expect.any(String), versions: [{ version: 1, savedAt: expect.any(String) }, { version: 2, savedAt: expect.any(String) }] });
-    const frame = await publicRead(`${n}/pages/1`);
+    const frame = await publicRead(`${await at(n)}/pages/1`);
     expect(frame.status).toBe(200);
     expect(frame.headers.get("content-security-policy")).toContain("sandbox allow-scripts");
     expect(frame.headers.get("x-robots-tag")).toBe("noindex");
     expect(await frame.text()).toContain("<p>One</p>");
-    expect((await publicRead(`${n}/pages/3`)).status).toBe(404);
+    expect((await publicRead(`${await at(n)}/pages/3`)).status).toBe(404);
 
     await answer(await call(`/threads/${n}/link`, { body: { url: "https://claude.ai/artifact/abc", title: "Moved on" } }));
-    expect(await (await publicRead(`${n}/pages/1`)).text()).toBe(JSON.stringify({ reason: "no-thread" }));
-    expect((await answer<{ page: unknown }>(await publicRead(String(n)))).page).toBeNull();
+    expect(await (await publicRead(`${await at(n)}/pages/1`)).text()).toBe(JSON.stringify({ reason: "no-thread" }));
+    expect((await answer<{ page: unknown }>(await publicRead(await at(n)))).page).toBeNull();
   });
 });
 
@@ -560,7 +588,7 @@ describe("replies, answers and words on a public thread", () => {
     await answer(await call(`/threads/${n}/comments`, { body: { body: "Re.", parent: open.comment.id } }), 201);
     await answer(await call(`/threads/${n}/comments`, { body: { body: "Yes.", question: "order" } }), 201);
     await answer(await call(`/threads/${n}/comments`, { body: { body: "Why?", quote: "Who opens", prefix: "", suffix: "", version: 1 } }), 201);
-    const read = await answer<{ comments: Record<string, unknown>[] }>(await publicRead(String(n), { headers: { "X-Visitor-Key": KEY_A } }));
+    const read = await answer<{ comments: Record<string, unknown>[] }>(await publicRead(await at(n), { headers: { "X-Visitor-Key": KEY_A } }));
     const general = { createdAt: expect.any(String), question: null, mine: false };
     expect(read.comments).toEqual([
       { author: "owner", name: "Suresh", body: "For anyone.", ...general },
@@ -725,7 +753,8 @@ describe("a public thread's address", () => {
     const n = await published({ title: `Quotes "<b>&</b>" and 'more'` });
     await answer(await call(`/threads/${n}/text`, { body: { field: "summary", text: "Decided: **ship** it, see [the plan](https://example.org) and #3." } }));
     const shell = await page("/threads/");
-    const response = await page(`/threads/${n}-quotes`, { "If-None-Match": shell.headers.get("etag") ?? "" });
+    const key = await at(n);
+    const response = await page(`/threads/${key}`, { "If-None-Match": shell.headers.get("etag") ?? "" });
     expect(response.status).toBe(200);
     expect(response.headers.get("etag")).toBeNull();
     expect(response.headers.get("content-security-policy")).toBe(shell.headers.get("content-security-policy"));
@@ -733,7 +762,7 @@ describe("a public thread's address", () => {
     expect(html).toContain(`<title>#${n} Quotes &quot;&lt;b&gt;&amp;&lt;/b&gt;&quot; and &#39;more&#39; · whysosuresh.com</title>`.replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
     expect(html).toContain(`<meta property="og:title" content="#${n} Quotes &quot;&lt;b&gt;&amp;&lt;/b&gt;&quot; and &#39;more&#39; · whysosuresh.com">`);
     expect(html).toContain('<meta property="og:description" content="Decided: ship it, see the plan and #3.">');
-    expect(html).toContain(`<meta property="og:url" content="${THREADS}/threads/${n}">`);
+    expect(html).toContain(`<meta property="og:url" content="${THREADS}/threads/${key}">`);
     expect(html).toContain('<meta property="og:type" content="article">');
     expect(html).toContain('<meta name="twitter:card" content="summary">');
     expect(html).toContain('<meta name="robots" content="noindex">');
@@ -742,16 +771,16 @@ describe("a public thread's address", () => {
 
   it("describes a thread by its text's first paragraph only while the text is what it shows", async () => {
     const n = await published({ body: "First *paragraph* here.\n\nSecond one." });
-    expect(await (await page(`/threads/${n}`)).text()).toContain('<meta property="og:description" content="First paragraph here.">');
+    expect(await (await page(`/threads/${await at(n)}`)).text()).toContain('<meta property="og:description" content="First paragraph here.">');
     await savePage(n, "<!doctype html><p>A page</p>");
-    const html = await (await page(`/threads/${n}`)).text();
+    const html = await (await page(`/threads/${await at(n)}`)).text();
     expect(html).toContain('property="og:title"');
     expect(html).not.toContain("og:description");
   });
 
   it("cuts a long description at a space, with an ellipsis, under 200 characters", async () => {
     const n = await published({ body: "word ".repeat(80) });
-    const description = /og:description" content="([^"]*)"/.exec(await (await page(`/threads/${n}`)).text())?.[1] ?? "";
+    const description = /og:description" content="([^"]*)"/.exec(await (await page(`/threads/${await at(n)}`)).text())?.[1] ?? "";
     expect(description.length).toBeLessThanOrEqual(200);
     expect(description.endsWith("word…")).toBe(true);
   });
@@ -764,8 +793,86 @@ describe("a public thread's address", () => {
 
   it("goes back to the plain shell once the thread is taken back", async () => {
     const n = await published();
-    expect(await (await page(`/threads/${n}`)).text()).toContain("og:title");
+    const key = await at(n);
+    expect(await (await page(`/threads/${key}`)).text()).toContain("og:title");
     await answer(await move(n, "unpublish"));
-    expect(await (await page(`/threads/${n}`)).text()).toBe(await (await page("/threads/")).text());
+    expect(await (await page(`/threads/${key}`)).text()).toBe(await (await page("/threads/")).text());
+  });
+
+  it("is the shell byte for byte at a new public thread's number, with or without its title, and at a wrong key", async () => {
+    const n = await published({ title: "Key only" });
+    const shell = await (await page("/threads/")).text();
+    for (const path of [`/threads/${n}`, `/threads/${n}-key-only`, "/threads/0123456789abcdef0123456789abcdef"]) expect([path, await (await page(path)).text()]).toEqual([path, shell]);
+  });
+
+  it("carries an old public thread's preview at both its key and its number, each at its own address", async () => {
+    const n = await published({ title: "From before keys" });
+    const key = await at(n);
+    await (await harness.db()).prepare("UPDATE threads SET public_by_number = 1 WHERE number = ?1").bind(n).run();
+    const byKey = await (await page(`/threads/${key}`)).text();
+    const byNumber = await (await page(`/threads/${n}-from-before-keys`)).text();
+    expect(byKey).toContain(`<meta property="og:url" content="${THREADS}/threads/${key}">`);
+    expect(byNumber).toContain(`<meta property="og:url" content="${THREADS}/threads/${n}">`);
+    // A number never leads to a key, which would outlive the number once he takes the thread back.
+    expect(byNumber).not.toContain(key);
+  });
+
+  it("is the same shell for the signed-in owner at a key, so the page decides what he sees", async () => {
+    const n = await published();
+    const key = await at(n);
+    const headers = { "Cf-Access-Jwt-Assertion": token("owner") };
+    expect(await (await page(`/threads/${key}`, headers)).text()).toBe(await (await page(`/threads/${key}`)).text());
+  });
+});
+
+describe("a public thread's link", () => {
+  it("is a 32-character key given on the first publish and never changed, never in the history", async () => {
+    const n = await thread();
+    expect(await keyOf(n)).toBeNull();
+    const made = await answer<{ thread: { shareKey: string; publicByNumber: boolean } }>(await move(n, "publish"));
+    expect(made.thread.shareKey).toMatch(/^[0-9a-f]{32}$/);
+    expect(made.thread.publicByNumber).toBe(false);
+    await answer(await move(n, "unpublish"));
+    expect(await keyOf(n)).toBe(made.thread.shareKey);
+    await answer(await move(n, "publish"));
+    expect(await keyOf(n)).toBe(made.thread.shareKey);
+    expect(JSON.stringify((await shown(n)).events)).not.toContain(made.thread.shareKey);
+    const other = await published();
+    expect(await keyOf(other)).not.toBe(made.thread.shareKey);
+  });
+
+  it("opens a new public thread by its key on every call, and its number on none", async () => {
+    const n = await asking();
+    const key = await at(n);
+    const read = await answer<{ thread: Record<string, unknown> }>(await publicRead(key));
+    expect(read.thread.number).toBe(n);
+    expect(JSON.stringify(read)).not.toContain(key);
+    expect((await publicRead(`${key}/pages/1`)).status).toBe(200);
+    expect((await sendNote(key)).status).toBe(201);
+    expect((await sendAnswer(key)).status).toBe(201);
+    const closed = [await publicRead(String(n)), await publicRead(`${n}/pages/1`), await sendNote(String(n)), await sendAnswer(String(n))];
+    const priv = await thread();
+    const privateBytes = await (await publicRead(String(priv))).text();
+    for (const response of closed) expect([response.status, await response.text()]).toEqual([404, privateBytes]);
+  });
+
+  it("opens an old public thread by both until he takes it back; published again, by its key alone", async () => {
+    const n = await asking();
+    const key = await at(n);
+    await (await harness.db()).prepare("UPDATE threads SET public_by_number = 1 WHERE number = ?1").bind(n).run();
+    for (const where of [key, String(n)]) {
+      expect((await publicRead(where)).status).toBe(200);
+      expect((await publicRead(`${where}/pages/1`)).status).toBe(200);
+      expect((await sendNote(where)).status).toBe(201);
+      expect((await sendAnswer(where)).status).toBe(201);
+    }
+    expect((await answer<{ thread: { publicByNumber: boolean } }>(await call(`/threads/${n}`))).thread.publicByNumber).toBe(true);
+    await answer(await move(n, "unpublish"));
+    expect((await publicRead(key)).status).toBe(404);
+    expect((await publicRead(String(n))).status).toBe(404);
+    const again = await answer<{ thread: { shareKey: string; publicByNumber: boolean } }>(await move(n, "publish"));
+    expect(again.thread).toMatchObject({ shareKey: key, publicByNumber: false });
+    expect((await publicRead(key)).status).toBe(200);
+    expect(await (await publicRead(String(n))).text()).toBe(JSON.stringify({ reason: "no-thread" }));
   });
 });

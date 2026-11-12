@@ -400,19 +400,19 @@ describe("the wire", () => {
 
   it("reads his photo on a public thread, an invited person's on their comment, and none on a visitor's note", async () => {
     const n = await thread();
-    await answer(await call(`/threads/${n}`, "owner", { action: "publish" }));
+    const key = (await answer<{ thread: { shareKey: string } }>(await call(`/threads/${n}`, "owner", { action: "publish" }))).thread.shareKey;
     await invite(n, MEERA, "Meera");
     const mine = (await answer<{ photo: string }>(await setPhoto(JPEG))).photo;
     const hers = await givePhoto(MEERA);
     await answer(await call(`/threads/${n}/comments`, "owner", { body: "For anyone.", audience: "public" }), 201);
     await answer(await call(`/threads/${n}/comments`, { email: MEERA }, { body: "Me too.", audience: "public" }), 201);
-    const note = await harness.fetch(`${THREADS}/api/threads/${n}/notes`, {
+    const note = await harness.fetch(`${THREADS}/api/threads/${key}/notes`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: THREADS, "CF-Connecting-IP": "203.0.113.7" },
       body: new TextEncoder().encode(JSON.stringify({ body: "A note.", name: "Not Meera", email: MEERA, token: "pass" })),
     });
     expect(note.status).toBe(201);
-    const read = await answer<{ ownerPhoto: string | null; comments: Said[] }>(await harness.fetch(`${THREADS}/api/threads/${n}`));
+    const read = await answer<{ ownerPhoto: string | null; comments: Said[] }>(await harness.fetch(`${THREADS}/api/threads/${key}`));
     expect(read.ownerPhoto).toBe(mine);
     expect(read.comments.map((said) => [said.author, said.photo ?? null])).toEqual([
       ["owner", null],

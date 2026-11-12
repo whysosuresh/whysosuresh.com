@@ -264,6 +264,10 @@ function thread(row: ThreadRow, reader: Reader): { readonly [key: string]: JsonV
     replyOpenedAt: row.reply_opened_at,
     ref: row.origin_ref,
     filedLink: row.filed_link,
+    // The key in its public link, which he and the sync hand out; never to an invited person, whom an invitation
+    // opens one thread for, so they can't hand strangers a link he didn't give.
+    shareKey: row.share_key,
+    publicByNumber: row.public_by_number === 1,
   };
 }
 

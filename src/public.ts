@@ -1,16 +1,21 @@
-// The threads' public calls, outside Cloudflare Access, for a thread Suresh made public: anyone reads it with no
-// sign-in, sends him a note on it, and answers its page's questions, each shown at once, which he may drop after the
-// fact. The request's cookies are never read.
+// The threads' public calls, outside Cloudflare Access, for a thread Suresh made public: anyone with its link reads
+// it with no sign-in, sends him a note on it, and answers its page's questions, each shown at once, which he may drop
+// after the fact. The request's cookies are never read.
 //
-//   GET  /api/threads/<n>                    the thread, its page's versions and its public comments
-//                                            [X-Visitor-Key: <the visitor's key>]
-//   GET  /api/threads/<n>/pages/<version>    one version of its page, while the page is its main section
-//   POST /api/threads/<n>/notes              {"body", "name", "email", "token"}: a note, shown at once
-//   POST /api/threads/<n>/answers            {"question", "body", "name", "token", "key"}: an answer, shown at once
+//   GET  /api/threads/<at>                    the thread, its page's versions and its public comments
+//                                             [X-Visitor-Key: <the visitor's key>]
+//   GET  /api/threads/<at>/pages/<version>    one version of its page, while the page is its main section
+//   POST /api/threads/<at>/notes              {"body", "name", "email", "token"}: a note, shown at once
+//   POST /api/threads/<at>/answers            {"question", "body", "name", "token", "key"}: an answer, shown at once
 //
-// A thread is public when he made it so and it is his own (src/store.ts holds the condition in every query). Any
-// other number (private, shared with people, a site note, a told thread, missing, not a number) answers the same
-// 404 `no-thread` on each call, so the public calls tell a stranger nothing about threads they can't read. What a
+// `<at>` is the key in the thread's link (32 lowercase hex characters, given the first time he made it public and
+// kept for good), or the number of a thread that was public before links had keys, which opens it until he turns
+// Public off; a thread made public since opens by its key alone. A thread is public when he made it so and it is his
+// own (src/store.ts holds the condition in every query, by the address asked). Any other address (a wrong key, a
+// public thread's number that doesn't open it, private, shared with people, a site note, a told thread, missing,
+// neither a key nor a number) answers the same 404 `no-thread` on each call, so the public calls tell a stranger
+// nothing about threads they can't read, and a number never leads to a key: the read never says the key, because
+// the page knows the address it read by, and a key learned by an old number would outlive the number. What a
 // public thread says is a few of the fields the private call gives, under the same names, so the threads page draws
 // one shape: never its status, source, sender, origin, people, history, ids or last activity, which a visitor's
 // words move; and its comments are those written as Public that are shown, each by author and name only, with the
@@ -34,7 +39,7 @@ import { json, type JsonValue } from "./json.ts";
 import { checkBot, readAnswer, readFields, readNote, takeLimit, VISITOR_KEY_SHAPE } from "./note.ts";
 import { servePage } from "./page.ts";
 import { ownerPhotoId } from "./photos-store.ts";
-import { addAnswer, addNote, findPublic, findPublicPage, historyPublic, pagesOf, type CommentRow, type ThreadRow } from "./store.ts";
+import { addAnswer, addNote, findPublic, findPublicPage, historyPublic, pagesOf, SHARE_KEY_SHAPE, type CommentRow, type PublicAddress, type ThreadRow } from "./store.ts";
 
 /** The most comments one answer holds; `truncated` says there are more. */
 const HISTORY = 500;
@@ -55,7 +60,7 @@ function answer(status: number, body: { readonly [key: string]: JsonValue }, hea
   return json(status, body, { ...NOINDEX, ...headers });
 }
 
-/** The one answer every number that isn't a public thread gets, on every call. */
+/** The one answer every address that isn't a public thread's gets, on every call. */
 function noThread(): Response {
   return answer(404, { reason: "no-thread" });
 }
@@ -97,8 +102,8 @@ function publicComment(row: CommentRow, key: string | null): { readonly [key: st
   return row.author === "member" ? { ...said, photo: row.person_photo } : said;
 }
 
-async function read(request: Request, number: number, env: Bindings): Promise<Response> {
-  const row = await findPublic(env.DB, number);
+async function read(request: Request, address: PublicAddress, env: Bindings): Promise<Response> {
+  const row = await findPublic(env.DB, address);
   if (row === null) return noThread();
   const key = await readerKey(request);
   const [comments, pages, ownerPhoto] = await Promise.all([
@@ -120,9 +125,9 @@ async function read(request: Request, number: number, env: Bindings): Promise<Re
   });
 }
 
-async function readPage(request: Request, number: number, given: string, env: Bindings): Promise<Response> {
+async function readPage(request: Request, address: PublicAddress, given: string, env: Bindings): Promise<Response> {
   if (!NUMBER_SHAPE.test(given)) return noThread();
-  const page = await findPublicPage(env.DB, number, Number(given));
+  const page = await findPublicPage(env.DB, address, Number(given));
   if (page === null) return noThread();
   const served = await servePage(env.PAGES, page.object_key, request);
   if (served === null) return noThread();
@@ -131,31 +136,31 @@ async function readPage(request: Request, number: number, given: string, env: Bi
   return new Response(served.body, { status: served.status, headers });
 }
 
-async function sendNote(request: Request, number: number, env: Bindings): Promise<Response> {
+async function sendNote(request: Request, address: PublicAddress, env: Bindings): Promise<Response> {
   const fields = await readFields(request, env, NOTE_KEYS);
   if (fields instanceof Response) return withNoindex(fields);
   const note = readNote(fields.fields);
   if (note instanceof Response) return withNoindex(note);
   const sender = await checkBot(request, fields.secret, note.token);
   if (sender instanceof Response) return withNoindex(sender);
-  if ((await findPublic(env.DB, number)) === null) return noThread();
+  if ((await findPublic(env.DB, address)) === null) return noThread();
   const limited = await takeLimit(env, sender.network, "notes");
   if (limited !== null) return withNoindex(limited);
-  if (!(await addNote(env.DB, number, { body: note.body, name: note.name, email: note.email }))) return noThread();
+  if (!(await addNote(env.DB, address, { body: note.body, name: note.name, email: note.email }))) return noThread();
   return answer(201, {});
 }
 
-async function sendAnswer(request: Request, number: number, env: Bindings): Promise<Response> {
+async function sendAnswer(request: Request, address: PublicAddress, env: Bindings): Promise<Response> {
   const fields = await readFields(request, env, ANSWER_KEYS);
   if (fields instanceof Response) return withNoindex(fields);
   const given = readAnswer(fields.fields);
   if (given instanceof Response) return withNoindex(given);
   const sender = await checkBot(request, fields.secret, given.token);
   if (sender instanceof Response) return withNoindex(sender);
-  if ((await findPublic(env.DB, number))?.main !== "page") return noThread();
+  if ((await findPublic(env.DB, address))?.main !== "page") return noThread();
   const limited = await takeLimit(env, sender.network, "answers");
   if (limited !== null) return withNoindex(limited);
-  const kept = await addAnswer(env.DB, number, { question: given.question, body: given.body, name: given.name, key: await keyHash(given.key) });
+  const kept = await addAnswer(env.DB, address, { question: given.question, body: given.body, name: given.name, key: await keyHash(given.key) });
   return kept ? answer(201, {}) : noThread();
 }
 
@@ -177,9 +182,18 @@ export async function handlePublic(request: Request, env: Bindings): Promise<Res
   } else if (request.method !== "GET" && request.method !== "HEAD") {
     return answer(405, { reason: "method" }, { Allow: "GET" });
   }
-  if (!NUMBER_SHAPE.test(given)) return noThread();
-  const number = Number(given);
-  if (write === "notes") return sendNote(request, number, env);
-  if (write === "answers") return sendAnswer(request, number, env);
-  return version === undefined ? read(request, number, env) : readPage(request, number, version, env);
+  const address = publicAddress(given);
+  if (address === null) return noThread();
+  if (write === "notes") return sendNote(request, address, env);
+  if (write === "answers") return sendAnswer(request, address, env);
+  return version === undefined ? read(request, address, env) : readPage(request, address, version, env);
+}
+
+/**
+ * How a path names a thread: a key by its shape, a number by its, and null for anything else. The two shapes never
+ * overlap: a key is 32 characters, a number at most nine digits.
+ */
+export function publicAddress(given: string): PublicAddress | null {
+  if (SHARE_KEY_SHAPE.test(given)) return { shareKey: given };
+  return NUMBER_SHAPE.test(given) ? { number: Number(given) } : null;
 }
