@@ -26,6 +26,7 @@ const SERVED = [
   "_headers",
   "_redirects",
   "app/asks.js",
+  "app/byline.js",
   "app/journal.js",
   "app/keys.js",
   "app/markdown.js",
@@ -604,7 +605,7 @@ describe("the threads page", () => {
     expect(store.match(/fetch\(/g)).toHaveLength(2);
     expect(store).toContain("response = await fetch(path, { redirect: 'manual', credentials: 'omit'");
     expect([...store.matchAll(/readPublic\(`([^`]*)`/g)].map((m) => m[1])).toEqual(["/api/threads/${number}", "/api/asks/${encodeURIComponent(slug)}"]);
-    for (const script of ["app/threads.js", "app/keys.js", "app/markdown.js", "app/standing.js"]) expect([script, read(script).includes("fetch(")]).toEqual([script, false]);
+    for (const script of ["app/threads.js", "app/keys.js", "app/markdown.js", "app/standing.js", "app/byline.js"]) expect([script, read(script).includes("fetch(")]).toEqual([script, false]);
   });
 
   it("holds no form and no inline script or style, which the CSP would refuse", async () => {

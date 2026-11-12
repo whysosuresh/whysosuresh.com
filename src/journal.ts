@@ -24,15 +24,16 @@
 // are kept, the newest is the answer, and an empty one takes it back.
 //
 // A photo is uploaded as its own bytes, its declared length at most 4 MiB, its declared type `image/jpeg` or
-// `image/png`, and its first bytes that type's signature (415 `type` otherwise), because it is served as itself. The
+// `image/png`, and its first bytes that type's signature (415 `type` otherwise), because it is served as itself: the
+// site's one image check (src/images.ts), which his own photo and the Gravatars the hourly run copies share. The
 // object goes into the private pages bucket first, under a fresh key, then its row; when the row isn't kept the object
 // is deleted again. It is served with its stored type, `nosniff`, a sandboxing CSP, and `Cache-Control: private,
-// max-age=31536000, immutable`, because a photo never changes: the Worker's one answer of this kind beside the two
-// AGENTS.md names.
+// max-age=31536000, immutable`, because a photo never changes.
 
 import { kindOf, newestFirst, parse, photosOf, type Storyline } from "../site/app/journal.js";
 import type { Caller } from "./access.ts";
 import type { Bindings } from "./bindings.ts";
+import { PHOTO_ID, imageHeaders, readImage } from "./images.ts";
 import { json, type JsonValue } from "./json.ts";
 import { addAnswer, findPhoto, keepPhoto, listEntries, missingPhotos, readEntry, saveEntry, storylineLines, type EntryRow } from "./journal-store.ts";
 import { sameOrigin } from "./request.ts";
@@ -44,13 +45,6 @@ const BODY_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/;
 const VERSION_SHAPE = /^[1-9]\d{0,8}$/;
 /** The most storylines, and the most photos, one page may name: far beyond a day, and within D1's bound parameters. */
 const MAX_LINES = 100;
-/** A photo's id: the UUID it was given. */
-const PHOTO_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-/** The two kinds of image a page shows, each with its file's first bytes and the extension its object takes. */
-const IMAGES = [
-  { type: "image/jpeg", extension: "jpg", signature: [0xff, 0xd8, 0xff] },
-  { type: "image/png", extension: "png", signature: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] },
-] as const;
 
 /** An entry's index row as the owner and the sync read it. */
 function entryView(row: EntryRow): { readonly [key: string]: JsonValue } {
@@ -153,23 +147,10 @@ async function answer(request: Request, key: string, env: Bindings): Promise<Res
   return json(201, { answer: { id: kept.id, body: kept.body, createdAt: kept.created_at } });
 }
 
-/** Which image the bytes are, by their first bytes, when that is the type they were declared as. */
-function imageOf(bytes: Uint8Array, declared: string): (typeof IMAGES)[number] | null {
-  const image = IMAGES.find((one) => one.type === declared);
-  if (image === undefined || bytes.byteLength < image.signature.length) return null;
-  return image.signature.every((byte, index) => bytes[index] === byte) ? image : null;
-}
-
 async function upload(request: Request, env: Bindings): Promise<Response> {
-  const declared = request.headers.get("Content-Length");
-  if (declared === null || !/^\d{1,12}$/.test(declared)) return refuse(411, "length");
-  if (Number(declared) > MAX_PHOTO_BYTES) return refuse(413, "too-large");
-  const type = (request.headers.get("Content-Type") ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
-  if (!IMAGES.some((one) => one.type === type)) return refuse(415, "type");
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.byteLength > MAX_PHOTO_BYTES) return refuse(413, "too-large");
-  const image = imageOf(bytes, type);
-  if (image === null) return refuse(415, "type");
+  const read = await readImage(request, MAX_PHOTO_BYTES);
+  if (read instanceof Response) return read;
+  const { bytes, image } = read;
 
   const id = crypto.randomUUID();
   const objectKey = `journal/${id}.${image.extension}`;
@@ -188,16 +169,7 @@ async function photo(id: string, env: Bindings): Promise<Response> {
   const row = await findPhoto(env.DB, id);
   const object = row === null ? null : await env.PAGES.get(row.object_key);
   if (row === null || object === null) return refuse(404, "no-photo");
-  return new Response(object.body, {
-    status: 200,
-    headers: {
-      "Content-Type": row.type,
-      "Content-Length": String(row.bytes),
-      "Cache-Control": "private, max-age=31536000, immutable",
-      "X-Content-Type-Options": "nosniff",
-      "Content-Security-Policy": "default-src 'none'; sandbox",
-    },
-  });
+  return new Response(object.body, { status: 200, headers: imageHeaders(row.type, row.bytes, "private, max-age=31536000, immutable") });
 }
 
 /** Every storyline's trail: its name, first and last day, its latest state and mark, and every day it touched. */

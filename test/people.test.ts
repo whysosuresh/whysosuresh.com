@@ -243,6 +243,7 @@ describe("the people calls", () => {
         number: 3,
         name: "Meera",
         email: MEERA,
+        photo: null,
         createdAt: expect.any(String),
         lastContact: expect.any(String),
         invited: true,
@@ -443,7 +444,7 @@ describe("names that open a person", () => {
     expect(owners.people.map((one) => one.number)).toEqual([2]);
     const theirs = await answer<{ thread: Record<string, unknown>; people: Record<string, unknown>[] }>(await call(`/threads/${n}`, { as: { email: MEERA } }));
     expect(theirs.thread).not.toHaveProperty("senderNumber");
-    expect(theirs.people).toEqual([{ name: "Suresh", owner: true }, { name: "Meera" }]);
+    expect(theirs.people).toEqual([{ name: "Suresh", owner: true }, { name: "Meera", photo: null }]);
     const listed = await answer<{ threads: Record<string, unknown>[] }>(await call("/threads?tab=look"));
     expect(listed.threads.map((one) => one.senderNumber)).toEqual([1]);
   });

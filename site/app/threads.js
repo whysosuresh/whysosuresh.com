@@ -127,6 +127,7 @@ import {
   weekDays,
   weekOf,
 } from './journal.js';
+import { PHOTO_SHEET, VIA, photoProblem, photoSaved, startedLine, viaClaude, writerName } from './byline.js';
 import { ASKS_PATH, ASK_PATH, CLOSED_LINE, DRAFTS_HINT, agoWords, FIRST_ANSWERERS, answeredHead, answererName, answerersShown, askEventWords, askLink, askShown, countLine, foldWaiting, foldedTitle, foldedWho, markReadLabel, markedWords, nobodyLine, savedLine, stateWords, summaryNoteFor, talkLinkFor, topicLine, visitorHint } from './asks.js';
 import { DRAFT, KEY, discussionFor, helloFor, placesOf, readPageMessage, stack, takesAnswers } from './page-talk.js';
 import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, saidOn, takenLine } from './people.js';
@@ -159,7 +160,10 @@ import {
   move,
   pageAddress,
   people,
+  photoAddress,
   readJournal,
+  removePhoto,
+  setPhoto,
   saveJournal,
   publicPageAddress,
   search,
@@ -217,10 +221,10 @@ import {
  * @typedef {{ to: string, subject: string, body: string }} Draft
  * @typedef {{ title: string, summary: string, body: string }} Editing
  * @typedef {{ title: string, space: string, status: 'received' | 'act' | 'discuss', body: string }} NewDraft
- * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share' | 'discussion' | 'meeting' | 'more'} Overlay
+ * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share' | 'discussion' | 'meeting' | 'more' | 'photo'} Overlay
  * @typedef {{ number: number, people: Person[], count: number, email: string, name: string, problem: string,
  *   invited: { name: string, email: string } | null, busy: boolean }} Sharing
- * @typedef {{ label: string, sub: string, side: string, number: number | null, person: number | null, run: () => void }} FindItem
+ * @typedef {{ label: string, sub: string, side: string, number: number | null, person: number | null, photo?: string | null, run: () => void }} FindItem
  * @typedef {{ text: string } | { email: string, holder: { number: number, name: string | null, email: string | null } }} AddressProblem
  * @typedef {{ name: string, email: string, body: string, sent: boolean, busy: boolean, problem: string }} NoteForm
  * @typedef {{ name: string, key: string, kept: boolean, naming: boolean, missing: boolean }} Visitor
@@ -827,10 +831,30 @@ function plain(text) {
   return box;
 }
 
-/** The round initial beside a name. @param {'owner' | 'sync' | 'visitor' | 'member'} who @param {string} name */
-function avatar(who, name) {
-  if (who === 'owner') return el('span', { class: 't-av t-av-me', 'aria-hidden': 'true' }, ['S']);
-  if (who === 'sync') return el('span', { class: 't-av t-av-agent', 'aria-hidden': 'true' }, ['C']);
+/** The most a photo may be, as the Worker holds it (src/images.ts): 4 MiB. */
+const PHOTO_LIMIT = 4 * 1024 * 1024;
+
+/**
+ * A photo in the round, loaded from the site itself (src/photos.ts), never from where it came from.
+ * @param {string} photo its id
+ * @param {string} [size] a size class beside `t-av`, such as `t-av-lg`
+ */
+function photoMark(photo, size = '') {
+  const mark = el('img', { class: 't-av t-av-photo', src: photoAddress(photo), alt: '', loading: 'lazy', decoding: 'async' });
+  if (size) mark.classList.add(size);
+  return mark;
+}
+
+/**
+ * The round mark beside a name: their photo when they have one, else their initial. His own words and the sync's are
+ * his, so both show his mark; a visitor's is always an initial, because nobody checked the address they typed.
+ * @param {'owner' | 'sync' | 'visitor' | 'member'} who
+ * @param {string} name
+ * @param {string | null} [photo]
+ */
+function avatar(who, name, photo = null) {
+  if (photo && who !== 'visitor') return photoMark(photo);
+  if (who === 'owner' || who === 'sync') return el('span', { class: 't-av t-av-me', 'aria-hidden': 'true' }, ['S']);
   return el('span', { class: 't-av', 'aria-hidden': 'true' }, [(name.trim().charAt(0) || '?').toUpperCase()]);
 }
 
@@ -978,6 +1002,13 @@ class Threads {
     this.caller = 'owner';
     /** The signed-in address, which Gmail's link names. */
     this.me = '';
+    /** His photo, which his words and the sync's show, and an invited reader's own; null while there is none. @type {string | null} */
+    this.ownerPhoto = null;
+    /** @type {string | null} */
+    this.myPhoto = null;
+    /** His photo sheet: a save on its way, and why the last one wasn't kept. */
+    this.photoBusy = false;
+    this.photoProblem = '';
     /** Who the comment being written is for, when the writer chose; null for the thread's own default. @type {Audience | null} */
     this.audience = null;
     /** A public thread, as the public view shows it. @type {PublicShown | null} */
@@ -1145,6 +1176,8 @@ class Threads {
       const who = await me();
       this.caller = who.caller === 'member' ? 'member' : 'owner';
       this.me = who.email ?? '';
+      this.ownerPhoto = who.ownerPhoto ?? null;
+      this.myPhoto = who.photo ?? null;
       if (this.caller === 'member' && isHis(route)) this.route = { view: 'today' };
       const person = this.caller === 'owner' && route.view === 'person' ? this.loadPerson(route.number) : Promise.resolve();
       await Promise.all([this.loadAll(), thread, person]);
@@ -1283,7 +1316,10 @@ class Threads {
    * keys' owner sheet; the sidebar's foot names who is signed in.
    */
   applyCaller() {
-    if (!this.member) return;
+    if (!this.member) {
+      this.drawFoot();
+      return;
+    }
     for (const owners of document.querySelectorAll('.t-side-new, .t-tabbar [data-go="list"], .t-tabbar [data-act="more"], .t-tabbar [data-act="new"]')) {
       if (owners instanceof HTMLElement) owners.hidden = true;
     }
@@ -1294,7 +1330,20 @@ class Threads {
     if (today) today.replaceChildren(icon('people'), 'Yours');
     const who = document.querySelector('.t-side-who');
     if (who) who.replaceChildren(this.me, el('small', {}, ['Signed in']));
-    document.querySelector('.t-side-foot .t-av')?.replaceWith(avatar('member', this.me));
+    // Their foot names them; only his opens a photo sheet.
+    const mine = document.querySelector('.t-side-me');
+    if (mine) mine.replaceWith(el('span', { class: 't-side-me' }, [...mine.childNodes]));
+    this.drawFoot();
+  }
+
+  /** The sidebar's foot: the photo, or the initial, of whoever is signed in. */
+  drawFoot() {
+    document.querySelector('.t-side-me .t-av')?.replaceWith(this.ownFace());
+  }
+
+  /** The mark of whoever is signed in, beside what they are writing. */
+  ownFace() {
+    return this.member ? avatar('member', this.me, this.myPhoto) : avatar('owner', '', this.ownerPhoto);
   }
 
   /** @param {number} number */
@@ -1742,13 +1791,17 @@ class Threads {
     }
   }
 
-  /** The rooms that don't fit on his phone's bar, in a sheet: People, Meetings, Asks and Journal. */
+  /**
+   * The rooms that don't fit on his phone's bar, in a sheet: People, Meetings, Asks and Journal; and his photo, whose
+   * sheet the sidebar's foot opens where there is a sidebar.
+   */
   openMore() {
     const picks = [
       el('a', { class: 't-pick', href: PEOPLE, 'data-go': 'people' }, [icon('person'), 'People']),
       el('a', { class: 't-pick', href: MEETINGS, 'data-go': 'meetings' }, [icon('cal'), 'Meetings']),
       el('a', { class: 't-pick', href: ASKS, 'data-go': 'asks' }, [icon('ask'), 'Asks']),
       el('a', { class: 't-pick', href: JOURNAL_PATH, 'data-go': 'journal' }, [icon('book'), 'Journal']),
+      el('button', { type: 'button', class: 't-pick t-pick-photo', 'data-act': 'photo' }, [avatar('owner', '', this.ownerPhoto), PHOTO_SHEET.title]),
     ];
     this.openOverlay('more', 'More rooms', 'narrow', [this.sheetHead('More'), el('div', { class: 't-sheet-body' }, [el('div', { class: 't-pick-list' }, picks)])]);
     picks[0]?.focus();
@@ -2860,7 +2913,7 @@ class Threads {
         ? [this.nameNode(thread.senderNumber, sender), ' sent this from the site']
         : thread.source === 'told'
           ? [this.nameNode(thread.senderNumber, sender), ' told you this']
-          : [this.shown.events[0]?.actor === 'owner' ? 'You started this' : 'You said this; the recorder sync wrote it down'];
+          : [startedLine(this.shown.events[0]?.actor, this.member)];
     // An ask's summary is his private label: strangers read its title alone, so the head says so.
     const summaryNote = summaryNoteFor(askOf(thread) !== null, this.member);
     const summary = thread.summary
@@ -3424,10 +3477,10 @@ class Threads {
     const found = this.people.filter((one) => !draft.chosen.includes(one.number) && (words === '' || nameOf(one).toLowerCase().includes(words))).slice(0, PICKS);
     const exact = this.people.some((one) => nameOf(one).toLowerCase() === words) || draft.named.some((name) => name.toLowerCase() === words);
     const lengths = [['', 'Not said'], ...LENGTHS.map((minutes) => [String(minutes), lengthWords(minutes)])];
-    /** @param {string} name @param {boolean} known @param {string} act @param {string} id */
-    const chosenChip = (name, known, act, id) =>
+    /** @param {string} name @param {boolean} known @param {string} act @param {string} id @param {string | null} [photo] */
+    const chosenChip = (name, known, act, id, photo = null) =>
       el('span', { class: 't-attendee' }, [
-        el('span', { class: 't-av', 'aria-hidden': 'true' }, [initials(name)]),
+        photo ? photoMark(photo) : el('span', { class: 't-av', 'aria-hidden': 'true' }, [initials(name)]),
         name,
         ...(known ? [] : [el('small', {}, ['someone new'])]),
         el('button', { type: 'button', 'data-act': act, 'data-id': id, 'aria-label': `Take ${name} off` }, [icon('x')]),
@@ -3436,7 +3489,7 @@ class Threads {
       ...draft.chosen.map((number) => {
         const someone = this.people.find((one) => one.number === number);
         const named = thread.meeting?.attendees.find((one) => one.number === number)?.name;
-        return chosenChip(someone ? nameOf(someone) : named?.trim() || `Person #${number}`, true, 'meet-unchoose', String(number));
+        return chosenChip(someone ? nameOf(someone) : named?.trim() || `Person #${number}`, true, 'meet-unchoose', String(number), someone?.photo ?? null);
       }),
       ...draft.named.map((name, i) => chosenChip(name, false, 'meet-unname', String(i))),
     ];
@@ -3654,10 +3707,10 @@ class Threads {
     return entries.map((entry) => entry.node);
   }
 
-  /** @param {string} actor @param {Thread} thread */
+  /** Who an event or a comment is by: his own and the sync's under his name (byline.js). @param {string} actor @param {Thread} thread */
   actorName(actor, thread) {
-    if (actor === 'owner') return this.member ? 'Suresh' : 'You';
-    if (actor === 'sync') return 'Claude';
+    const his = writerName(actor, this.member);
+    if (his !== null) return his;
     if (actor === 'import') return 'The inbox';
     return thread.senderName?.trim() || 'Someone';
   }
@@ -3779,7 +3832,7 @@ class Threads {
     }
     const line = el('div', { class: 't-ev' }, [
       el('span', { class: 't-pip' }, [icon(name)]),
-      el('span', { class: 't-ev-text' }, [el('b', {}, [this.actorName(event.actor, thread)]), ' ', ...words]),
+      el('span', { class: 't-ev-text' }, [el('b', {}, [this.actorName(event.actor, thread)]), ' ', ...words, ...(viaClaude(event.actor) ? [' ', el('span', { class: 't-via' }, [`· ${VIA}`])] : [])]),
       el('time', { datetime: event.at }, [when(event.at)]),
     ]);
     if (before !== undefined) {
@@ -3831,11 +3884,11 @@ class Threads {
     const email = who === 'visitor' && !this.member && said.senderEmail ? [el('span', { class: 't-cm-from' }, [`${said.senderEmail} · only you see this`])] : [];
     return [
       el('div', { class: 't-cm', 'data-audience': said.audience }, [
-        avatar(who, name),
+        avatar(who, name, who === 'member' ? (said.photo ?? null) : this.ownerPhoto),
         el('div', { class: 't-cm-box' }, [
           el('div', { class: 't-cm-head' }, [
             el('b', {}, [who === 'member' || who === 'visitor' ? this.nameNode(said.personNumber, name) : name]),
-            ...(who === 'sync' ? [el('span', { class: 't-chip' }, ['Recorder sync'])] : []),
+            ...(viaClaude(said.author) ? [el('span', { class: 't-via' }, [VIA])] : []),
             ...(onlyMe ? [el('span', { class: 't-chip' }, [icon('lock'), 'Only me'])] : []),
             ...(said.audience === 'public' ? [publicChip()] : []),
             ...email,
@@ -3904,7 +3957,7 @@ class Threads {
     const note = el('span', { class: 't-note' }, [onlyMe ? 'Only you and Claude read this reply.' : 'Everyone in the thread reads this reply.']);
     if (kind === 't-disc-reply') return el('form', { class: 't-disc-reply', 'data-submit': 'reply', 'data-parent': said.id }, [box, el('div', { class: 't-disc-bar' }, [note, ...send])]);
     return el('form', { class: 't-composer', 'data-submit': 'reply', 'data-parent': said.id, 'data-audience': said.audience }, [
-      this.member ? avatar('member', this.me) : avatar('owner', ''),
+      this.ownFace(),
       el('div', { class: 't-composer-box' }, [box, el('div', { class: 't-composer-bar' }, [note, ...send])]),
     ]);
   }
@@ -3927,7 +3980,7 @@ class Threads {
     const writing = this.replyingTo === said.id;
     const message = (/** @type {ThreadComment} */ one) =>
       el('div', { class: 't-msg' }, [
-        avatar(one.author === 'owner' ? 'owner' : 'member', one.name ?? ''),
+        avatar(one.author === 'owner' ? 'owner' : 'member', one.name ?? '', one.author === 'owner' ? this.ownerPhoto : (one.photo ?? null)),
         el('div', {}, [
           el('div', { class: 't-msg-head' }, [el('b', {}, [this.writerOf(one, thread)]), el('time', { datetime: one.createdAt }, [when(one.createdAt)])]),
           el('div', { class: 't-msg-body' }, [prose(one.body)]),
@@ -4101,7 +4154,7 @@ class Threads {
           ]
         : [];
     return el('form', { class: 't-composer', 'data-submit': 'comment', 'data-audience': audience }, [
-      this.member ? avatar('member', this.me) : avatar('owner', ''),
+      this.ownFace(),
       el('div', { class: 't-composer-box' }, [
         box,
         el('div', { class: 't-composer-bar' }, [
@@ -4138,8 +4191,14 @@ class Threads {
     return [fromWords(thread)];
   }
 
-  /** A person's round mark: their initials, dashed while they have no address. @param {Someone} someone @param {boolean} large */
+  /**
+   * A person's round mark: their photo when the site has one (invited people's Gravatars), else their initials, dashed
+   * while they have no address.
+   * @param {Someone} someone
+   * @param {boolean} large
+   */
   personMark(someone, large) {
+    if (someone.photo) return photoMark(someone.photo, large ? 't-av-lg' : '');
     const letters = initials(nameOf(someone));
     if (large) return someone.email === null ? el('span', { class: 't-av t-av-lg t-av-faint', 'aria-hidden': 'true' }, [letters]) : el('span', { class: 't-av t-av-lg', 'aria-hidden': 'true' }, [letters]);
     return someone.email === null ? el('span', { class: 't-av t-av-faint', 'aria-hidden': 'true' }, [letters]) : el('span', { class: 't-av', 'aria-hidden': 'true' }, [letters]);
@@ -4585,6 +4644,65 @@ class Threads {
     picks[0]?.focus();
   }
 
+  /** His photo sheet: the photo he has, or his initial, with Choose and, while he has one, Remove. */
+  openPhoto() {
+    if (this.member) return;
+    const has = this.ownerPhoto !== null;
+    const busy = this.photoBusy ? { disabled: '' } : {};
+    this.openOverlay('photo', PHOTO_SHEET.title, 'narrow', [
+      this.sheetHead(PHOTO_SHEET.title),
+      el('div', { class: 't-sheet-body t-photo' }, [
+        el('div', { class: 't-photo-preview' }, [has && this.ownerPhoto ? photoMark(this.ownerPhoto, 't-av-xl') : el('span', { class: 't-av t-av-me t-av-xl', 'aria-hidden': 'true' }, ['S']), el('p', {}, [PHOTO_SHEET.shows])]),
+        el('p', { class: 't-note' }, [PHOTO_SHEET.rule]),
+        ...(this.photoProblem ? [el('p', { class: 't-err', role: 'alert' }, [this.photoProblem])] : []),
+        el('input', { type: 'file', class: 't-photo-file', id: 'photo-file', accept: 'image/jpeg,image/png', 'data-change': 'photo', tabindex: '-1', 'aria-hidden': 'true' }),
+      ]),
+      el('div', { class: 't-sheet-foot' }, [
+        ...(has ? [el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'photo-remove', ...busy }, [PHOTO_SHEET.remove])] : []),
+        el('span', { class: 't-grow' }),
+        el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'close' }, [PHOTO_SHEET.cancel]),
+        el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'photo-choose', ...busy }, [PHOTO_SHEET.choose(has)]),
+      ]),
+    ]);
+    const choose = this.dialog.querySelector('[data-act="photo-choose"]');
+    if (choose instanceof HTMLElement) choose.focus();
+  }
+
+  /**
+   * Makes the chosen file his photo, or takes his photo down when there is none. A file that isn't a JPEG or PNG, or is
+   * over 4 MB, is refused here in the words the Worker's own refusal gets, before anything is sent.
+   * @param {File | null} file
+   */
+  async savePhoto(file) {
+    if (this.photoBusy) return;
+    if (file !== null && file.type !== 'image/jpeg' && file.type !== 'image/png') return this.photoRefused('type');
+    if (file !== null && file.size > PHOTO_LIMIT) return this.photoRefused('too-large');
+    this.photoBusy = true;
+    this.photoProblem = '';
+    if (this.overlay === 'photo') this.openPhoto();
+    try {
+      this.ownerPhoto = file === null ? await removePhoto() : await setPhoto(file);
+    } catch (error) {
+      this.photoBusy = false;
+      if (error instanceof Failed) return this.photoRefused(error.message);
+      if (this.overlay === 'photo') this.openPhoto();
+      this.fail(error, photoProblem('network'));
+      return;
+    }
+    this.photoBusy = false;
+    this.closeOverlay();
+    this.drawFoot();
+    this.keepScroll = true;
+    this.render();
+    this.say(photoSaved(this.ownerPhoto !== null), null);
+  }
+
+  /** Says in the sheet why a photo wasn't kept. @param {string} reason */
+  photoRefused(reason) {
+    this.photoProblem = photoProblem(reason);
+    if (this.overlay === 'photo') this.openPhoto();
+  }
+
   openKeys() {
     const groups = (this.member ? MEMBER_SHEET : SHEET).map((group) =>
       el('div', {}, [
@@ -4772,6 +4890,7 @@ class Threads {
         side: `#${someone.number}`,
         number: null,
         person: someone.number,
+        photo: someone.photo ?? null,
         run: () => void this.go({ view: 'person', number: someone.number }),
       })),
       ...threads.map((thread) => ({ label: titleOf(thread), sub: snippet(thread), side: ago(thread.activityAt), number: thread.number, person: null, run: () => this.openThread(thread.number) })),
@@ -4793,7 +4912,7 @@ class Threads {
       nodes.push(
         el('button', { type: 'button', class: 't-find-item', role: 'option', id: `find-${i}`, 'data-act': 'found', 'data-index': String(i), 'aria-selected': String(i === 0) }, [
           item.person !== null
-            ? el('span', { class: 't-num' }, [el('span', { class: 't-av', 'aria-hidden': 'true' }, [initials(item.label)])])
+            ? el('span', { class: 't-num' }, [item.photo ? photoMark(item.photo) : el('span', { class: 't-av', 'aria-hidden': 'true' }, [initials(item.label)])])
             : el('span', { class: 't-num' }, item.number === null ? [icon(item.label.startsWith('New') ? 'plus' : item.label.startsWith('Show') ? 'keys' : 'move')] : [`#${item.number}`]),
           el('span', { class: 't-find-text' }, [el('span', {}, marked(item.label)), ...(item.sub ? [el('small', {}, marked(item.sub))] : [])]),
           el('span', { class: 't-find-side' }, item.side.length === 1 ? [kbd(item.side)] : [item.side]),
@@ -5005,10 +5124,10 @@ class Threads {
       el('button', { type: 'submit', class: 't-btn t-btn-primary', ...(sharing.busy ? { disabled: '' } : {}) }, ['Invite ', kbd('↵')]),
     ]);
     const rows = [
-      el('div', { class: 't-prow' }, [avatar('owner', ''), el('span', { class: 't-prow-name' }, [el('b', {}, ['You']), el('small', {}, ['owner'])]), el('span', { class: 't-prow-role' }, ['Everything'])]),
+      el('div', { class: 't-prow' }, [avatar('owner', '', this.ownerPhoto), el('span', { class: 't-prow-name' }, [el('b', {}, ['You']), el('small', {}, ['owner'])]), el('span', { class: 't-prow-role' }, ['Everything'])]),
       ...sharing.people.map((person) =>
         el('div', { class: 't-prow' }, [
-          avatar('member', person.name ?? ''),
+          avatar('member', person.name ?? '', person.photo ?? null),
           el('span', { class: 't-prow-name' }, [el('b', {}, [person.name ?? 'Someone']), el('small', {}, [person.email ?? ''])]),
           el('button', { type: 'button', class: 't-text-btn', 'data-act': 'share-remove', 'data-person': person.id ?? '', ...(sharing.busy ? { disabled: '' } : {}) }, ['Remove']),
         ]),
@@ -5223,7 +5342,7 @@ class Threads {
       const who = said.author === 'owner' ? 'owner' : said.author === 'member' ? 'member' : 'visitor';
       const name = who === 'owner' ? 'Suresh' : said.name?.trim() || 'Someone';
       return el('div', { class: 't-cm' }, [
-        avatar(who, name),
+        avatar(who, name, who === 'owner' ? (shown.ownerPhoto ?? null) : who === 'member' ? (said.photo ?? null) : null),
         el('div', { class: 't-cm-box' }, [
           el('div', { class: 't-cm-head' }, [el('b', {}, [name]), el('time', { datetime: said.createdAt }, [day(said.createdAt)])]),
           el('div', { class: 't-cm-body' }, [who === 'visitor' ? plain(said.body) : prose(said.body)]),
@@ -5903,6 +6022,18 @@ class Threads {
       case 'more':
         this.openMore();
         break;
+      case 'photo':
+        this.photoProblem = '';
+        this.openPhoto();
+        break;
+      case 'photo-choose': {
+        const file = this.dialog.querySelector('#photo-file');
+        if (file instanceof HTMLInputElement) file.click();
+        break;
+      }
+      case 'photo-remove':
+        void this.savePhoto(null);
+        break;
       case 'meeting':
         if (thread && this.route.view === 'thread') this.openMeeting(thread);
         break;
@@ -6244,6 +6375,12 @@ class Threads {
   /** @param {Event} event */
   onChange(event) {
     const target = event.target;
+    if (target instanceof HTMLInputElement && target.dataset.change === 'photo') {
+      // A chosen file, never none: taking his photo down is Remove's alone.
+      const file = target.files?.[0];
+      if (file) void this.savePhoto(file);
+      return;
+    }
     if (target instanceof HTMLSelectElement && target.dataset.change === 'space') {
       const thread = this.target();
       if (thread && target.value !== '' && target.value !== thread.space) void this.makeMove(thread, { action: 'space', space: target.value });

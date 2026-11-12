@@ -9,6 +9,7 @@
 // with (src/evaluate.ts), which Access calls itself and so are outside the application; a thread Suresh made public,
 // read and a note sent on it under /api/threads/ (src/public.ts), outside Access too, with no sign-in; an ask, a
 // questions page anyone answers by its link, read and answered under /api/asks/ (src/asks.ts), outside Access too;
+// an avatar's photo under /api/photos/ (src/photos.ts), outside Access too, because a public thread shows his photo;
 // and the threads page (src/pages.ts) at its root, Today, the door everyone signed in enters by, at the rooms
 // (/meetings, /asks, /people and a person under it, /journal and everything under it), at an ask's own address
 // (/ask/<slug>) and at every other path under /threads/, handed over from site/ with no sign-in, because Access
@@ -16,7 +17,8 @@
 // other path the code runs for answers the same JSON 404 on either host, so the threads' old addresses on the home
 // page's host (/threads/42, /ask/<slug>, /journal) lead nowhere. It also runs every hour on a cron trigger
 // (wrangler.jsonc): `scheduled` fetches his videos and the products' releases into the home page's list
-// (src/outside.ts), and awaits the run itself, so Cloudflare's record of each run says how it ended.
+// (src/outside.ts) and, beside it, looks up the Gravatars of people he invited (src/photos.ts), each failing on its own
+// without stopping the other, and awaits both, so Cloudflare's record of each run says how it ended.
 
 import { isThreadsHost } from "../site/hosts.js";
 import { handleAsks } from "./asks.ts";
@@ -26,6 +28,7 @@ import { FEED_PATH, UPDATES_PATH, handleFeed, handleHome, handleUpdates } from "
 import { json } from "./json.ts";
 import { handleThumb, refreshOutside } from "./outside.ts";
 import { handlePage } from "./pages.ts";
+import { refreshPhotos, servePhoto } from "./photos.ts";
 import { handlePublic } from "./public.ts";
 import { handleTalk } from "./talk.ts";
 import { handleThreads } from "./threads.ts";
@@ -56,6 +59,7 @@ function threads(request: Request, env: Bindings, pathname: string): Promise<Res
   }
   if (pathname.startsWith("/api/threads/")) return handlePublic(request, env);
   if (pathname.startsWith("/api/asks/")) return handleAsks(request, env);
+  if (pathname.startsWith("/api/photos/")) return servePhoto(request, env);
   if (pathname.startsWith("/threads/api/")) return handleThreads(request, env);
   if (pathname === "/" || pathname.startsWith("/threads/") || pathname.startsWith("/people/") || pathname === "/meetings" || pathname === "/people") return handlePage(request, env);
   if (pathname === "/asks" || pathname.startsWith("/ask/")) return handlePage(request, env);
@@ -69,6 +73,8 @@ export default {
     return isThreadsHost(hostname) ? threads(request, env, pathname) : home(request, env, pathname);
   },
   async scheduled(_controller, env): Promise<void> {
-    await refreshOutside(env);
+    const [outside, photos] = await Promise.allSettled([refreshOutside(env), refreshPhotos(env)]);
+    if (outside.status === "rejected") throw outside.reason;
+    if (photos.status === "rejected") throw photos.reason;
   },
 } satisfies ExportedHandler<Bindings>;

@@ -165,7 +165,7 @@ export const DRAFTS_HINT = 'Only you can open one';
  * @param {boolean} member whether an invited person reads it
  */
 export function summaryNoteFor(asAsk, member) {
-  return asAsk && !member ? 'only you see this; people answering see the title alone' : 'kept current by the recorder sync';
+  return asAsk && !member ? 'only you see this; people answering see the title alone' : 'kept current via Claude';
 }
 
 /** The toast after Mark read. @param {number} marked */
