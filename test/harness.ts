@@ -18,7 +18,8 @@
 // its own evaluation key (`EVALUATION_KEY`, whose public half the tests verify the answers with). The home page's
 // outside sources are played as well (`outside`): his channel's feed (test/fixtures/youtube-feed.xml, made up),
 // each product's newest release on GitHub's API, and a video's picture (test/fixtures/thumb.jpg), each of which a test
-// may switch to another status, a hang, a malformed or oversized body. `startHarness({ triggers: true })` lets a test
+// may switch to another status, a hang, a malformed or oversized body; and Gravatar, by the hash it is asked for,
+// which answers 404 (no Gravatar) unless a test plays an answer for that hash. `startHarness({ triggers: true })` lets a test
 // fire the Worker's hourly run (`scheduled`) through Miniflare's trigger path. Every other host the Worker tries is
 // refused and recorded.
 
@@ -150,8 +151,12 @@ export interface PlayedOutside {
   readonly releases: Map<string, Played>;
   /** A video's picture, by its id: test/fixtures/thumb.jpg by default. */
   readonly pictures: Map<string, Played>;
-  /** Every outside address asked, in order: `youtube`, `release:<owner>/<repo>` or `picture:<id>`. */
+  /** A person's Gravatar, by the hash it is asked for: 404, no Gravatar, by default; a played 200 is a PNG. */
+  readonly gravatars: Map<string, Played>;
+  /** Every outside address asked, in order: `youtube`, `release:<owner>/<repo>`, `picture:<id>` or `gravatar:<hash>`. */
   readonly asked: string[];
+  /** Every Gravatar address asked, whole, in order, so a test can say what one carries. */
+  readonly gravatarUrls: string[];
   /** Back to the defaults. */
   reset(): void;
 }
@@ -183,12 +188,16 @@ function playOutside(): PlayedOutside {
     youtube: {},
     releases: new Map(),
     pictures: new Map(),
+    gravatars: new Map(),
     asked: [],
+    gravatarUrls: [],
     reset() {
       played.youtube = {};
       played.releases.clear();
       played.pictures.clear();
+      played.gravatars.clear();
       played.asked.length = 0;
+      played.gravatarUrls.length = 0;
     },
   };
   return played;
@@ -252,7 +261,7 @@ function migrations(): { number: string; statements: string[] }[] {
 }
 
 /** The tables `reset` empties, children before the tables they name, because D1 checks foreign keys. */
-const TABLES = ["outside_items", "events", "comments", "members", "attendees", "pages", "threads", "people", "talk_days", "talk_senders", "answer_senders", "ask_thread_senders", "ask_answer_senders", "journal_answers", "journal_storylines", "journal_entries", "journal_versions", "journal_photos", "now_lines"];
+const TABLES = ["outside_items", "events", "comments", "members", "attendees", "pages", "threads", "people", "talk_days", "talk_senders", "answer_senders", "ask_thread_senders", "ask_answer_senders", "journal_answers", "journal_storylines", "journal_entries", "journal_versions", "journal_photos", "now_lines", "owner_photos", "photos"];
 
 /**
  * The Worker's evaluation key in the harness, as the deploy hands it over (an RSA private key as a JWK), and its
@@ -391,6 +400,17 @@ export async function startHarness(options: { secret?: string; owner?: string; t
     if (url.host === "i.ytimg.com" && picture !== undefined && request.method === "GET") {
       outside.asked.push(`picture:${picture}`);
       return playedAnswer(outside.pictures.get(picture) ?? {}, THUMB, "image/jpeg");
+    }
+    const gravatar = /^\/avatar\/([0-9a-f]{64})$/.exec(url.pathname)?.[1];
+    if (url.host === "gravatar.com" && gravatar !== undefined && request.method === "GET") {
+      outside.asked.push(`gravatar:${gravatar}`);
+      outside.gravatarUrls.push(url.href);
+      const played = outside.gravatars.get(gravatar);
+      if (played === undefined) return new RuntimeResponse("Not Found", { status: 404 });
+      const body = played.body ?? THUMB;
+      // A played answer names an image's type by its bytes, as Gravatar does, and anything else as text.
+      const type = body instanceof Uint8Array && body[0] === 0x89 ? "image/png" : body instanceof Uint8Array ? "image/jpeg" : "text/html";
+      return playedAnswer(played, body, type);
     }
     return new RuntimeResponse("refused by the test harness", { status: 599 });
   }

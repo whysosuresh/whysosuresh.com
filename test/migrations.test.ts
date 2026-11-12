@@ -22,7 +22,9 @@
 // the asks' two budgets start empty. For 0018, the home page's feed: every earlier thread, public ones included, is
 // off the home page, so nothing he made public before is listed without him, and there is no Now line. For 0019, what
 // arrives from outside: it starts empty, so nothing is listed before the first hourly run, a row is a video or a
-// release, its picture flag is 0 or 1 and starts at 0, an id is kept once, and the home page reads it by date.
+// release, its picture flag is 0 or 1 and starts at 0, an id is kept once, and the home page reads it by date. For
+// 0020, the avatars' photos: nobody has a photo or has been looked up yet, he has none, a person's photo is one that
+// is there, and a photo's object is kept once.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -606,5 +608,26 @@ describe("0019, what arrives from outside", () => {
     const index = await database.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'outside_items_published'").first<{ sql: string }>();
     expect(index?.sql).toMatch(/\(published_at\)$/);
     expect((await (await harness.fetch(`${SITE}/`)).text())).toContain("An episode");
+  });
+});
+
+describe("0020, the avatars' photos", () => {
+  it("starts with no photo and nobody looked up, his history empty, and a person's photo one that is there", async () => {
+    harness = await startHarness({ through: "0019" });
+    const database = await harness.db();
+    await database.prepare("INSERT INTO people (id, number, email, name, created_at) VALUES ('p1', 1, 'meera@example.com', 'Meera', '2026-11-01T00:00:00.000Z')").run();
+    await harness.migrate();
+    expect(await database.prepare("SELECT photo_id, photo_checked_at FROM people").first()).toEqual({ photo_id: null, photo_checked_at: null });
+    expect(await database.prepare("SELECT COUNT(*) AS n FROM photos").first<{ n: number }>()).toEqual({ n: 0 });
+    expect(await database.prepare("SELECT COUNT(*) AS n FROM owner_photos").first<{ n: number }>()).toEqual({ n: 0 });
+    await expect(database.prepare("UPDATE people SET photo_id = 'none-such' WHERE id = 'p1'").run()).rejects.toThrow(/FOREIGN KEY/);
+    const photo = (id: string, key: string): Promise<unknown> =>
+      database.prepare("INSERT INTO photos (id, object_key, type, bytes, created_at) VALUES (?1, ?2, 'image/png', 9, '2026-11-01T00:00:00.000Z')").bind(id, key).run();
+    await photo("a", "photos/a.png");
+    await expect(photo("b", "photos/a.png")).rejects.toThrow(/UNIQUE/);
+    await database.prepare("UPDATE people SET photo_id = 'a' WHERE id = 'p1'").run();
+    // His history names a photo that may since be gone, so it holds no key on it, and a null is no photo.
+    await database.prepare("INSERT INTO owner_photos (photo_id, set_at) VALUES ('gone', '2026-11-01T00:00:00.000Z'), (NULL, '2026-11-02T00:00:00.000Z')").run();
+    expect(await database.prepare("SELECT photo_id FROM owner_photos ORDER BY id DESC LIMIT 1").first()).toEqual({ photo_id: null });
   });
 });

@@ -148,8 +148,8 @@ describe("Mark read and an ask's notes", () => {
 
   it("says the summary is his alone only to him, on an ask's own thread", () => {
     expect(summaryNoteFor(true, false)).toBe("only you see this; people answering see the title alone");
-    expect(summaryNoteFor(true, true)).toBe("kept current by the recorder sync");
-    expect(summaryNoteFor(false, false)).toBe("kept current by the recorder sync");
+    expect(summaryNoteFor(true, true)).toBe("kept current via Claude");
+    expect(summaryNoteFor(false, false)).toBe("kept current via Claude");
     expect(DRAFTS_HINT).toBe("Only you can open one");
   });
 });
