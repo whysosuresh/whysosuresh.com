@@ -2,12 +2,15 @@
 // and a one-line name, never his own address and never someone already in the thread; the sheet's lines count
 // comments and seats in plain words; and the invitation he sends from his own Gmail names the thread and carries its
 // `?invite` link, with no one else's address in it. The Public switch: a thread is Public, Invited or Private; only his
-// own threads may be public, and the switch says why not for a site note or a told thread; and a reply to a
+// own threads may be public, and the switch says why not for a site note or a told thread; on, it shows the link by
+// its key once the thread has one and says its number opens it only for him and the people above, or, for a thread
+// public before links had keys, that its number still opens it for anyone until Public goes off; off, it says a link
+// it had comes back the same; a copied link's toast cuts the key to fit; and a reply to a
 // visitor's note on a public thread is a draft to them alone, about that thread, quoting their words. The home page
 // switch: only a public thread can be listed, and it says what everyone sees once it is.
 
 import { describe, expect, it } from "vitest";
-import { SEATS, addressOf, feedLines, invitation, invitationProblem, isAddress, levelOf, listed, noteReply, publicLines, seatsLine, seesLines } from "../site/app/share.js";
+import { SEATS, addressOf, feedLines, invitation, invitationProblem, isAddress, levelOf, linkShown, listed, noteReply, publicLines, seatsLine, seesLines } from "../site/app/share.js";
 
 describe("an invitation's check", () => {
   it("takes an address the Worker takes, for an invitation and a person's page alike", () => {
@@ -75,19 +78,48 @@ describe("the Public switch", () => {
     expect([levelOf("2026-11-05T00:00:00.000Z", 0), levelOf("2026-11-05T00:00:00.000Z", 2), levelOf(null, 2), levelOf(null, 0)]).toEqual(["Public", "Public", "Invited", "Private"]);
   });
 
-  it("says anyone can read it at the thread's address, and what stays his", () => {
-    const on = publicLines("https://hey.whysosuresh.com", 57, "self", true);
-    expect(on).toMatchObject({ label: "Public: anyone can read it at hey.whysosuresh.com/threads/57", allowed: true });
+  const ORIGIN = "https://hey.whysosuresh.com";
+  const KEY = "3f9a07c2e1b84d6a9c5f20e7b13dc41e";
+
+  it("says anyone with its link can read it, shows the link by its key, and what stays his", () => {
+    const on = publicLines(ORIGIN, { number: 57, source: "self", shareKey: KEY, publicByNumber: false }, true);
+    expect(on).toMatchObject({ label: "Public: anyone with its link can read it", link: `hey.whysosuresh.com/threads/${KEY}`, allowed: true });
+    expect(on.note).toContain("Anyone with the link reads");
+    expect(on.note).toContain("Its number, #57, opens it only for you and the people above.");
     expect(on.note).toContain("Search engines are told not to list it.");
     expect(on.note).toContain("Only me notes");
-    expect(publicLines("https://hey.whysosuresh.com", 57, "self", false).note).toBe("Off: only you and the people above read it.");
+    expect(on.note).not.toContain("tries the number");
+  });
+
+  it("shows no link until the Worker has given the key, on a first publish", () => {
+    expect(publicLines(ORIGIN, { number: 57, source: "self", shareKey: null }, true).link).toBeNull();
+  });
+
+  it("says an old thread's number still opens it for anyone, until Public goes off", () => {
+    const on = publicLines(ORIGIN, { number: 41, source: "self", shareKey: KEY, publicByNumber: true }, true);
+    expect(on.note).toContain("It was public before links had keys, so its number, #41, still opens it for anyone. Turn Public off and on again to make the link the only way in.");
+    expect(on.note).not.toContain("opens it only for you");
+  });
+
+  it("says off, and that a link it had comes back the same", () => {
+    expect(publicLines(ORIGIN, { number: 57, source: "self" }, false)).toMatchObject({ note: "Off: only you and the people above read it.", link: null });
+    expect(publicLines(ORIGIN, { number: 57, source: "self", shareKey: KEY }, false)).toMatchObject({
+      note: "Off: only you and the people above read it. Turn it on again and its link works again, the same link.",
+      link: null,
+    });
+  });
+
+  it("cuts a key in a copied link's toast to its first and last four, and leaves a number's alone", () => {
+    expect(linkShown(ORIGIN, `/threads/${KEY}`)).toBe("hey.whysosuresh.com/threads/3f9a…c41e");
+    expect(linkShown(ORIGIN, `/threads/${KEY}?full`)).toBe("hey.whysosuresh.com/threads/3f9a…c41e?full");
+    expect(linkShown(ORIGIN, "/threads/57-a-title")).toBe("hey.whysosuresh.com/threads/57-a-title");
   });
 
   it.each([
     ["a site note", "talk", "A note someone sent from the site"],
     ["a told thread", "told", "Something someone told you"],
   ])("is off for %s, and says why", (_, source, start) => {
-    const said = publicLines("https://hey.whysosuresh.com", 64, source, false);
+    const said = publicLines("https://hey.whysosuresh.com", { number: 64, source, shareKey: null }, false);
     expect(said.allowed).toBe(false);
     expect(said.note.startsWith(start)).toBe(true);
     expect(said.note).toContain("the words are theirs");
