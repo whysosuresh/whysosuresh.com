@@ -46,15 +46,20 @@
 // (`resolveShared`): from the threads already loaded when it is one of his, else by the public read, which the public
 // view then draws from. Whoever is in the thread gets the thread itself; anyone else the public view, its calls going
 // to the address it was read by; and a key that opens nothing is "Nothing here" for everyone, him included. Every link
-// he copies of a public thread (the address bar, the Link row, Copy link, Copy full-screen link) is the key's
+// he copies of a public thread (the address bar, the Link row, Copy link) is the key's
 // (`linkOf`); everything that navigates, and an invitation, keeps the number. The public view: the thread as the public call
 // answers it (`showPublic`, outside Access), the comments written as Public, and "Send Suresh a note on this", a form
 // with the site's bot check (../talk-send.js) whose note shows at once. When its page asks questions, a visitor
 // answers them too, with no sign-in: they type their name once (in a line above the page, or in the page's bar in full
 // screen), and their browser keeps a random key with it (`localStorage`, or for the visit when storage is off), which
 // the public call reads to say which answers are theirs; under each question the page shows their answer, and other
-// people's once they gave their own. A thread's link with `?full` opens its page in full screen at once, which is the
-// link Share offers for answering. On his side a visitor's note is a comment with Drop and Reply by email, a
+// people's once they gave their own. A link to a thread whose main section is a page opens the page full screen, for
+// anyone who arrives by it, him included, under a bar with whose site it is, its title and Thread, the conversation
+// one click away; a thread opened inside the app opens in the thread view, a reload included, because every entry the
+// app makes says so in the history's state, which a copied address never carries (site/app/page-view.js). Thread
+// and Esc are a step of their own, so the browser's Back returns to the page, and Full screen goes back to it, so the
+// history never grows; neither reloads the page, so what a visitor typed in it stays. An old `?full` link still
+// opens full screen. On his side a visitor's note is a comment with Drop and Reply by email, a
 // visitor's answer sits under its question and has a line in the history with Drop, and Drop's Undo shows it again;
 // a visitor's word makes the thread wait on him, and a globe marks a public thread in every list. A comment on a
 // public thread is written for anyone by default (Public), or for the people here, or for him alone. A visitor's words
@@ -146,6 +151,7 @@ import { cardBlob } from './card-paint.js';
 import { PHOTO_SHEET, VIA, photoProblem, photoSaved, startedLine, viaClaude, writerName } from './byline.js';
 import { ASKS_PATH, ASK_PATH, CLOSED_LINE, DRAFTS_HINT, agoWords, FIRST_ANSWERERS, answeredHead, answererName, answerersShown, askEventWords, askLink, askShown, countLine, foldWaiting, foldedTitle, foldedWho, markReadLabel, markedWords, nobodyLine, savedLine, stateWords, summaryNoteFor, talkLinkFor, topicLine, visitorHint } from './asks.js';
 import { DRAFT, KEY, discussionFor, helloFor, placesOf, readPageMessage, stack, takesAnswers } from './page-talk.js';
+import { pageFull, readPageState, threadLabel } from './page-view.js';
 import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, saidOn, takenLine } from './people.js';
 import { addressOf, feedLines, invitation, invitationProblem, isAddress, levelOf, linkShown, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
 import { prepare as prepareBotCheck, sendTo } from '../talk-send.js';
@@ -203,6 +209,7 @@ import {
  * @typedef {import('./threads-store.js').Page} Page
  * @typedef {import('./threads-store.js').Event} ThreadEvent
  * @typedef {import('./threads-store.js').Comment} ThreadComment
+ * @typedef {import('./page-view.js').PageState} PageState
  * @typedef {import('./standing.js').Tab} Tab
  * @typedef {import('./standing.js').Open} Open
  * @typedef {import('./threads-store.js').Status} Status
@@ -1118,8 +1125,8 @@ class Threads {
     this.opened = new Set();
     /** The page version shown, by thread; the newest when a thread has none here. @type {Map<number, number>} */
     this.pageVersions = new Map();
-    /** Whether the page fills the window: at first, when the address asks for it (`?full`, Share's link for answering). */
-    this.pageFull = new URLSearchParams(location.search).has('full');
+    /** Whether the page fills the window, set by the rule wherever a thread becomes current (`fullFor`). */
+    this.pageFull = false;
     /** What the open page's frame has said. @type {Talk} */
     this.talk = freshTalk();
     /** The comment being written on words selected in the page, and its text. @type {WordsDraft | null} */
@@ -1174,7 +1181,7 @@ class Threads {
       if (box.id === 'person-note') void this.savePersonNote();
       if (box.id === 'person-name') void this.savePersonName();
     });
-    window.addEventListener('popstate', () => this.go(routeOf(location), false));
+    window.addEventListener('popstate', () => this.onPop());
     window.addEventListener('message', (event) => this.onPageMessage(event));
     this.wide.addEventListener('change', () => {
       if (this.route.view !== 'thread') return;
@@ -1242,6 +1249,7 @@ class Threads {
     rememberSignedIn();
     if (this.route.view === 'entry') void this.openEntry(this.route.key);
     if (this.member && this.missing !== null && (await this.tryPublic(route))) return;
+    this.pageFull = this.route.view === 'thread' && this.fullFor(this.shown?.thread.main);
     this.render();
   }
 
@@ -1264,6 +1272,7 @@ class Threads {
       }
     }
     this.publicAddress = address;
+    this.pageFull = this.fullFor(this.publicShown?.thread.main);
     this.renderPublic();
     return true;
   }
@@ -1545,7 +1554,8 @@ class Threads {
     this.personDraft = null;
     this.personAddress = '';
     this.personProblem = null;
-    if (push) history.pushState(null, '', pathOf(route, this.threads, this.people));
+    // An entry made inside the app opens its thread in the thread view, a reload included (site/app/page-view.js).
+    if (push) history.pushState(/** @type {PageState} */ ({ page: 'thread' }), '', pathOf(route, this.threads, this.people));
     if (route.view === 'person') {
       this.shown = null;
       this.missing = null;
@@ -1586,8 +1596,14 @@ class Threads {
     this.sel = route.number;
     const known = this.threads.get(route.number);
     this.shown = known ? { thread: known, page: null, people: [], comments: [], events: [], truncated: false } : null;
-    this.render();
-    this.main.scrollTop = 0;
+    // The rule reads the list's copy before the first draw. A page shown full screen waits for its page rather than
+    // drawing the thread view under it first, so Back to the entry a link opened never flashes the thread view.
+    this.pageFull = this.fullFor(known?.main);
+    const drawn = !this.pageFull;
+    if (drawn) {
+      this.render();
+      this.main.scrollTop = 0;
+    }
     try {
       await this.loadThread(route.number);
     } catch (error) {
@@ -1596,9 +1612,88 @@ class Threads {
     }
     if (this.route.view === 'thread' && this.route.number === route.number) {
       if (this.member && this.missing === route.number && (await this.tryPublic(route))) return;
-      this.keepScroll = true;
+      this.pageFull = this.fullFor(this.shown?.thread.main);
+      this.keepScroll = drawn;
       this.render();
+      if (!drawn) this.main.scrollTop = 0;
     }
+  }
+
+  /**
+   * Whether the page fills the window for the history entry shown: its own choice, else `?full` or a page thread
+   * (site/app/page-view.js).
+   * @param {string | undefined} main the thread's main section, when it is known
+   */
+  fullFor(main) {
+    return pageFull({ full: new URLSearchParams(location.search).has('full'), state: readPageState(history.state), main });
+  }
+
+  /**
+   * The browser's back and forward. An entry that names the thread already shown differs from it only in full screen
+   * or the thread view, so the thread is drawn again by the rule with nothing reloaded, its page's frame kept and what
+   * was typed in it with it; any other entry is gone to. The public view never goes, since it has no sign-in to load
+   * with, and the only entries it makes are its own thread's.
+   */
+  onPop() {
+    const route = routeOf(location);
+    if (!this.pub.hidden && this.publicShown) {
+      const address = this.publicAddress;
+      const same =
+        (route.view === 'thread' && route.number === this.publicShown.thread.number) ||
+        (route.view === 'shared' && address !== null && 'shareKey' in address && address.shareKey === route.shareKey);
+      if (same) {
+        this.pageFull = this.fullFor(this.publicShown?.thread.main);
+        this.renderPublic();
+        return;
+      }
+    } else if (this.route.view === 'thread' && this.shown) {
+      const thread = this.shown.thread;
+      if ((route.view === 'thread' && route.number === thread.number) || (route.view === 'shared' && thread.shareKey === route.shareKey)) {
+        this.closeOverlay();
+        this.pageFull = this.fullFor(thread.main);
+        this.keepScroll = true;
+        this.render();
+        return;
+      }
+    }
+    void this.go(route, false);
+  }
+
+  /**
+   * Leaves full screen for the thread, as a step of its own so the browser's Back returns to the page: the same
+   * address without `?full`, marked as made on top of the page (`back`). Both views' Thread and Esc call it.
+   */
+  showThread() {
+    const url = new URL(location.href);
+    url.searchParams.delete('full');
+    history.pushState(/** @type {PageState} */ ({ page: 'thread', back: true }), '', `${url.pathname}${url.search}${url.hash}`);
+    this.pageFull = false;
+    this.redrawPage();
+  }
+
+  /**
+   * Fills the window with the page: back to the entry Thread made on top of it, which the browser's back draws
+   * (`onPop`), or the choice kept in this entry, so going back and forth never grows the history and a reload keeps
+   * what he chose.
+   */
+  showFull() {
+    if (readPageState(history.state)?.back) {
+      history.back();
+      return;
+    }
+    history.replaceState(/** @type {PageState} */ ({ page: 'full' }), '', location.href);
+    this.pageFull = true;
+    this.redrawPage();
+  }
+
+  /** Draws the thread shown again after its page went in or out of full screen: the public view, or his own. */
+  redrawPage() {
+    if (!this.pub.hidden) {
+      this.renderPublic();
+      return;
+    }
+    this.keepScroll = true;
+    this.render();
   }
 
   /** @param {number} number */
@@ -1751,7 +1846,7 @@ class Threads {
       if (this.overlay === 'discussion') this.renderDiscussion();
       const thread = this.shown?.thread;
       document.title = thread ? `#${thread.number} ${titleOf(thread)} · Threads` : 'Threads';
-      if (thread && location.pathname !== linkOf(thread)) history.replaceState(null, '', linkOf(thread));
+      if (thread && location.pathname !== linkOf(thread)) history.replaceState(history.state, '', linkOf(thread));
     } else if (this.route.view === 'shared') {
       this.main.replaceChildren(this.goneView());
       document.title = 'Nothing here · Threads';
@@ -5335,14 +5430,6 @@ class Threads {
               el('button', { type: 'button', class: 't-btn', 'data-act': 'copy-link' }, ['Copy link']),
             ]),
           ]),
-      ...(on && thread.main === 'page'
-        ? [
-            el('div', { class: 't-full-link' }, [
-              el('span', {}, [el('b', {}, ['Full-screen link, for answering']), ' · the page alone, with their name on top']),
-              el('button', { type: 'button', class: 't-btn', 'data-act': 'copy-full-link' }, ['Copy full-screen link']),
-            ]),
-          ]
-        : []),
     ]);
   }
 
@@ -5737,8 +5824,11 @@ class Threads {
   }
 
   /**
-   * A public thread's page: its bar (the version shown, Versions, Full screen; no claude.ai address, which is his) over
-   * its frame, from the public page address.
+   * A public thread's page: its bar over its frame, from the public page address. In the thread, the bar says the
+   * version shown, Versions and Full screen (no claude.ai address, which is his). Full screen, where a link to a page
+   * thread lands, it says whose site this is and the thread's title, the visitor's name when the page asks questions,
+   * Versions, and Thread with the notes a stranger reads there counted (site/app/page-view.js), the way to the
+   * conversation.
    * @param {number} number
    * @param {import('./threads-store.js').PublicPage} page
    */
@@ -5746,15 +5836,17 @@ class Threads {
     const version = this.pageVersions.get(number) ?? page.version;
     const shown = page.versions.find((one) => one.version === version) ?? page.versions[page.versions.length - 1];
     const at = shown?.version ?? page.version;
+    const full = this.pageFull;
     // In full screen a page that asks questions puts the visitor's name in its bar, where they can see it.
-    const naming = this.pageFull && this.answering();
-    const bar = el('div', { class: 't-page-bar', ...(naming ? { 'data-answering': '' } : {}) }, [
-      ...(naming
-        ? [el('span', { class: 't-page-site' }, [el('b', {}, ['whysosuresh.com']), ` · #${number} ${this.publicShown?.thread.title ?? ''}`]), this.answeringNode(true)]
+    const naming = full && this.answering();
+    const notes = this.publicShown?.comments.filter((said) => !said.question).length ?? 0;
+    const bar = el('div', { class: 't-page-bar', ...(full ? { 'data-answering': '' } : {}) }, [
+      ...(full
+        ? [el('span', { class: 't-page-site' }, [el('b', {}, ['whysosuresh.com']), ` · #${number} ${this.publicShown?.thread.title ?? ''}`]), ...(naming ? [this.answeringNode(true)] : [])]
         : [icon('doc'), el('b', {}, ['Page']), el('span', {}, [`version ${at} of ${page.version} · saved ${shown ? day(shown.savedAt) : ''}`])]),
       el('span', { class: 't-grow' }),
-      ...(page.versions.length > 1 && !naming ? [el('button', { type: 'button', class: 't-btn', 'data-act': 'public-versions' }, ['Versions'])] : []),
-      el('button', { type: 'button', class: naming ? 't-text-btn' : 't-btn', 'data-act': 'page-full' }, [this.pageFull ? (naming ? 'Thread' : 'Back to thread') : 'Full screen']),
+      ...(page.versions.length > 1 ? [el('button', { type: 'button', class: 't-btn', 'data-act': 'public-versions' }, ['Versions'])] : []),
+      el('button', { type: 'button', class: 't-btn', 'data-act': 'page-full' }, [full ? threadLabel(notes) : 'Full screen']),
     ]);
     const frame = el('iframe', { class: 't-page-frame', sandbox: PAGE_SANDBOX, src: publicPageAddress(this.publicAddress ?? { number }, at), title: `Page, version ${at}`, loading: 'lazy' });
     return el('section', { class: 't-page', 'aria-label': 'Page', 'data-page-key': `${number}-${at}`, 'data-full': String(this.pageFull) }, [bar, frame]);
@@ -6324,14 +6416,6 @@ class Threads {
         // The link opens Gmail itself; the move only marks that he opened it.
         if (thread) void this.makeMove(thread, { action: 'reply-opened' });
         break;
-      case 'copy-full-link':
-        if (thread) {
-          navigator.clipboard.writeText(`${location.origin}${fullLinkOf(thread)}`).then(
-            () => this.say(`Copied ${linkShown(location.origin, fullLinkOf(thread))}`, null),
-            () => this.say("Couldn't copy the link.", null),
-          );
-        }
-        break;
       case 'ask-copy': {
         const slug = button.dataset.slug ?? '';
         navigator.clipboard.writeText(askLink(location.origin, slug)).then(
@@ -6385,10 +6469,8 @@ class Threads {
         this.runFound(Number(button.dataset.index));
         break;
       case 'page-full':
-        this.pageFull = !this.pageFull;
-        if (!this.pageFull) dropFullFromAddress();
-        this.keepScroll = true;
-        this.render();
+        if (this.pageFull) this.showThread();
+        else this.showFull();
         break;
       case 'discussions':
         this.openDiscussion('all');
@@ -6443,9 +6525,8 @@ class Threads {
     if (!(button instanceof HTMLElement) || shown === null) return;
     switch (button.dataset.act) {
       case 'page-full':
-        this.pageFull = !this.pageFull;
-        if (!this.pageFull) dropFullFromAddress();
-        this.renderPublic();
+        if (this.pageFull) this.showThread();
+        else this.showFull();
         break;
       case 'visitor-name':
         this.takeVisitorName();
@@ -6591,6 +6672,14 @@ class Threads {
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && form) {
         event.preventDefault();
         void this.sendNote();
+        return;
+      }
+      // Esc leaves a full-screen page for its thread, as Thread does, unless a box of the visitor's own has the key.
+      // A key pressed inside the page is the page's and never arrives here (site/app/keys.js).
+      const naming = event.target instanceof HTMLInputElement && event.target.id === 'visitor-name';
+      if (event.key === 'Escape' && this.pageFull && this.publicShown?.page && !naming && !form) {
+        event.preventDefault();
+        this.showThread();
       }
       return;
     }
@@ -6637,10 +6726,7 @@ class Threads {
         this.render();
       } else if (this.pageFull) {
         event.preventDefault();
-        this.pageFull = false;
-        dropFullFromAddress();
-        this.keepScroll = true;
-        this.render();
+        this.showThread();
       } else if (this.editing) {
         event.preventDefault();
         this.editing = null;
@@ -6805,23 +6891,10 @@ function rememberSignedIn() {
   }
 }
 
-/** A thread's link that opens its page in full screen, for answering: its link (`linkOf`) with `?full`. @param {Thread} thread */
-function fullLinkOf(thread) {
-  return `${linkOf(thread)}?full`;
-}
-
 /** Whether two public addresses name a thread the same way. @param {PublicAddress | null} a @param {PublicAddress} b */
 function sameAddress(a, b) {
   if (a === null) return false;
   return 'shareKey' in a ? 'shareKey' in b && a.shareKey === b.shareKey : 'number' in b && a.number === b.number;
-}
-
-/** Takes `?full` off the address once the page leaves full screen, so a reload or a copied address is the plain one. */
-function dropFullFromAddress() {
-  const url = new URL(location.href);
-  if (!url.searchParams.has('full')) return;
-  url.searchParams.delete('full');
-  history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
 }
 
 /**

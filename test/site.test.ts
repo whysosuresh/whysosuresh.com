@@ -33,6 +33,7 @@ const SERVED = [
   "app/keys.js",
   "app/markdown.js",
   "app/page-talk.js",
+  "app/page-view.js",
   "app/people.js",
   "app/meetings.js",
   "app/share.js",

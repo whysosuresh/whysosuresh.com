@@ -91,6 +91,14 @@ describe("the Public switch", () => {
     expect(on.note).not.toContain("tries the number");
   });
 
+  it("says a page thread's link opens on the page, full screen, and says nothing of it for a text thread", () => {
+    const page = publicLines(ORIGIN, { number: 41, source: "self", shareKey: KEY, main: "page" }, true);
+    expect(page.note).toContain("The link opens on the page, full screen; the thread is one click away.");
+    const text = publicLines(ORIGIN, { number: 57, source: "self", shareKey: KEY, main: "text" }, true);
+    expect(text.note).not.toContain("full screen");
+    expect(publicLines(ORIGIN, { number: 41, source: "self", shareKey: KEY, main: "page" }, false).note).not.toContain("full screen");
+  });
+
   it("shows no link until the Worker has given the key, on a first publish", () => {
     expect(publicLines(ORIGIN, { number: 57, source: "self", shareKey: null }, true).link).toBeNull();
   });
