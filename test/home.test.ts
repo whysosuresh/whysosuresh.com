@@ -3,9 +3,8 @@
 // home page and taking it off are moves of the owner's alone, each with its event, only for a public thread (409
 // `not-public`), and unpublishing takes a thread off; the home page shows the posted public threads newest first, the
 // newest ten, with "All updates" under them only when there are more, each with its title or number, its first block as plain text, its day in his zone and its notes above
-// zero, every value as text, and linked at its link, by its key, on the threads' host (hey.whysosuresh.com), or its
-// `?full` link when its main section is a page, so a reader lands on the page full screen, its feed entry's id still
-// the thread's number; a thread that isn't posted, isn't public or isn't his never shows, even when its row is
+// zero, every value as text, and linked at its link, by its key, on the threads' host (hey.whysosuresh.com), a page
+// thread's included, since its link opens on the page full screen by itself, its feed entry's id the thread's number; a thread that isn't posted, isn't public or isn't his never shows, even when its row is
 // changed by hand; the Now line shows and an empty newest line hides it; an item from outside alone (a video or a
 // release, test/outside.test.ts) shows the list too; with nothing to show (no post, no outside item, no Now line), or
 // a failing read, the page is site/index.html byte for byte, and a rewritten one carries the site's headers and no ETag; /feed.xml is an

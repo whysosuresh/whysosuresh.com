@@ -20,8 +20,7 @@
 // An item is a posted thread: its title (`#<n>` when it has none), its first block as plain text read with the site's
 // own Markdown reader (never the living summary, which is his private grid of what is decided and open), the day he
 // posted it in his own zone, how many notes a stranger reads under it (shown only above zero), and its address: the
-// thread's link, by its key, never its number, or its `?full` link when its main section is a page, so a reader lands
-// on the page full screen, always
+// thread's link, by its key, never its number, which opens a page thread on its page, full screen, always
 // on the threads' host (hey.whysosuresh.com, built from the request's own origin by site/hosts.js), because threads
 // live there and this host answers none of their addresses. Only
 // public threads are ever posted, and the feed's query holds that in its own SQL, so strangers read here only what
@@ -122,13 +121,11 @@ interface Release {
 type Item = Post | Video | Release;
 
 /**
- * Where a posted thread is read: its link, by its key, so a stranger reads it as anyone he sent the link to does; a page
- * opens full screen at the link's `?full` address, the one Share hands out for answering (`fullLinkOf`,
- * site/app/threads.js). Decided from the main section as it now stands, so a thread whose main section changes after
- * he posted it links right on the next read.
+ * Where a posted thread is read: its link, by its key, so a stranger reads it as anyone he sent the link to does; a
+ * page thread's link opens on its page, full screen, by itself (site/app/page-view.js).
  */
-export function postPath(row: Pick<FeedRow, "share_key" | "main">): string {
-  return row.main === "page" ? `/threads/${row.share_key}?full` : `/threads/${row.share_key}`;
+export function postPath(row: Pick<FeedRow, "share_key">): string {
+  return `/threads/${row.share_key}`;
 }
 
 function postOf(row: FeedRow, threads: string): Post {

@@ -126,9 +126,10 @@ export function levelOf(publicAt, people) {
  * What the Public switch says: its label, the line under it for where it stands, the link under it while it is on and
  * the Worker has given its key (null until then), and whether it can be turned on. Only his own threads can be public;
  * a site note's and a told thread's words are someone else's. A thread public before links had keys
- * (`publicByNumber`) says its number still opens it for anyone.
+ * (`publicByNumber`) says its number still opens it for anyone. A thread whose main section is a page says its link
+ * opens on the page, full screen (site/app/page-view.js).
  * @param {string} origin the threads' own origin
- * @param {{ number: number, source: string, shareKey?: string | null, publicByNumber?: boolean }} thread
+ * @param {{ number: number, source: string, shareKey?: string | null, publicByNumber?: boolean, main?: string }} thread
  * @param {boolean} on
  * @returns {{ label: string, note: string, link: string | null, allowed: boolean }}
  */
@@ -158,17 +159,18 @@ export function publicLines(origin, thread, on) {
   const byNumber = thread.publicByNumber
     ? `It was public before links had keys, so its number, #${number}, still opens it for anyone. Turn Public off and on again to make the link the only way in.`
     : `Its number, #${number}, opens it only for you and the people above.`;
+  const opens = thread.main === 'page' ? ' The link opens on the page, full screen; the thread is one click away.' : '';
   return {
     label,
     link: key === null ? null : shownAddress(origin, `/threads/${key}`),
     allowed: true,
-    note: `Anyone with the link reads the title, the summary, the text and the comments you write as Public, and with no sign-in can send you a note and answer its page's questions. What they write shows at once; you can drop it. Earlier comments, Only me notes, the people and the history stay yours. ${byNumber} Search engines are told not to list it.`,
+    note: `Anyone with the link reads the title, the summary, the text and the comments you write as Public, and with no sign-in can send you a note and answer its page's questions.${opens} What they write shows at once; you can drop it. Earlier comments, Only me notes, the people and the history stay yours. ${byNumber} Search engines are told not to list it.`,
   };
 }
 
 /**
  * A link as a toast says it once copied: the address as shown, a key cut to its first and last four characters, so
- * the line fits a phone ("hey.whysosuresh.com/threads/3f9a…c41e?full").
+ * the line fits a phone ("hey.whysosuresh.com/threads/3f9a…c41e").
  * @param {string} origin
  * @param {string} path
  */

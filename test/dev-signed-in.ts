@@ -15,7 +15,7 @@
 // opens for strangers only at its link (`/threads/<key>`, the key printed at start), and their numbers say "Nothing
 // here". A third public thread's page asks questions ("A cold read"), with
 // two visitors' answers from two browsers' keys, both named Sam, so signed out the page takes answers with a name,
-// shows a visitor other people's answers once they gave their own, and opens in full screen at `?full`. All three
+// shows a visitor other people's answers once they gave their own, and opens in full screen at its link. All three
 // public threads are posted on the home page, a page, a text with notes and a page with answers, under his Now line,
 // beside what arrives from outside as the hourly run keeps it: two made-up episodes (one with its picture in the local
 // bucket, test/fixtures/thumb.jpg, one without) and a made-up release of each product, so http://localhost:8790/
