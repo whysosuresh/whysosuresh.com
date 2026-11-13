@@ -276,7 +276,7 @@ describe("the home page", () => {
     expect(page).toContain('<p class="more" data-feed-more hidden><a href="/updates">All updates</a></p>');
   });
 
-  it("links a posted page's title and Read to its full-screen address, and a posted text thread to its own, both on the threads' host", async () => {
+  it("links a posted page's title and Read to its own link, which opens it full screen, as a text thread's, both on the threads' host", async () => {
     const story = await postedPage({ title: "A story" });
     await postedAt(story, "2026-11-06T09:00:00.000Z");
     const text = await posted({ title: "Plain" });
@@ -286,7 +286,7 @@ describe("the home page", () => {
     const links = items.map((item) => [...item.matchAll(/<a href="([^"]*)">/g)].map((match) => match[1]));
     const [storyKey, textKey] = [await keyOf(story), await keyOf(text)];
     expect(links).toEqual([
-      [`${THREADS}/threads/${storyKey}?full`, `${THREADS}/threads/${storyKey}?full`],
+      [`${THREADS}/threads/${storyKey}`, `${THREADS}/threads/${storyKey}`],
       [`${THREADS}/threads/${textKey}`, `${THREADS}/threads/${textKey}`],
     ]);
   });
@@ -470,7 +470,7 @@ describe("/feed.xml", () => {
     expect(/<feed[^>]*>[\s\S]*?<updated>([^<]*)<\/updated>/.exec(feed)?.[1]).toBe("2026-11-06T09:00:00.000Z");
   });
 
-  it("links a posted page's entry to its full-screen address, its id still the thread's, and a text entry to its own", async () => {
+  it("links a posted page's entry to its own link, its id the thread's, as a text entry's", async () => {
     const story = await postedPage({ title: "A story" });
     await postedAt(story, "2026-11-06T09:00:00.000Z");
     const text = await posted({ title: "Plain" });
@@ -479,7 +479,7 @@ describe("/feed.xml", () => {
     const entries = [...feed.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map((match) => match[1] ?? "");
     expect(entries).toHaveLength(2);
     expect(entries[0]).toContain(`<id>tag:whysosuresh.com,2026:thread-${story}</id>`);
-    expect(entries[0]).toContain(`<link rel="alternate" type="text/html" href="${THREADS}/threads/${await keyOf(story)}?full"/>`);
+    expect(entries[0]).toContain(`<link rel="alternate" type="text/html" href="${THREADS}/threads/${await keyOf(story)}"/>`);
     expect(entries[1]).toContain(`<id>tag:whysosuresh.com,2026:thread-${text}</id>`);
     expect(entries[1]).toContain(`<link rel="alternate" type="text/html" href="${THREADS}/threads/${await keyOf(text)}"/>`);
   });
