@@ -218,7 +218,7 @@ const MAX_SEARCH = 100;
  * /collections/<n> with its name after it), and nowhere else. Anything else goes to Today. The
  * address is a bare path, so the sign-in lands on the host it was made on.
  */
-const NEXT_SHAPE = /^(?:\/|\/meetings|\/asks|\/journal(?:\/(?:\d{4}-\d{2}-\d{2}|\d{4}-W\d{2}|storylines(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?))?|\/people(?:\/[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?|\/collections(?:\/[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?|\/threads\/(?:[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?|\/threads\/[0-9a-f]{32})$/;
+const NEXT_SHAPE = /^(?:\/|\/meetings|\/asks|\/journal(?:\/(?:\d{4}-\d{2}-\d{2}|\d{4}-W\d{2}|storylines(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?))?|\/people(?:\/[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?|\/collections(?:\/[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?|\/distribution(?:\/capsjump)?|\/threads\/(?:[1-9]\d{0,8}(?:-[a-z0-9-]{0,80})?)?|\/threads\/[0-9a-f]{32})$/;
 /** The largest page: claude.ai holds a page to "16MB or smaller", and 16 MiB is at least that. */
 export const MAX_PAGE_BYTES = 16 * 1024 * 1024;
 /** The only place a link, or a page's source, may point: an address on claude.ai. */

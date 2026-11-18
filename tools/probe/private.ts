@@ -4,7 +4,7 @@
 // unless each stops at Cloudflare Access's sign-in, never answering a word. His journal's calls are all asked, every
 // kind of address under /threads/api/journal (the list, a day, an earlier version, a week, the storylines, a photo),
 // and the threads' own private calls beside them (a tab's list, the people, the asks, a thread, the home page's Now
-// line, his photo, the public threads' card stamps, his collections and one of them, and distribution's room). The journal's pages, the collections' and distribution's are asked too: each must be the same shell as the threads' root, Today, byte for byte,
+// line, his photo, the public threads' card stamps, his collections and one of them, and distribution's room). The journal's pages, the collections' and distribution's (Stigmer's and CapsJump's) are asked too: each must be the same shell as the threads' root, Today, byte for byte,
 // because a page holds no words and reads them only from the calls after sign-in. A recent day's address is asked
 // whatever the date, since the shell is the same for a day written or not. The home page's host is asked for the
 // threads' old addresses there, each of which must be gone (404), so the old door stays shut. This module is the
@@ -53,8 +53,10 @@ export function probes(day: string, week: string): Probe[] {
     { path: "/threads/api/journal", host: "threads", expect: "sign-in", headers: FORGED_TOKEN },
     { path: "/threads/api/journal", host: "threads", expect: "sign-in", headers: FORGED_SERVICE },
     { path: `/threads/api/journal/${day}`, host: "threads", expect: "sign-in", headers: FORGED_TOKEN },
-    ...["/journal", `/journal/${day}`, `/journal/${week}`, "/journal/storylines", "/collections", "/collections/1"].map((path): Probe => ({ path, host: "threads", expect: "shell" })),
-    ...["/threads/api/me", "/threads/api/journal", "/journal", "/me", "/collections"].map((path): Probe => ({ path, host: "home", expect: "gone" })),
+    ...["/journal", `/journal/${day}`, `/journal/${week}`, "/journal/storylines", "/collections", "/collections/1", "/distribution", "/distribution/capsjump"].map(
+      (path): Probe => ({ path, host: "threads", expect: "shell" }),
+    ),
+    ...["/threads/api/me", "/threads/api/journal", "/journal", "/me", "/collections", "/distribution"].map((path): Probe => ({ path, host: "home", expect: "gone" })),
   ];
 }
 

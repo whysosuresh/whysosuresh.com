@@ -146,10 +146,10 @@ export async function voidAct(db: D1Database, id: string): Promise<ActRow | null
   return db.prepare(`SELECT ${ACT_COLUMNS} FROM ${ACT_FROM} WHERE distribution_acts.id = ?1`).bind(id).first<ActRow>();
 }
 
-/** The `event` act's one line for a platform's new state: "reddit is on hold: Posts held back; look again in a month". */
-function stateLine(platform: string, change: PlatformChange): string {
-  const words: Record<State, string> = { active: "is active", warming: "is warming up", hold: "is on hold", later: "is for later" };
-  return `${platform} ${words[change.state]}${change.note === null ? "" : `: ${change.note}`}`;
+/** The `event` act's one line for a platform's new state, beside which the platform is named: "Now on hold: Posts held back". */
+function stateLine(change: PlatformChange): string {
+  const words: Record<State, string> = { active: "Now active", warming: "Now warming up", hold: "Now on hold", later: "Now for later" };
+  return `${words[change.state]}${change.note === null ? "" : `: ${change.note}`}`;
 }
 
 /**
@@ -164,7 +164,7 @@ export async function setPlatform(db: D1Database, product: Product, platform: st
     statement(
       db,
       `INSERT INTO distribution_acts (id, ref, at, product, platform, kind, audience, url, conversation, person_id, line, created_at)
-       VALUES (${event.list([crypto.randomUUID(), `platform:${product}:${platform}:${now}`, now, product, platform])}, 'event', NULL, NULL, NULL, NULL, ${event.list([stateLine(platform, change), now])})
+       VALUES (${event.list([crypto.randomUUID(), `platform:${product}:${platform}:${now}`, now, product, platform])}, 'event', NULL, NULL, NULL, NULL, ${event.list([stateLine(change), now])})
        ON CONFLICT (ref) DO NOTHING`,
       event,
     ),

@@ -9,7 +9,8 @@
 // which reads nothing either; and his collections, /collections and /collections/<n> with the name after it or not,
 // which read nothing either (/collections/ redirects to /collections), and a public collection's link,
 // /collections/<key>, with a thread of it at /collections/<key>/<n>, whose preview names the collection with the site's
-// card while it is public. People lived under
+// card while it is public; and distribution's room, /distribution for Stigmer and /distribution/capsjump, which reads
+// nothing either. People lived under
 // /threads/ before the rooms were peers: /threads/people and every person's address there redirect to /people for
 // good, and /people/ to /people. Each gets the one page, site/threads/index.html,
 // handed over from the site's own files through the assets binding, so it carries site/_headers (the CSP among
@@ -52,7 +53,7 @@ import { findPublicCollection } from "./collections-store.ts";
  * a day or a week by its key, the storylines and one storyline by its name's slug. A key is matched by its shape, so an
  * impossible day gets the shell like any other and says "Nothing here" itself.
  */
-const PAGE = /^(?:\/|\/meetings|\/asks|\/journal(?:\/(?:\d{4}-\d{2}-\d{2}|\d{4}-W\d{2}|storylines(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?))?|\/people(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/collections(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/collections\/([0-9a-f]{32})(?:\/[1-9]\d{0,8})?|\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?)?|\/threads\/([0-9a-f]{32})|\/ask\/([^/]+))$/;
+const PAGE = /^(?:\/|\/meetings|\/asks|\/journal(?:\/(?:\d{4}-\d{2}-\d{2}|\d{4}-W\d{2}|storylines(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?))?|\/people(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/collections(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/distribution(?:\/capsjump)?|\/collections\/([0-9a-f]{32})(?:\/[1-9]\d{0,8})?|\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?)?|\/threads\/([0-9a-f]{32})|\/ask\/([^/]+))$/;
 
 /** What an ask's preview says beside its title, the same for every ask. */
 export const ASK_DESCRIPTION = "A few questions from Suresh";

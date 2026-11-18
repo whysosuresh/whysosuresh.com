@@ -186,6 +186,40 @@ import {
   walkLine,
 } from './collections.js';
 import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, saidOn, takenLine } from './people.js';
+import {
+  DISTRIBUTION_PATH,
+  DISTRIBUTION_ROUTE,
+  GOAL_DAY,
+  GOAL_START,
+  GOAL_TEAMS,
+  CHECK_DAY,
+  NOT_COUNTED,
+  PRODUCTS,
+  PRODUCT_NAMES,
+  asOfLine,
+  buyerConversations,
+  dayIn,
+  deltaLine,
+  distributionPath,
+  goalTime,
+  kindWords,
+  newestReading,
+  nextMoves,
+  noteLine,
+  outsideTeam,
+  paceLine,
+  peerRepliesThisWeek,
+  peopleMet,
+  platformName,
+  platformRows,
+  shortDay,
+  sinceFor,
+  splitWork,
+  stateWords as platformStateWords,
+  teamLine,
+  todayLine,
+  waitingActs,
+} from './distribution.js';
 import { addressOf, collectionInvitation, collectionPublicLines, collectionSeatsLine, collectionSeesLines, feedLines, invitation, invitationProblem, isAddress, levelOf, linkShown, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
 import { prepare as prepareBotCheck, sendTo } from '../talk-send.js';
 import {
@@ -196,6 +230,7 @@ import {
   askAction,
   askPageAddress,
   attendee,
+  distribution,
   changeCollection,
   changeKept,
   collectionPeople,
@@ -288,7 +323,9 @@ import {
  *   | { view: 'person', number: number } | { view: 'meetings' } | { view: 'asks' } | { view: 'ask', slug: string }
  *   | { view: 'journal' } | { view: 'entry', key: string } | { view: 'storylines' } | { view: 'storyline', slug: string }
  *   | { view: 'shared', shareKey: string } | { view: 'collections' } | { view: 'collection', number: number }
- *   | { view: 'public-collection', key: string, number: number | null }} Route
+ *   | { view: 'public-collection', key: string, number: number | null } | { view: 'distribution', product: Product }} Route
+ * @typedef {import('./distribution.js').Product} Product
+ * @typedef {import('./threads-store.js').DistributionRoom} DistributionRoom
  * @typedef {import('./threads-store.js').PublicCollection} PublicCollection
  * @typedef {import('./threads-store.js').Collection} Collection
  * @typedef {import('./threads-store.js').CollectionShown} CollectionShown
@@ -408,6 +445,8 @@ const QUIET_DAYS = 5;
 /** The reader's own locale and zone, which every meeting is said in. */
 const LOCALE = undefined;
 const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+/** The acts the room's log shows before "Show all". */
+const LOG_SHOWN = 30;
 /** The lengths the meeting editor offers, in minutes; empty is not said. */
 const LENGTHS = [15, 30, 45, 60, 90, 120];
 /** How many people the meeting editor's picker shows for what is typed. */
@@ -750,13 +789,25 @@ function meetingData(value) {
 }
 
 /**
- * Whether a view is his alone: the Threads room, the people, the asks, the journal and the Collections room. A
+ * Whether a view is his alone: the Threads room, the people, the asks, the journal, the Collections room and
+ * Distribution. A
  * collection's own page opens for a person he shared it with, and is "Nothing here" to anyone else.
  * @param {Route} route
  */
 function isHis(route) {
   const view = route.view;
-  return view === 'collections' || view === 'list' || view === 'people' || view === 'person' || view === 'asks' || view === 'journal' || view === 'entry' || view === 'storylines' || view === 'storyline';
+  return (
+    view === 'collections' ||
+    view === 'distribution' ||
+    view === 'list' ||
+    view === 'people' ||
+    view === 'person' ||
+    view === 'asks' ||
+    view === 'journal' ||
+    view === 'entry' ||
+    view === 'storylines' ||
+    view === 'storyline'
+  );
 }
 
 /** The journal's view an address names, or null when it names none. @param {string} path @returns {Route | null} */
@@ -829,6 +880,8 @@ function routeOf(at) {
   if (at.pathname === MEETINGS) return { view: 'meetings' };
   if (at.pathname === ASKS) return { view: 'asks' };
   if (at.pathname === COLLECTIONS_PATH) return { view: 'collections' };
+  const room = DISTRIBUTION_ROUTE.exec(at.pathname);
+  if (room) return { view: 'distribution', product: room[1] === 'capsjump' ? 'capsjump' : 'stigmer' };
   const open = PUBLIC_COLLECTION_PATH.exec(at.pathname);
   if (open) return { view: 'public-collection', key: open[1] ?? '', number: open[2] === undefined ? null : Number(open[2]) };
   const collection = COLLECTION_PATH.exec(at.pathname);
@@ -849,6 +902,7 @@ function pathOf(route, threads, people = []) {
   if (route.view === 'meetings') return MEETINGS;
   if (route.view === 'asks') return ASKS;
   if (route.view === 'collections') return COLLECTIONS_PATH;
+  if (route.view === 'distribution') return distributionPath(route.product);
   if (route.view === 'collection') return `${COLLECTIONS_PATH}/${route.number}`;
   if (route.view === 'public-collection') return `${COLLECTIONS_PATH}/${route.key}${route.number === null ? '' : `/${route.number}`}`;
   if (route.view === 'ask') return `/ask/${route.slug}`;
@@ -1079,7 +1133,7 @@ class Threads {
 
     /** @type {Route} */
     this.route = routeOf(location);
-    /** Where a thread was opened from, so Esc and the pager go back there. @type {'today' | 'list' | 'person' | 'meetings' | 'asks' | 'collection'} */
+    /** Where a thread was opened from, so Esc and the pager go back there. @type {'today' | 'list' | 'person' | 'meetings' | 'asks' | 'collection' | 'distribution'} */
     this.from = 'today';
     /** The collection a thread was opened from, which J and K walk. @type {number | null} */
     this.fromCollection = null;
@@ -1196,6 +1250,14 @@ class Threads {
     this.asks = [];
     this.asksLoaded = false;
     this.asksFailed = false;
+    /** Distribution's room for each product, null until its call answers; whether the call failed. @type {Record<Product, DistributionRoom | null>} */
+    this.rooms = { stigmer: null, capsjump: null };
+    this.roomsFailed = false;
+    /** The platforms opened in the room, by product and slug; whether its log shows every act. @type {Set<string>} */
+    this.platformsOpen = new Set();
+    this.logAll = false;
+    /** The product the room was last on, so a thread opened from it goes back there. @type {Product} */
+    this.lastRoom = 'stigmer';
     /** His journal: every entry's newest version, newest first, and every storyline's trail; whether they loaded or failed. @type {JournalEntry[]} */
     this.journal = [];
     /** @type {JournalTrail[]} */
@@ -1473,6 +1535,7 @@ class Threads {
       void this.loadAsks();
       void this.loadJournal();
       void this.loadNow();
+      void this.loadDistribution();
       void this.refreshCards();
     }
     this.loaded = true;
@@ -1496,6 +1559,36 @@ class Threads {
       this.keepScroll = true;
       this.render();
     } else this.renderNav();
+  }
+
+  /**
+   * Distribution's rooms again, both products, as the room's call answers now: Today's row and the rail follow, and the
+   * room is drawn again when it is shown. A failure is the room's own to say; an ended sign-in says so as everywhere.
+   */
+  async loadDistribution() {
+    const since = sinceFor(todayKey(Date.now(), ZONE));
+    try {
+      const [stigmer, capsjump] = await Promise.all([distribution('stigmer', since), distribution('capsjump', since)]);
+      this.rooms = { stigmer, capsjump };
+      this.roomsFailed = false;
+    } catch (error) {
+      this.roomsFailed = true;
+      if (error instanceof SignedOut) this.fail(error, "Distribution didn't load.");
+    }
+    if (!this.loaded) return;
+    if (this.route.view === 'distribution' || this.route.view === 'today') {
+      this.keepScroll = true;
+      this.render();
+    } else this.renderNav();
+  }
+
+  /** The products with someone waiting on a reply, each with who. @returns {{ product: Product, acts: import('./distribution.js').Act[] }[]} */
+  distributionWaiting() {
+    return PRODUCTS.flatMap((product) => {
+      const room = this.rooms[product];
+      const acts = room === null ? [] : waitingActs(room.acts);
+      return acts.length > 0 ? [{ product, acts }] : [];
+    });
   }
 
   /** Everyone again, as the people call answers now, drawn when People is still shown. */
@@ -1706,6 +1799,10 @@ class Threads {
       this.from = 'list';
     }
     if (route.view === 'today') this.from = 'today';
+    if (route.view === 'distribution') {
+      this.from = 'distribution';
+      if (this.route.view !== 'distribution' || this.route.product !== route.product) this.logAll = false;
+    }
     if (route.view === 'meetings') this.from = 'meetings';
     if (route.view === 'asks') this.from = 'asks';
     if (route.view === 'collection') {
@@ -1757,6 +1854,7 @@ class Threads {
     }
     if (route.view === 'people') void this.loadPeople();
     if (route.view === 'asks') void this.loadAsks();
+    if (route.view === 'distribution') void this.loadDistribution();
     if (route.view === 'collections') void this.loadRoom();
     if (route.view === 'collection') {
       void this.loadCollection(route.number);
@@ -1916,6 +2014,7 @@ class Threads {
     else if (this.from === 'person' && this.fromPerson !== null) void this.go({ view: 'person', number: this.fromPerson });
     else if (this.from === 'meetings') void this.go({ view: 'meetings' });
     else if (this.from === 'asks') void this.go({ view: 'asks' });
+    else if (this.from === 'distribution') void this.go({ view: 'distribution', product: this.roomProduct });
     else void this.go(this.from === 'today' ? { view: 'today' } : { view: 'list', tab: this.tab, only: this.only, space: this.space });
   }
 
@@ -1992,7 +2091,7 @@ class Threads {
   /** The thread a key acts on: the open one, or the selected row. */
   target() {
     if (this.route.view === 'thread') return this.shown?.thread ?? null;
-    if (this.inJournal() || this.route.view === 'collections' || this.route.view === 'collection') return null;
+    if (this.inJournal() || this.route.view === 'collections' || this.route.view === 'collection' || this.route.view === 'distribution') return null;
     if (this.route.view === 'people' || this.route.view === 'person' || this.route.view === 'meetings' || this.route.view === 'asks') return this.route.view === 'meetings' && this.sel !== null ? (this.threads.get(this.sel) ?? null) : null;
     // A folded row is several people's answers, so the moves have nothing to act on; Enter opens the ask.
     if (this.route.view === 'today' && this.sel !== null && this.folded().some((entry) => entry.kind === 'fold' && entry.number === this.sel)) return null;
@@ -2001,7 +2100,17 @@ class Threads {
 
   /** @param {number} by */
   step(by) {
-    if (this.route.view === 'people' || this.route.view === 'person' || this.route.view === 'asks' || this.route.view === 'collections' || this.route.view === 'collection' || this.inJournal()) return;
+    if (
+      this.route.view === 'people' ||
+      this.route.view === 'person' ||
+      this.route.view === 'asks' ||
+      this.route.view === 'collections' ||
+      this.route.view === 'collection' ||
+      this.route.view === 'distribution' ||
+      this.inJournal()
+    ) {
+      return;
+    }
     if (this.route.view === 'meetings') this.from = 'meetings';
     const list = this.walk();
     if (list.length === 0) return;
@@ -2064,6 +2173,9 @@ class Threads {
       const shown = this.collection?.collection;
       document.title = shown ? `${shown.name} · Collections` : 'Collections · whysosuresh.com';
       if (shown && shown.number === this.route.number && location.pathname !== collectionPath(shown)) history.replaceState(history.state, '', collectionPath(shown));
+    } else if (this.route.view === 'distribution') {
+      this.main.replaceChildren(this.distributionView());
+      document.title = `${PRODUCT_NAMES[this.route.product]} · Distribution`;
     } else if (this.route.view === 'journal') {
       this.main.replaceChildren(this.journalView());
       document.title = 'Journal · whysosuresh.com';
@@ -2142,7 +2254,8 @@ class Threads {
     const counts = new Map();
     for (const thread of this.threads.values()) if (isOpen(thread) && thread.space !== null) counts.set(thread.space, (counts.get(thread.space) ?? 0) + 1);
     const view = this.route.view;
-    const today = this.folded().length + this.fresh().length + this.sat().length;
+    const waitingRooms = this.distributionWaiting();
+    const today = this.folded().length + this.fresh().length + this.sat().length + waitingRooms.length;
     const todayItem = el('a', { class: 't-nav-item', href: ME, 'data-go': 'today' }, [icon('sun'), 'Today', el('span', { class: 't-nav-count' }, [String(today)])]);
     const allItem = el('a', { class: 't-nav-item', href: THREADS, 'data-go': 'list' }, [icon('list'), 'Threads']);
     const peopleItem = el('a', { class: 't-nav-item', href: PEOPLE, 'data-go': 'people' }, [
@@ -2170,6 +2283,13 @@ class Threads {
     });
     const journalItem = el('a', { class: 't-nav-item', href: JOURNAL_PATH, 'data-go': 'journal' }, [icon('book'), 'Journal']);
     if (this.inJournal()) journalItem.setAttribute('aria-current', 'page');
+    const waitingPeople = waitingRooms.reduce((sum, room) => sum + room.acts.length, 0);
+    const distributionItem = el('a', { class: 't-nav-item', href: DISTRIBUTION_PATH, 'data-go': 'distribution' }, [
+      icon('trend'),
+      'Distribution',
+      ...(waitingPeople > 0 ? [el('span', { class: 't-nav-count', title: 'Waiting on you' }, [String(waitingPeople)])] : []),
+    ]);
+    if (view === 'distribution') distributionItem.setAttribute('aria-current', 'page');
     if (view === 'today') todayItem.setAttribute('aria-current', 'page');
     if (view === 'list' && this.space === null) allItem.setAttribute('aria-current', 'page');
     const spaces = SPACES.map((space) => {
@@ -2182,7 +2302,7 @@ class Threads {
       return item;
     });
     // A space is a filter on the threads, so the five sit under Threads rather than beside the rooms.
-    this.nav.replaceChildren(todayItem, allItem, ...spaces, collectionsItem, ...pinned, peopleItem, meetingsItem, asksItem, journalItem);
+    this.nav.replaceChildren(todayItem, allItem, ...spaces, collectionsItem, ...pinned, peopleItem, meetingsItem, asksItem, journalItem, distributionItem);
   }
 
   renderTabbar() {
@@ -2190,14 +2310,15 @@ class Threads {
     for (const button of this.tabbar.querySelectorAll('[data-go], [data-act="more"]')) {
       if (!(button instanceof HTMLElement)) continue;
       // People, Meetings, Asks and Journal sit under More on his bar, so More is where he is when he is in any of them.
-      const current = button.dataset.act === 'more' ? view === 'people' || view === 'meetings' || view === 'asks' || view === 'journal' || view === 'collections' : button.dataset.go === view;
+      const current =
+        button.dataset.act === 'more' ? view === 'people' || view === 'meetings' || view === 'asks' || view === 'journal' || view === 'collections' || view === 'distribution' : button.dataset.go === view;
       if (current) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     }
   }
 
   /**
-   * The rooms that don't fit on his phone's bar, in a sheet: Collections, People, Meetings, Asks and Journal; and his photo, whose
+   * The rooms that don't fit on his phone's bar, in a sheet: Collections, People, Meetings, Asks, Journal and Distribution; and his photo, whose
    * sheet the sidebar's foot opens where there is a sidebar.
    */
   openMore() {
@@ -2207,6 +2328,7 @@ class Threads {
       el('a', { class: 't-pick', href: MEETINGS, 'data-go': 'meetings' }, [icon('cal'), 'Meetings']),
       el('a', { class: 't-pick', href: ASKS, 'data-go': 'asks' }, [icon('ask'), 'Asks']),
       el('a', { class: 't-pick', href: JOURNAL_PATH, 'data-go': 'journal' }, [icon('book'), 'Journal']),
+      el('a', { class: 't-pick', href: DISTRIBUTION_PATH, 'data-go': 'distribution' }, [icon('trend'), 'Distribution']),
       el('button', { type: 'button', class: 't-pick t-pick-photo', 'data-act': 'photo' }, [avatar('owner', '', this.ownerPhoto), PHOTO_SHEET.title]),
     ];
     this.openOverlay('more', 'More rooms', 'narrow', [this.sheetHead('More'), el('div', { class: 't-sheet-body' }, [el('div', { class: 't-pick-list' }, picks)])]);
@@ -2485,9 +2607,238 @@ class Threads {
     ]);
   }
 
+  /** The product the room shows, or was last on. @returns {Product} */
+  get roomProduct() {
+    return this.route.view === 'distribution' ? this.route.product : this.lastRoom;
+  }
+
+  /** Today's rows for distribution: one per product with someone waiting on a reply, which opens its room. */
+  distributionRows() {
+    return this.distributionWaiting().map(({ product, acts }) => {
+      const newest = acts[0];
+      const who = acts.map((act) => `${act.person?.name ?? 'Someone'} on ${platformName(act.platform)}`).join(' · ');
+      return el('a', { class: 't-row', href: distributionPath(product), 'data-distribution': product }, [
+        el('span', { class: 't-num' }, [icon('trend')]),
+        el('span', { class: 't-row-main' }, [
+          el('span', { class: 't-row-title' }, [todayLine(acts.length, product)]),
+          el('span', { class: 't-row-sub' }, [who]),
+        ]),
+        el('span', { class: 't-row-meta' }, [el('span', {}, [newest ? ago(newest.at) : ''])]),
+      ]);
+    });
+  }
+
+  /**
+   * Distribution's room for one product: the next moves worked out from what happened, the goal against today, a row
+   * per platform, the work in the Distribution collection, the people met in public and every act, newest first. It
+   * only reads: what changes is said in chat, and the sync writes it.
+   */
+  distributionView() {
+    const product = this.roomProduct;
+    this.lastRoom = product;
+    const room = this.rooms[product];
+    const switcher = el(
+      'div',
+      { class: 't-seg t-dist-switch', role: 'group', 'aria-label': 'Product' },
+      PRODUCTS.map((one) => el('button', { type: 'button', 'data-act': 'room-product', 'data-product': one, 'aria-pressed': String(one === product) }, [PRODUCT_NAMES[one]])),
+    );
+    const head = (/** @type {(Node | string)[]} */ line) =>
+      el('div', { class: 't-head' }, [el('div', {}, [el('h1', {}, ['Distribution']), el('p', {}, line)]), switcher]);
+    if (room === null) {
+      return el('div', { class: 't-wrap' }, [head(['']), el('div', { class: 't-empty' }, [this.roomsFailed ? "Distribution didn't load. Reload to try again." : 'Loading…'])]);
+    }
+    const today = todayKey(Date.now(), ZONE);
+    const log = room.log;
+    return el('div', { class: 't-wrap' }, [
+      head([asOfLine(room, ZONE), ...(log ? [' · ', el('a', { href: `/threads/${log.number}`, 'data-thread': String(log.number) }, [log.title ?? 'Engage log'])] : [])]),
+      this.movesSection(room, today),
+      this.goalSection(room, today),
+      this.platformsSection(room, today),
+      ...this.workSections(room),
+      el('div', { class: 't-dist-two' }, [this.metSection(room), this.logSection(room)]),
+    ]);
+  }
+
+  /** @param {DistributionRoom} room @param {string} today */
+  movesSection(room, today) {
+    const moves = nextMoves(room, today, ZONE);
+    const rows = moves.map((move) =>
+      el('div', { class: 't-dist-move' }, [
+        el('span', { class: 't-dist-sev', 'data-sev': move.sev, title: move.sev === 'hot' ? 'Someone or something is waiting' : 'Due' }),
+        el('div', { class: 't-dist-move-main' }, [
+          move.url === null ? el('b', {}, [move.what]) : el('a', { href: move.url, target: '_blank', rel: 'noopener' }, [el('b', {}, [move.what])]),
+          el('span', {}, [move.why]),
+        ]),
+        el('span', { class: 't-dist-kind' }, [move.kind]),
+      ]),
+    );
+    return el('section', { class: 't-section' }, [
+      el('div', { class: 't-section-head' }, [el('h2', {}, ['Next moves']), el('span', { class: 't-n' }, [String(moves.length)]), el('span', { class: 't-hint' }, ['worked out from what happened'])]),
+      el('div', { class: 't-list' }, rows.length > 0 ? rows : [el('div', { class: 't-empty' }, ['Nothing needs you here. Every reply is answered and every pace is kept.'])]),
+    ]);
+  }
+
+  /** @param {DistributionRoom} room @param {string} today */
+  goalSection(room, today) {
+    const acts = outsideTeam(room.acts);
+    /** @param {string} metric */
+    const reading = (metric) => newestReading(room.readings, metric);
+    /** @param {string} label @param {(Node | string)[]} big @param {(Node | string)[]} sub @param {Node[]} [more] */
+    const cell = (label, big, sub, more = []) =>
+      el('div', { class: 't-dist-cell' }, [el('div', { class: 't-dist-label' }, [label]), el('div', { class: 't-dist-big' }, big), ...more, el('div', { class: 't-dist-sub' }, sub)]);
+    /** @param {{ value: number, before: number | null, readAt: string } | null} read @param {string} unit */
+    const number = (read, unit) => (read === null ? [el('small', {}, [NOT_COUNTED])] : [String(read.value), ' ', el('small', {}, [deltaLine(read) === '' ? unit : `${unit} ${deltaLine(read)}`])]);
+    /** @param {{ readAt: string } | null} read */
+    const readOn = (read) => (read === null ? 'the weekly run writes it' : `read ${shortDay(dayIn(read.readAt, ZONE))}`);
+    const stars = reading('outside_stars');
+    const downloads = reading('downloads');
+    let cells;
+    if (room.product === 'stigmer') {
+      const teams = reading('teams_trying');
+      const time = goalTime(today);
+      const bar = el('div', { class: 't-dist-bar', title: 'The bar is teams; the tick is time used' }, [
+        el('i', { style: `width: ${Math.min(100, ((teams?.value ?? 0) / GOAL_TEAMS) * 100)}%` }),
+        el('span', { class: 't-dist-tick', style: `left: ${Math.round(time.used * 100)}%` }),
+      ]);
+      cells = [
+        cell(
+          `About ${GOAL_TEAMS} teams trying Stigmer and talking to us, by ${shortDay(GOAL_DAY)}`,
+          teams === null ? [el('small', {}, [NOT_COUNTED])] : [String(teams.value), ' ', el('small', {}, [`of ${GOAL_TEAMS} teams`])],
+          [`${time.left} days left · ${teams === null ? 'you give this number in chat' : readOn(teams)}`],
+          [bar],
+        ),
+        cell('Buyer conversations', [String(buyerConversations(acts))], [`since ${shortDay(GOAL_START)} · looked at again on ${shortDay(CHECK_DAY)} if none`]),
+        cell('Peer replies', [String(peerRepliesThisWeek(acts, today, ZONE))], ['this week, outside the team']),
+        cell('Outside stars', number(stars, 'stars'), [downloads === null ? readOn(stars) : `${downloads.value} release downloads · ${readOn(stars ?? downloads)}`]),
+      ];
+    } else {
+      cells = [
+        el('div', { class: 't-dist-cell' }, [el('div', { class: 't-dist-label' }, ["CapsJump's goal"]), el('p', { class: 't-dist-words' }, ['The warm-up: learn how distribution is done. No number is the goal.'])]),
+        cell('Outside stars', number(stars, 'stars'), [readOn(stars)]),
+        cell('Outside replies', [String(acts.filter((act) => act.kind === 'in').length)], [`since ${shortDay(room.since)}`]),
+        cell('Downloads', number(downloads, 'downloads'), [readOn(downloads)]),
+      ];
+    }
+    return el('section', { class: 't-section' }, [el('div', { class: 't-section-head' }, [el('h2', {}, ['The goal'])]), el('div', { class: 't-dist-goal' }, cells)]);
+  }
+
+  /** @param {DistributionRoom} room @param {string} today */
+  platformsSection(room, today) {
+    const rows = platformRows(room, today, ZONE).flatMap((row) => {
+      const key = `${room.product}:${row.slug}`;
+      const open = this.platformsOpen.has(key);
+      const marks = Array.from({ length: Math.max(row.pace ?? 0, row.done) }, (_, i) => el('i', { 'data-on': String(i < row.done) }));
+      const button = el('button', { type: 'button', class: 't-dist-prow', 'data-act': 'platform', 'data-platform': row.slug, 'aria-expanded': String(open) }, [
+        el('span', { class: 't-dist-pname' }, [el('span', { class: 't-dist-chev', 'aria-hidden': 'true' }, ['›']), row.name]),
+        el('span', { class: 't-dist-state', 'data-state': row.state ?? 'none' }, [platformStateWords(row.state)]),
+        el('span', { class: 't-dist-plast' }, [row.last === null ? 'No act in this time' : `${row.last.line} · ${shortDay(dayIn(row.last.at, ZONE))}`]),
+        el('span', { class: 't-dist-pace' }, [...marks, el('span', {}, [paceLine(row)])]),
+        el('span', { class: 't-dist-pwait', 'data-has': String(row.waiting > 0) }, [row.waiting > 0 ? `${row.waiting} waiting` : 'nobody waiting']),
+      ]);
+      if (!open) return [button];
+      const note = noteLine(row);
+      const detail = el('div', { class: 't-dist-pdetail' }, [
+        ...(note === '' ? [] : [el('p', {}, [note])]),
+        el(
+          'ul',
+          {},
+          row.acts.length > 0
+            ? row.acts.map((act) =>
+                el('li', {}, [
+                  el('time', { datetime: act.at }, [shortDay(dayIn(act.at, ZONE))]),
+                  el('span', { class: 't-dist-kind' }, [kindWords(act.kind)]),
+                  act.url === null ? el('span', {}, [act.line]) : el('a', { href: act.url, target: '_blank', rel: 'noopener' }, [act.line]),
+                ]),
+              )
+            : [el('li', {}, ['No acts in this time.'])],
+        ),
+      ]);
+      return [button, detail];
+    });
+    return el('section', { class: 't-section' }, [
+      el('div', { class: 't-section-head' }, [el('h2', {}, ['Platforms']), el('span', { class: 't-hint' }, ['this week against the pace · open one for its acts'])]),
+      el('div', { class: 't-list' }, rows.length > 0 ? rows : [el('div', { class: 't-empty' }, ['No platform has a state yet. The next run sets them.'])]),
+    ]);
+  }
+
+  /** The work in the Distribution collection: what waits on a condition, and what is his to do. @param {DistributionRoom} room */
+  workSections(room) {
+    if (room.work.collection === null) {
+      return [
+        el('section', { class: 't-section' }, [
+          el('div', { class: 't-section-head' }, [el('h2', {}, ['Waiting on a condition'])]),
+          el('div', { class: 't-list' }, [el('div', { class: 't-empty' }, ['Make a collection named Distribution, and its threads show here. ', el('a', { href: COLLECTIONS_PATH, 'data-go': 'collections' }, ['Collections'])])]),
+        ]),
+      ];
+    }
+    const { gated, todo } = splitWork(room.work.threads.map((thread) => this.threads.get(thread.number) ?? thread));
+    return [
+      el('section', { class: 't-section' }, [
+        el('div', { class: 't-section-head' }, [el('h2', {}, ['Waiting on a condition']), el('span', { class: 't-n' }, [String(gated.length)]), el('span', { class: 't-hint' }, ["each thread's summary says what it waits on"])]),
+        gated.length > 0
+          ? el(
+              'div',
+              { class: 't-dist-gates' },
+              gated.map(({ thread, on }) =>
+                el('a', { class: 't-dist-gate', href: threadPath(thread), 'data-thread': String(thread.number) }, [el('b', {}, [titleOf(thread)]), el('span', {}, [`Waiting on: ${on}`])]),
+              ),
+            )
+          : el('div', { class: 't-list' }, [el('div', { class: 't-empty' }, ['Nothing waits on a condition.'])]),
+      ]),
+      el('section', { class: 't-section' }, [
+        el('div', { class: 't-section-head' }, [el('h2', {}, ['To do']), el('span', { class: 't-n' }, [String(todo.length)]), el('span', { class: 't-hint' }, ['open threads in Distribution, waiting on you'])]),
+        el('div', { class: 't-list' }, todo.length > 0 ? todo.map((thread) => this.row(thread, this.rowLine(thread), { selectable: false })) : [el('div', { class: 't-empty' }, ['Nothing to do here.'])]),
+      ]),
+    ];
+  }
+
+  /** @param {DistributionRoom} room */
+  metSection(room) {
+    const met = peopleMet(room.acts);
+    return el('section', { class: 't-section' }, [
+      el('div', { class: 't-section-head' }, [el('h2', {}, ['People met in public']), el('span', { class: 't-n' }, [String(met.length)])]),
+      el(
+        'div',
+        { class: 't-list' },
+        met.length > 0
+          ? met.map(({ person, last, audience }) =>
+              el('a', { class: 't-dist-li', href: personPath({ number: person.number, name: person.name, email: null }), 'data-person': String(person.number) }, [
+                el('b', {}, [person.name ?? `#${person.number}`]),
+                el('span', { class: 't-dist-sub' }, [`${platformName(last.platform)} · ${last.line}`]),
+                ...(audience === null ? [] : [el('span', { class: 't-dist-kind' }, [audience])]),
+              ]),
+            )
+          : [el('div', { class: 't-empty' }, ['Nobody yet.'])],
+      ),
+    ]);
+  }
+
+  /** @param {DistributionRoom} room */
+  logSection(room) {
+    const acts = outsideTeam(room.acts);
+    const shown = this.logAll ? acts : acts.slice(0, LOG_SHOWN);
+    const team = teamLine(room.acts);
+    const rows = shown.map((act) =>
+      el('div', { class: 't-dist-li t-dist-log' }, [
+        el('time', { datetime: act.at }, [shortDay(dayIn(act.at, ZONE))]),
+        act.url === null ? el('b', {}, [act.line]) : el('a', { href: act.url, target: '_blank', rel: 'noopener' }, [el('b', {}, [act.line])]),
+        el('span', { class: 't-dist-kind' }, [kindWords(act.kind)]),
+        el('span', { class: 't-dist-sub' }, [`${platformName(act.platform)}${act.audience === null ? '' : ` · ${act.audience}`}`]),
+      ]),
+    );
+    return el('section', { class: 't-section' }, [
+      el('div', { class: 't-section-head' }, [el('h2', {}, ['What happened']), el('span', { class: 't-n' }, [String(acts.length)]), el('span', { class: 't-hint' }, ['one row per act'])]),
+      el('div', { class: 't-list' }, [
+        ...(rows.length > 0 ? rows : [el('div', { class: 't-empty' }, ['No acts in this time.'])]),
+        ...(shown.length < acts.length ? [el('button', { type: 'button', class: 't-more', 'data-act': 'log-all' }, [`Show all ${acts.length}`])] : []),
+        ...(team === '' ? [] : [el('div', { class: 't-dist-team' }, [team])]),
+      ]),
+    ]);
+  }
+
   todayView() {
     const waiting = this.waiting();
-    const waitingRows = this.waitingRows(waiting);
+    const waitingRows = [...this.distributionRows(), ...this.waitingRows(waiting)];
     const fresh = this.fresh();
     const sat = this.sat();
     const total = waitingRows.length + fresh.length + sat.length;
@@ -2522,7 +2873,7 @@ class Threads {
               el('div', { class: 't-section-head' }, [
                 el('h2', {}, ['Waiting on you']),
                 el('span', { class: 't-n' }, [String(waitingRows.length)]),
-                el('span', { class: 't-hint' }, ["the last word is someone else's: a person you invited, a visitor, or someone who answered an ask"]),
+                el('span', { class: 't-hint' }, ["the last word is someone else's: a person you invited, a visitor, someone who answered an ask, or someone met in public"]),
               ]),
               el('div', { class: 't-list' }, waitingRows),
             ]),
@@ -4685,6 +5036,7 @@ class Threads {
       ]);
     }
     const { person, threads, words, truncated } = this.person;
+    const acts = this.person.acts ?? [];
     const name = nameOf(person);
     const first = name.split(/\s+/)[0] ?? name;
     const crumbs = el('div', { class: 't-crumbs' }, [
@@ -4762,6 +5114,27 @@ class Threads {
           el('div', { class: 't-section-head' }, [el('h2', {}, ['What they said']), el('span', { class: 't-n' }, [String(words.length)]), el('span', { class: 't-hint' }, ['newest first'])]),
           el('div', { class: 't-said' }, said.length > 0 ? said : [el('p', { class: 't-note' }, [`Nothing in ${first}'s own words yet. What they told you is in the threads above, in yours.`])]),
         ]),
+        ...(acts.length > 0
+          ? [
+              el('section', { class: 't-section' }, [
+                el('div', { class: 't-section-head' }, [el('h2', {}, ['Met in public']), el('span', { class: 't-n' }, [String(acts.length)]), el('span', { class: 't-hint' }, ['what distribution did with them, newest first'])]),
+                el(
+                  'div',
+                  { class: 't-list' },
+                  acts.map((act) =>
+                    el('div', { class: 't-dist-li t-dist-log' }, [
+                      el('time', { datetime: act.at }, [shortDay(dayIn(act.at, ZONE))]),
+                      act.url === null ? el('b', {}, [act.line]) : el('a', { href: act.url, target: '_blank', rel: 'noopener' }, [el('b', {}, [act.line])]),
+                      el('span', { class: 't-dist-kind' }, [kindWords(act.kind)]),
+                      el('a', { class: 't-dist-sub', href: distributionPath(act.product === 'capsjump' ? 'capsjump' : 'stigmer'), 'data-distribution': act.product }, [
+                        `${act.product === 'capsjump' ? PRODUCT_NAMES.capsjump : PRODUCT_NAMES.stigmer} · ${platformName(act.platform)}`,
+                      ]),
+                    ]),
+                  ),
+                ),
+              ]),
+            ]
+          : []),
         ...(truncated ? [el('p', { class: 't-note' }, ['Only the newest 200 threads and words are shown.'])] : []),
       ]),
       el('div', { class: 't-person-side' }, [
@@ -5335,6 +5708,7 @@ class Threads {
           { label: 'Go to people', hay: 'people person everyone who', key: '', run: () => void this.go({ view: 'people' }) },
           { label: 'Go to Meetings', hay: 'meetings calendar when', key: '', run: () => void this.go({ view: 'meetings' }) },
           { label: 'Go to Asks', hay: 'asks forms questions links answers', key: '', run: () => void this.go({ view: 'asks' }) },
+          { label: 'Go to Distribution', hay: 'distribution posts platforms engage stigmer capsjump launch', key: '', run: () => void this.go({ view: 'distribution', product: 'stigmer' }) },
           { label: 'Go to Journal', hay: 'journal days diary story stories today page', key: '', run: () => void this.go({ view: 'journal' }) },
           { label: 'Go to Storylines', hay: 'storylines journal countdown trail', key: '', run: () => void this.go({ view: 'storylines' }) },
           { label: 'New thread', hay: 'new thread start create', key: 'N', run: () => this.openNew({ title: words !== '' && !/^#?\d+$/.test(words) ? words : '' }) },
@@ -7720,12 +8094,25 @@ class Threads {
           this.from = 'collection';
           this.fromCollection = this.collection.collection.number;
         } else if (link.classList.contains('t-row') || link.classList.contains('t-card') || link.classList.contains('t-ask-main')) {
-          this.from = this.route.view === 'today' ? 'today' : this.route.view === 'list' ? 'list' : this.route.view === 'meetings' ? 'meetings' : this.route.view === 'asks' ? 'asks' : this.from;
+          this.from =
+            this.route.view === 'today'
+              ? 'today'
+              : this.route.view === 'list'
+                ? 'list'
+                : this.route.view === 'meetings'
+                  ? 'meetings'
+                  : this.route.view === 'asks'
+                    ? 'asks'
+                    : this.route.view === 'distribution'
+                      ? 'distribution'
+                      : this.from;
         }
         this.openThread(Number(link.dataset.thread));
       } else if (link.dataset.person !== undefined) void this.go({ view: 'person', number: Number(link.dataset.person) });
       else if (link.dataset.collection !== undefined) void this.go({ view: 'collection', number: Number(link.dataset.collection) });
       else if (link.dataset.go === 'collections') void this.go({ view: 'collections' });
+      else if (link.dataset.go === 'distribution') void this.go({ view: 'distribution', product: 'stigmer' });
+      else if (link.dataset.distribution === 'stigmer' || link.dataset.distribution === 'capsjump') void this.go({ view: 'distribution', product: link.dataset.distribution });
       else if (link.dataset.journal !== undefined) {
         const route = journalRoute(link.dataset.journal);
         if (route !== null) void this.go(route);
@@ -7761,14 +8148,45 @@ class Threads {
       return;
     }
     if (!(button instanceof HTMLElement)) return;
-    if (button.dataset.go === 'today' || button.dataset.go === 'list' || button.dataset.go === 'people' || button.dataset.go === 'meetings' || button.dataset.go === 'asks' || button.dataset.go === 'journal' || button.dataset.go === 'collections') {
+    if (
+      button.dataset.go === 'today' ||
+      button.dataset.go === 'list' ||
+      button.dataset.go === 'people' ||
+      button.dataset.go === 'meetings' ||
+      button.dataset.go === 'asks' ||
+      button.dataset.go === 'journal' ||
+      button.dataset.go === 'collections' ||
+      button.dataset.go === 'distribution'
+    ) {
       event.preventDefault();
       const go = button.dataset.go;
+      if (go === 'distribution') {
+        void this.go({ view: 'distribution', product: 'stigmer' });
+        return;
+      }
       void this.go(go === 'collections' ? { view: 'collections' } : go === 'today' ? { view: 'today' } : go === 'people' ? { view: 'people' } : go === 'meetings' ? { view: 'meetings' } : go === 'asks' ? { view: 'asks' } : go === 'journal' ? { view: 'journal' } : { view: 'list', tab: this.tab, only: this.only, space: this.space });
       return;
     }
     const thread = this.target();
     switch (button.dataset.act) {
+      case 'room-product': {
+        const product = button.dataset.product;
+        if (product === 'stigmer' || product === 'capsjump') void this.go({ view: 'distribution', product });
+        break;
+      }
+      case 'platform': {
+        const key = `${this.roomProduct}:${button.dataset.platform ?? ''}`;
+        if (this.platformsOpen.has(key)) this.platformsOpen.delete(key);
+        else this.platformsOpen.add(key);
+        this.keepScroll = true;
+        this.render();
+        break;
+      }
+      case 'log-all':
+        this.logAll = true;
+        this.keepScroll = true;
+        this.render();
+        break;
       case 'only': {
         const status = button.dataset.only;
         if (this.route.view !== 'list' || (status !== 'received' && status !== 'act' && status !== 'discuss')) break;

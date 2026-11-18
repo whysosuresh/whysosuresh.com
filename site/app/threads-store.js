@@ -23,6 +23,11 @@
 // person with their threads and what they said, and `editPerson` changes their name, their address once, or his notes
 // on them; an address another person holds is refused as Failed `email-taken`, whose `detail` names that person's
 // number. A search answers the people whose name or address holds the words beside the threads, for him alone.
+// A person's call also lists the distribution acts that name them (`acts`).
+//
+// Distribution's room is one read per product (`distribution`, src/distribution.ts): its platforms, its acts since a
+// day, its weekly readings, the open threads of his Distribution collection in its space and the newest Engage log;
+// the page only reads it, because the recorder sync writes it.
 //
 // Any thread can be one meeting (`meeting` on every thread: its when, length, where and people): `meet` sets or
 // clears it, and `attendee` adds someone by number, or someone new by name, or takes one off; each answers the thread.
@@ -107,7 +112,7 @@
  * @typedef {{ thread: PublicThread, page: PublicPage | null, comments: PublicComment[], truncated: boolean, ownerPhoto?: string | null }} PublicShown
  * @typedef {'show' | 'drop'} Judgement
  * @typedef {{ id?: string, number?: number, name: string | null, email?: string, addedAt?: string, owner?: boolean, photo?: string | null, through?: KeptIn | null }} Person
- * @typedef {{ sent: number, told: number, invited: number, removed: number, commented: number, noted: number, met?: number }} Counts
+ * @typedef {{ sent: number, told: number, invited: number, removed: number, commented: number, noted: number, met?: number, acted?: number }} Counts
  * @typedef {{
  *   number: number, name: string | null, email: string | null, createdAt: string, lastContact: string,
  *   invited: boolean, dropped: boolean, counts: Counts, note?: string | null, photo?: string | null
@@ -117,7 +122,9 @@
  *   kind: 'note' | 'comment' | 'public-note' | 'answer', thread: { number: number, title: string | null }, body: string, at: string,
  *   state: string | null, audience: string | null
  * }} Said
- * @typedef {{ person: Someone, threads: TheirThread[], words: Said[], truncated: boolean }} PersonShown
+ * @typedef {import('./distribution.js').Act} Act
+ * @typedef {{ person: Someone, threads: TheirThread[], words: Said[], acts?: Act[], truncated: boolean }} PersonShown
+ * @typedef {Omit<import('./distribution.js').Room, 'work'> & { work: { collection: number | null, threads: Thread[] } }} DistributionRoom
  * @typedef {{ name: string } | { email: string } | { note: string }} PersonChange
  * @typedef {{ threads: Thread[], people: Someone[], collections: Collection[] }} Found
  * @typedef {{ people: Person[], invitedCount: number }} People
@@ -625,6 +632,16 @@ export async function listPeople() {
  */
 export async function showPerson(number) {
   return /** @type {PersonShown} */ (await call(`/people/${number}`, { method: 'GET' }));
+}
+
+/**
+ * A product's distribution room, its acts since a day.
+ * @param {'stigmer' | 'capsjump'} product
+ * @param {string} since
+ * @returns {Promise<DistributionRoom>}
+ */
+export async function distribution(product, since) {
+  return /** @type {DistributionRoom} */ (await call(`/distribution?${new URLSearchParams({ product, since }).toString()}`, { method: 'GET' }));
 }
 
 /**

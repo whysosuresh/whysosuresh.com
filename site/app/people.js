@@ -9,7 +9,7 @@
 // them without a page.
 
 /**
- * @typedef {{ sent: number, told: number, invited: number, removed: number, commented: number, noted: number, met?: number }} Counts
+ * @typedef {{ sent: number, told: number, invited: number, removed: number, commented: number, noted: number, met?: number, acted?: number }} Counts
  * @typedef {{ number: number, name: string | null, email: string | null, invited: boolean, dropped: boolean, counts: Counts }} Known
  */
 
@@ -69,6 +69,7 @@ export function howLine(counts) {
     ...(counts.commented > 0 ? [count(counts.commented, 'comment', 'comments')] : []),
     ...(counts.noted > 0 ? [count(counts.noted, 'note on a public thread', 'notes on public threads')] : []),
     ...((counts.met ?? 0) > 0 ? [`in ${count(counts.met ?? 0, 'meeting', 'meetings')}`] : []),
+    ...((counts.acted ?? 0) > 0 ? [`met in public: ${count(counts.acted ?? 0, 'act', 'acts')}`] : []),
   ];
   const line = parts.join(' · ');
   return line === '' ? 'Nothing from them yet' : `${line.charAt(0).toUpperCase()}${line.slice(1)}`;
