@@ -6,7 +6,8 @@
 // a person's address gets the plain shell whatever the number, so it never says whether that person exists; and a
 // thread, /threads/<n>, with its title after the number or not (/threads/42-who-owns-what), or a public thread's link,
 // /threads/<key>, its 32-character key and nothing after it; and Suresh's journal, /journal with a day, a week or the storylines under it,
-// which reads nothing either. People lived under
+// which reads nothing either; and his collections, /collections and /collections/<n> with the name after it or not,
+// which read nothing either (/collections/ redirects to /collections). People lived under
 // /threads/ before the rooms were peers: /threads/people and every person's address there redirect to /people for
 // good, and /people/ to /people. Each gets the one page, site/threads/index.html,
 // handed over from the site's own files through the assets binding, so it carries site/_headers (the CSP among
@@ -43,12 +44,12 @@ import { SLUG_SHAPE } from "./asks.ts";
 import { findAsk, publicPreview, type PreviewRow, type PublicAddress } from "./store.ts";
 
 /**
- * The root (Today), the meetings, the asks, everyone and a person by their number, the list, a thread by its number with any title
+ * The root (Today), the meetings, the asks, everyone and a person by their number, the collections and one by its number, the list, a thread by its number with any title
  * after it or by its link's key (a key is 32 characters and a number at most nine digits, so the two never overlap), an ask by its slug, and the journal's (his alone, drawn only once the calls say he is the owner): the list,
  * a day or a week by its key, the storylines and one storyline by its name's slug. A key is matched by its shape, so an
  * impossible day gets the shell like any other and says "Nothing here" itself.
  */
-const PAGE = /^(?:\/|\/meetings|\/asks|\/journal(?:\/(?:\d{4}-\d{2}-\d{2}|\d{4}-W\d{2}|storylines(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?))?|\/people(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?)?|\/threads\/([0-9a-f]{32})|\/ask\/([^/]+))$/;
+const PAGE = /^(?:\/|\/meetings|\/asks|\/journal(?:\/(?:\d{4}-\d{2}-\d{2}|\d{4}-W\d{2}|storylines(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?))?|\/people(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/collections(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?)?|\/threads\/([0-9a-f]{32})|\/ask\/([^/]+))$/;
 
 /** What an ask's preview says beside its title, the same for every ask. */
 export const ASK_DESCRIPTION = "A few questions from Suresh";
@@ -59,6 +60,8 @@ const UNTITLED_ASK = "Questions from Suresh";
 const OLD_PEOPLE = /^\/threads\/people(?:\/((?:[1-9]\d{0,8}(?:-[^/]*)?)?))?$|^\/people\/$/;
 /** The journal's address with a slash after it, which the Worker sends to /journal as /people/ goes to /people. */
 const JOURNAL_SLASH = "/journal/";
+/** The collections' address with a slash after it, which the Worker sends to /collections as /journal/ goes to /journal. */
+const COLLECTIONS_SLASH = "/collections/";
 
 /** The page's own address among the site's files. */
 const SHELL = "/threads/";
@@ -182,6 +185,9 @@ export async function handlePage(request: Request, env: Bindings): Promise<Respo
   }
   if (url.pathname === JOURNAL_SLASH && (request.method === "GET" || request.method === "HEAD")) {
     return new Response(null, { status: 301, headers: { Location: `/journal${url.search}` } });
+  }
+  if (url.pathname === COLLECTIONS_SLASH && (request.method === "GET" || request.method === "HEAD")) {
+    return new Response(null, { status: 301, headers: { Location: `/collections${url.search}` } });
   }
   const page = PAGE.exec(url.pathname);
   if (page === null || (request.method !== "GET" && request.method !== "HEAD")) return env.ASSETS.fetch(request);

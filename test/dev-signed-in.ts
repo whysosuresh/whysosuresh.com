@@ -41,7 +41,10 @@
 // `--page <file>` (an
 // artifact's HTML as the Artifact tool's read saved it) as a version of one thread. Requests reach the Worker at
 // these local addresses, so the bridge a page carries addresses what it says to them, as it addresses
-// hey.whysosuresh.com live. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
+// hey.whysosuresh.com live. His collections, 44 of them, made as the sync makes them: "Every screen", pinned, whose rule
+// ("Design page:") keeps the six design pages seeded after it; "Every decision", pinned, holding 180 made-up settled
+// calls (two thirds of them done), enough for its search, its filter and its pages; "Talk material" with a few of the
+// seed's threads; and 41 more holding a handful of the decisions each, so the room pages and searches. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
 // played keys.
 
 import { readFileSync } from "node:fs";
@@ -504,7 +507,55 @@ async function seedOutside(): Promise<void> {
   await (await harness.pages()).put("outside/EPISODE0002.jpg", THUMB, { httpMetadata: { contentType: "image/jpeg" } });
 }
 
+/** Sends one collections call as the sync, as `inbox collection` does, and answers its JSON. */
+async function asSyncTo(path: string, body: unknown): Promise<Record<string, unknown>> {
+  const response = await harness.fetch(`${THREADS}/threads/api/collections${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": sync() },
+    body: new TextEncoder().encode(JSON.stringify(body)),
+  });
+  if (!response.ok) throw new Error(`seeding collections${path} answered ${response.status}: ${await response.text()}`);
+  return (await response.json()) as Record<string, unknown>;
+}
+
+async function seedCollections(): Promise<void> {
+  const make = async (name: string, description?: string): Promise<number> =>
+    ((await asSyncTo("", description === undefined ? { name } : { name, description })).collection as { number: number }).number;
+  const keep = (collection: number, thread: number): Promise<Record<string, unknown>> => asSyncTo(`/${collection}/threads`, { add: thread });
+  const add = async (ref: string, fields: Record<string, unknown>): Promise<number> =>
+    ((await asSync("", { ref, source: "self", status: "act", space: "stigmer", ...fields })).thread as { number: number }).number;
+
+  const screens = await make("Every screen", "The console's design pages, one per area. The reference for anything new.");
+  await asSyncTo(`/${screens}`, { rule: "Design page:" });
+  await asSyncTo(`/${screens}`, { pinned: true });
+  for (const [i, area] of ["the session viewer, redrawn", "the console's shared parts, forms and dialogs", "the Library and conversations", "the help line on failures", "the settings pages", "the workspace pages"].entries()) {
+    const number = await add(`chat:seed-screen-${i}`, { title: `Design page: ${area}`, body: `The look for ${area}.` });
+    if (i % 2 === 0) await asSync(`/${number}`, { action: "done" });
+  }
+
+  const decisions = await make("Every decision", "Each settled call, kept so nobody asks twice.");
+  await asSyncTo(`/${decisions}`, { pinned: true });
+  const topics = ["pricing for teams", "the free plan cap", "sandbox sleep time", "the session viewer", "sign-in emails", "Library rows", "model providers", "the marketplace", "workspace roles", "the audit log", "billing emails", "CLI verbs", "error help lines", "the status page", "release notes", "the docs home", "the onboarding email", "agent limits", "the MCP door", "search in the console"];
+  const settled: number[] = [];
+  for (let i = 0; i < 180; i += 1) {
+    const number = await add(`chat:seed-decision-${i}`, { title: `Settled: ${topics[i % topics.length] ?? ""}, round ${Math.floor(i / topics.length) + 1}`, body: "Settled, and written down here." });
+    if (i % 3 !== 0) await asSync(`/${number}`, { action: "done" });
+    settled.push(number);
+  }
+  for (const number of [...settled].reverse()) await keep(decisions, number);
+
+  const talk = await make("Talk material", "Everything the December talk draws on.");
+  for (const number of [5, 3, 2]) await keep(talk, number);
+
+  const names = ["Talks I give", "Investor updates", "CapsJump launch", "Episode ideas", "Hiring", "Customer calls", "Pricing", "Onboarding", "Demo scripts", "Conference notes", "Partner ideas", "Docs to rewrite", "Security reviews", "Brand and look", "Home page posts", "Reading list", "Interview notes", "Distribution", "Weekly reviews", "Merch", "Community", "Founder letters", "Tools I use", "Mac tricks", "Releases", "Postmortems", "Roadmap bets", "Friends asked", "Podcast guests", "Thumbnails", "Cold emails that worked", "Design references", "Open questions", "Ideas for later", "Health", "Meet-ups", "Books", "Things to write about", "Small fixes", "Rituals", "Someday"];
+  for (const [i, name] of names.entries()) {
+    const number = await make(name);
+    for (let k = 0; k < 2 + (i % 5); k += 1) await keep(number, settled[(i * 7 + k * 13) % settled.length] ?? 1);
+  }
+}
+
 await seed();
+await seedCollections();
 const links = (
   await (await harness.db())
     .prepare("SELECT number, title, share_key, public_by_number FROM threads WHERE share_key IS NOT NULL ORDER BY number")

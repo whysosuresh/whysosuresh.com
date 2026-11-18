@@ -46,7 +46,8 @@ describe("the privacy probe", () => {
     expect(asked).toContain("/threads/api/collections");
     expect(asked).toContain("/threads/api/collections/1");
     expect(asked).toContain("/");
-    expect(asked.filter((path) => path.startsWith("home:"))).toEqual(["home:/threads/api/me", "home:/threads/api/journal", "home:/journal", "home:/me"]);
+    expect(asked).toContain("/collections/1");
+    expect(asked.filter((path) => path.startsWith("home:"))).toEqual(["home:/threads/api/me", "home:/threads/api/journal", "home:/journal", "home:/me", "home:/collections"]);
   });
 
   it("fails, naming it, when an old address on the home page's host still answers", async () => {
@@ -61,7 +62,8 @@ describe("the privacy probe", () => {
     const { fetcher } = site((path) => (path === "/" ? new Response(null, { status: 404 }) : null));
     const failures = await run(fetcher, ORIGIN, ACCESS, "2026-11-06", "2026-W45");
     expect(failures[0]).toBe("the threads' root answered 404, so no page can be compared with the shell");
-    expect(failures).toHaveLength(5);
+    // The root, then each page that must be the shell: four of the journal's and two of the collections'.
+    expect(failures).toHaveLength(7);
   });
 
   it("asks every kind of journal address, the threads' private calls, and forged sign-ins", () => {

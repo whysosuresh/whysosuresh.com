@@ -6,13 +6,14 @@
 // reload keeps and a copied address never carries, so the address bar always holds the one link that opens full
 // screen. An entry with no choice is an arrival (a link pasted, an invitation, the home page), and opens full screen
 // for a page thread, or for any thread at an old `?full` address. `back` marks an entry Thread made on top of the
-// page, so Full screen goes back to it rather than growing the history. Plain data and pure functions, so a test can
-// read them without a page (test/page-view.test.ts).
+// page, so Full screen goes back to it rather than growing the history. `collection` marks a thread opened from one of
+// his collections, so J and K walk that collection, a reload included, while a copied address opens the thread plainly.
+// Plain data and pure functions, so a test can read them without a page (test/page-view.test.ts).
 
 /**
  * What a history entry says about the page: full screen or the thread view, and whether Thread made it on top of the
- * page (`back`), so leaving it goes back.
- * @typedef {{ page: 'full' | 'thread', back?: true }} PageState
+ * page (`back`), so leaving it goes back, and the collection it was opened from, by number (`collection`).
+ * @typedef {{ page: 'full' | 'thread', back?: true, collection?: number }} PageState
  */
 
 /**
@@ -24,7 +25,11 @@ export function readPageState(state) {
   if (typeof state !== 'object' || state === null || !('page' in state)) return null;
   const page = state.page;
   if (page !== 'full' && page !== 'thread') return null;
-  return 'back' in state && state.back === true ? { page, back: true } : { page };
+  /** @type {PageState} */
+  const read = 'back' in state && state.back === true ? { page, back: true } : { page };
+  const collection = 'collection' in state ? state.collection : undefined;
+  if (typeof collection === 'number' && Number.isInteger(collection) && collection >= 1) read.collection = collection;
+  return read;
 }
 
 /**
