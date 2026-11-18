@@ -87,6 +87,12 @@
 // the ask being open in each insert's own SQL, so an answer racing a close is kept nowhere. A response thread's pages
 // are its ask's (`COALESCE(ask_thread_id, id)` wherever pages are read), and it is never given a page or a link of its
 // own. Its answers carry its person, so a person's page shows them (`wordsOfPerson`).
+//
+// A thread worth keeping may sit in his collections (migrations/0023_collections.sql, src/collections-store.ts), each
+// a named set in his order. Keeping changes nothing about the thread: its status, last activity and readers stay. Its
+// `kept` and `unkept` events are his own business (`OWNERS_EVENTS`). A collection may carry a rule, a title prefix:
+// a new thread of his or the sync's whose title begins with it joins the collection in the batch that makes it
+// (`ruleStatements`), and only then.
 
 import { LISTS, isList, type List } from "../site/app/standing.js";
 import { outsideItems, type OutsideRow } from "./outside-store.ts";
@@ -277,7 +283,7 @@ export type Locator = { readonly number: number };
 type Value = string | number | null;
 
 /** The numbered parameters of one statement: `add` binds a value and answers its `?N`. */
-class Params {
+export class Params {
   readonly values: Value[] = [];
 
   add(value: Value): string {
@@ -350,7 +356,7 @@ function readable(reader: Reader, p: Params): string {
   return reader.caller === "member" ? ` AND ${standing("threads.id", reader.email, p)}` : "";
 }
 
-function statement(db: D1Database, sql: string, p: Params): D1PreparedStatement {
+export function statement(db: D1Database, sql: string, p: Params): D1PreparedStatement {
   return db.prepare(sql).bind(...p.values);
 }
 
@@ -478,7 +484,48 @@ function createStatements(db: D1Database, thread: NewThread, actor: Actor, now: 
      SELECT id, created_at, ${e.add(actor)}, 'created', json_object('source', source, 'status', status) FROM threads WHERE id = ${e.add(id)}`,
     e,
   );
-  return { statements: [...(person.make === null ? [] : [person.make]), insert, event], row: person.make === null ? 0 : 1 };
+  const kept = actor === "owner" || actor === "sync" ? ruleStatements(db, id, actor, now) : [];
+  return { statements: [...(person.make === null ? [] : [person.make]), insert, event, ...kept], row: person.make === null ? 0 : 1 };
+}
+
+/**
+ * A collection whose rule matches the thread `threads` names: the rule is a prefix of its title, ignoring case
+ * (ASCII, as SQLite's lower() folds it).
+ */
+const RULE_MATCHES =
+  "collections.rule_prefix IS NOT NULL AND threads.title IS NOT NULL AND lower(substr(threads.title, 1, length(collections.rule_prefix))) = lower(collections.rule_prefix)";
+
+/**
+ * A new thread's place in every collection whose rule its title meets, as three statements its creation batch runs
+ * after the `created` event: a `kept` event per collection (naming the rule), the thread at each collection's end,
+ * and each such collection's `changed_at`. Each selects the thread by its new id, so it finds a row only when the
+ * insert made one: adding a kept origin again never keeps a thread again that he took out. A title edit later moves
+ * nothing; the rule is for new threads, his own and the sync's (a visitor's note and an ask's answer never match).
+ */
+function ruleStatements(db: D1Database, id: string, actor: Author, now: string): D1PreparedStatement[] {
+  const e = new Params();
+  const event = statement(
+    db,
+    `INSERT INTO events (thread_id, at, actor, type, data)
+     SELECT threads.id, threads.created_at, ${e.add(actor)}, 'kept', json_object('collection', collections.number, 'name', collections.name, 'rule', collections.rule_prefix)
+     FROM threads JOIN collections ON ${RULE_MATCHES} WHERE threads.id = ${e.add(id)} ORDER BY collections.number`,
+    e,
+  );
+  const k = new Params();
+  const keep = statement(
+    db,
+    `INSERT INTO collection_threads (collection_number, thread_id, position, added_at)
+     SELECT collections.number, threads.id, (SELECT COUNT(*) FROM collection_threads AS kept WHERE kept.collection_number = collections.number), threads.created_at
+     FROM threads JOIN collections ON ${RULE_MATCHES} WHERE threads.id = ${k.add(id)}`,
+    k,
+  );
+  const c = new Params();
+  const changed = statement(
+    db,
+    `UPDATE collections SET changed_at = ${c.add(now)} WHERE number IN (SELECT collection_number FROM collection_threads WHERE thread_id = ${c.add(id)})`,
+    c,
+  );
+  return [event, keep, changed];
 }
 
 /**
@@ -575,10 +622,10 @@ const COMMENT_COLUMNS =
 
 /**
  * Events an invited person never sees: the owner's mail opening, the copy from the old inbox, a visitor's note
- * dropped or sent back to waiting, which would tell them a note arrived that they could never read, and his marking
- * an ask's answers read.
+ * dropped or sent back to waiting, which would tell them a note arrived that they could never read, his marking
+ * an ask's answers read, and his keeping a thread in a collection or taking it out, which would name his collections.
  */
-const OWNERS_EVENTS = "'reply-opened', 'imported', 'note-dropped', 'note-held', 'ask-read'";
+const OWNERS_EVENTS = "'reply-opened', 'imported', 'note-dropped', 'note-held', 'ask-read', 'kept', 'unkept'";
 
 /**
  * A thread's comments and events, oldest first, up to `limit` of each. An invited person reads only the comments
