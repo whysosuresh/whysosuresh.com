@@ -8,8 +8,8 @@
 // status and last activity alone; a rule keeps every new thread of his or the sync's whose title begins with it,
 // never one he took out whose origin comes again, never on a title edit, never a visitor's; a thread's own read and
 // a search name its collections for the owner and the sync only; renaming, describing, pinning and deleting change
-// only the collection, and deleting leaves the threads and their history; an invited person is refused every call
-// before anything is read, signed out nobody gets in, and the owner's writes come only from his own page.
+// only the collection, and deleting leaves the threads and their history; an invited person sees no collection not
+// shared with them and is refused every write before anything is read (test/members.test.ts holds a shared one), signed out nobody gets in, and the owner's writes come only from his own page.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SITE, THREADS, startHarness, type Harness } from "./harness.ts";
@@ -408,19 +408,20 @@ describe("a thread's read and a search", () => {
     const found = await answer<{ collections: Collection[] }>(await call("/search?q=every"));
     expect(found.collections.map((one) => one.number)).toEqual([c]);
     expect((await answer<{ collections: Collection[] }>(await call("/search?q=screen", { as: "sync" }))).collections).toHaveLength(1);
-    expect(await answer(await call("/search?q=door", { as: { email: MEERA } }))).toEqual({ threads: [expect.objectContaining({ number: t })] });
+    // Collections not shared with them never appear in their search (test/members.test.ts holds the shared ones).
+    expect(await answer(await call("/search?q=door", { as: { email: MEERA } }))).toEqual({ threads: [expect.objectContaining({ number: t })], collections: [] });
   });
 });
 
 describe("who may call", () => {
-  it("refuses an invited person every call with 403 owner-only, before anything is read", async () => {
+  it("shows an invited person no collection not shared with them, and refuses them every write before anything is read", async () => {
     const t = await thread();
     await answer(await call(`/threads/${t}/people`, { body: { add: { email: MEERA, name: "Meera" } } }));
     await collection("Every screen");
     const as = { email: MEERA };
-    for (const path of ["/collections", "/collections/1", "/collections/9", "/collections?q=x"]) {
-      expect([path, ...(await reasonOf(await call(path, { as })))]).toEqual([path, 403, "owner-only"]);
-    }
+    expect(await answer(await call("/collections", { as }))).toEqual({ pinned: [], collections: [], next: null, count: 0 });
+    for (const path of ["/collections/1", "/collections/9"]) expect([path, ...(await reasonOf(await call(path, { as })))]).toEqual([path, 404, "no-collection"]);
+    expect(await reasonOf(await call("/collections/1/people", { as }))).toEqual([403, "owner-only"]);
     const writes: [string, unknown][] = [
       ["/collections", { name: "Mine" }],
       ["/collections/1", { name: "Mine" }],
@@ -448,7 +449,7 @@ describe("who may call", () => {
     const headers = { "Cf-Access-Jwt-Assertion": token("owner"), Origin: THREADS };
     expect((await harness.fetch(`${THREADS}/threads/api/collections`, { method: "DELETE", headers })).status).toBe(405);
     expect((await harness.fetch(`${THREADS}/threads/api/collections/1/threads`, { headers })).status).toBe(405);
-    expect(await reasonOf(await call("/collections/1/people"))).toEqual([404, "not-found"]);
+    expect(await reasonOf(await call("/collections/1/share"))).toEqual([404, "not-found"]);
     expect(await reasonOf(await call("/collections/1?x=1", { body: { name: "B" } }))).toEqual([400, "query"]);
   });
 });

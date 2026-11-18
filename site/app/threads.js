@@ -186,7 +186,7 @@ import {
   walkLine,
 } from './collections.js';
 import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, saidOn, takenLine } from './people.js';
-import { addressOf, feedLines, invitation, invitationProblem, isAddress, levelOf, linkShown, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
+import { addressOf, collectionInvitation, collectionSeatsLine, collectionSeesLines, feedLines, invitation, invitationProblem, isAddress, levelOf, linkShown, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
 import { prepare as prepareBotCheck, sendTo } from '../talk-send.js';
 import {
   Failed,
@@ -198,6 +198,8 @@ import {
   attendee,
   changeCollection,
   changeKept,
+  collectionPeople,
+  shareCollection,
   comment,
   edit,
   listCollections,
@@ -294,7 +296,8 @@ import {
  * @typedef {{ to: string, subject: string, body: string }} Draft
  * @typedef {{ title: string, summary: string, body: string }} Editing
  * @typedef {{ title: string, space: string, status: 'received' | 'act' | 'discuss', body: string }} NewDraft
- * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share' | 'discussion' | 'meeting' | 'more' | 'photo' | 'keep' | 'kept-menu' | 'collection-edit' | 'collection-delete'} Overlay
+ * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share' | 'discussion' | 'meeting' | 'more' | 'photo' | 'keep' | 'kept-menu' | 'collection-edit' | 'collection-delete' | 'collection-share'} Overlay
+ * @typedef {{ number: number, people: Person[], count: number, email: string, name: string, problem: string, invited: { name: string, email: string } | null, busy: boolean }} CollectionSharing
  * @typedef {{ number: number, people: Person[], count: number, email: string, name: string, problem: string,
  *   invited: { name: string, email: string } | null, busy: boolean }} Sharing
  * @typedef {{ label: string, sub: string, side: string, number: number | null, person: number | null, collection?: number | null, photo?: string | null, run: () => void }} FindItem
@@ -739,10 +742,14 @@ function meetingData(value) {
   return { when: value.when, minutes, where };
 }
 
-/** Whether a view is his alone: the Threads room, the people, the asks, the journal and the collections. @param {Route} route */
+/**
+ * Whether a view is his alone: the Threads room, the people, the asks, the journal and the Collections room. A
+ * collection's own page opens for a person he shared it with, and is "Nothing here" to anyone else.
+ * @param {Route} route
+ */
 function isHis(route) {
   const view = route.view;
-  return view === 'collections' || view === 'collection' || view === 'list' || view === 'people' || view === 'person' || view === 'asks' || view === 'journal' || view === 'entry' || view === 'storylines' || view === 'storyline';
+  return view === 'collections' || view === 'list' || view === 'people' || view === 'person' || view === 'asks' || view === 'journal' || view === 'entry' || view === 'storylines' || view === 'storyline';
 }
 
 /** The journal's view an address names, or null when it names none. @param {string} path @returns {Route | null} */
@@ -1106,6 +1113,14 @@ class Threads {
     this.keptMenu = null;
     /** @type {number | null} */
     this.dragging = null;
+    /** The people the collection shown is shared with, for its side panel and Share; null until read. @type {Person[] | null} */
+    this.collectionShared = null;
+    /** The collection's Share sheet while it is open. @type {CollectionSharing | null} */
+    this.collectionSharing = null;
+    /** The collections shared with an invited person, for their door and rail. @type {Collection[]} */
+    this.sharedCollections = [];
+    /** The threads shared with an invited person on their own, which their list holds; a collection's are its own. @type {Set<number>} */
+    this.ownThreads = new Set();
     /** The kept thread whose row has the focus, given back after a redraw; null once the focus is anywhere else. @type {number | null} */
     this.keptFocus = null;
     /** The person whose page a thread was opened from. @type {number | null} */
@@ -1302,6 +1317,7 @@ class Threads {
       this.keep = null;
       this.keptMenu = null;
       this.collectionDraft = null;
+      this.collectionSharing = null;
       this.dialog.replaceChildren();
       this.main.focus({ preventScroll: true });
     });
@@ -1322,7 +1338,7 @@ class Threads {
     // A link names its thread by key: resolved once, here, so everything after it sees a thread's number.
     if (this.route.view === 'shared') this.route = await this.resolveShared(this.route);
     const route = this.route;
-    const inviting = route.view === 'thread' && new URLSearchParams(location.search).has('invite');
+    const inviting = (route.view === 'thread' || route.view === 'collection') && new URLSearchParams(location.search).has('invite');
     if (route.view === 'list') {
       this.tab = route.tab;
       this.only = route.only;
@@ -1340,7 +1356,7 @@ class Threads {
       this.myPhoto = who.photo ?? null;
       if (this.caller === 'member' && isHis(route)) this.route = { view: 'today' };
       const person = this.caller === 'owner' && route.view === 'person' ? this.loadPerson(route.number) : Promise.resolve();
-      const collection = this.caller === 'owner' && this.route.view === 'collection' ? this.loadCollection(this.route.number) : Promise.resolve();
+      const collection = this.route.view === 'collection' ? this.loadCollection(this.route.number) : Promise.resolve();
       await Promise.all([this.loadAll(), thread, person, collection]);
     } catch (error) {
       if (error instanceof SignedOut && inviting) location.replace(signInAddress(location.pathname));
@@ -1351,10 +1367,18 @@ class Threads {
       } else this.fail(error, "The threads didn't load.");
       return;
     }
-    if (inviting || (this.caller === 'member' && isHis(route))) history.replaceState(null, '', this.route.view === 'thread' ? location.pathname : ME);
+    if (inviting || (this.caller === 'member' && isHis(route))) history.replaceState(null, '', this.route.view === 'thread' || this.route.view === 'collection' ? location.pathname : ME);
     this.applyCaller();
     rememberSignedIn();
-    if (!this.member) {
+    if (this.route.view === 'collection') {
+      this.from = 'collection';
+      this.fromCollection = this.route.number;
+      if (!this.member) void this.loadCollectionPeople(this.route.number);
+    }
+    if (this.member) {
+      void this.loadSharedCollections();
+      if (this.route.view === 'thread') this.adoptWalk(history.state);
+    } else {
       void this.loadCollections();
       if (this.route.view === 'collections') void this.loadRoom();
       if (this.route.view === 'collection') {
@@ -1421,6 +1445,7 @@ class Threads {
     if (this.caller === 'member') {
       const mine = await listMine();
       this.threads = new Map(mine.map((thread) => [thread.number, thread]));
+      this.ownThreads = new Set(mine.map((thread) => thread.number));
     } else {
       const [pages, people] = await Promise.all([Promise.all(TABS.map((tab) => listAll(tab))), listPeople()]);
       this.threads = new Map(pages.flatMap((page) => page.threads).map((thread) => [thread.number, thread]));
@@ -1677,6 +1702,7 @@ class Threads {
       this.addWords = '';
       this.addFound = [];
       this.ruleDraft = null;
+      this.collectionShared = null;
     }
     if (route.view === 'thread' && !push) this.adoptWalk(history.state);
     this.answeredAll = false;
@@ -1713,7 +1739,10 @@ class Threads {
     if (route.view === 'people') void this.loadPeople();
     if (route.view === 'asks') void this.loadAsks();
     if (route.view === 'collections') void this.loadRoom();
-    if (route.view === 'collection') void this.loadCollection(route.number);
+    if (route.view === 'collection') {
+      void this.loadCollection(route.number);
+      if (!this.member) void this.loadCollectionPeople(route.number);
+    }
     if (route.view === 'journal' || route.view === 'storylines' || route.view === 'storyline') void this.loadJournal();
     if (route.view === 'entry') {
       this.shown = null;
@@ -1859,7 +1888,7 @@ class Threads {
     if (this.route.view === 'entry' || this.route.view === 'storylines') void this.go({ view: 'journal' });
     else if (this.route.view === 'storyline') void this.go({ view: 'storylines' });
     else if (this.route.view === 'person') void this.go({ view: 'people' });
-    else if (this.route.view === 'collection') void this.go({ view: 'collections' });
+    else if (this.route.view === 'collection') void this.go(this.member ? { view: 'today' } : { view: 'collections' });
     else if (this.from === 'collection' && this.fromCollection !== null) void this.go({ view: 'collection', number: this.fromCollection });
     else if (this.from === 'person' && this.fromPerson !== null) void this.go({ view: 'person', number: this.fromPerson });
     else if (this.from === 'meetings') void this.go({ view: 'meetings' });
@@ -1902,9 +1931,9 @@ class Threads {
       .sort((a, b) => a.activityAt.localeCompare(b.activityAt));
   }
 
-  /** An invited person's threads, most recently active first. */
+  /** An invited person's threads, those shared with them on their own, most recently active first. */
   mine() {
-    return [...this.threads.values()].sort((a, b) => b.activityAt.localeCompare(a.activityAt) || b.number - a.number);
+    return [...this.threads.values()].filter((thread) => !this.member || this.ownThreads.has(thread.number)).sort((a, b) => b.activityAt.localeCompare(a.activityAt) || b.number - a.number);
   }
 
   /**
@@ -1921,7 +1950,7 @@ class Threads {
 
   /** The threads J and K walk: an invited person's own, Today's, the meetings', or the list's. */
   walk() {
-    if (this.from === 'collection' && !this.member) return this.walking !== null && this.walking.number === this.fromCollection ? this.walking.threads : [];
+    if (this.from === 'collection') return this.walking !== null && this.walking.number === this.fromCollection ? this.walking.threads : [];
     if (this.from === 'asks' && !this.member) return this.asks.map((ask) => ask.number);
     if (this.from === 'meetings') {
       const { coming, past } = this.meetings();
@@ -2075,7 +2104,16 @@ class Threads {
       const { coming } = this.meetings();
       const meetings = el('a', { class: 't-nav-item', href: MEETINGS, 'data-go': 'meetings' }, [icon('cal'), 'Your meetings', el('span', { class: 't-nav-count' }, [String(coming.length)])]);
       if (this.route.view === 'meetings') meetings.setAttribute('aria-current', 'page');
-      this.nav.replaceChildren(el('div', { class: 't-nav-label' }, ['Shared with you, by Suresh']), item, ...theirs, meetings);
+      const kept = this.sharedCollections.map((one) => {
+        const link = el('a', { class: 't-nav-item t-nav-sub', href: collectionPath(one), 'data-collection': String(one.number) }, [
+          el('span', { class: 't-nav-pad' }),
+          el('span', { class: 't-nav-text' }, [one.name]),
+          el('span', { class: 't-nav-count' }, [String(one.threads)]),
+        ]);
+        if (this.route.view === 'collection' && this.route.number === one.number) link.setAttribute('aria-current', 'page');
+        return link;
+      });
+      this.nav.replaceChildren(el('div', { class: 't-nav-label' }, ['Shared with you, by Suresh']), item, ...kept, ...theirs, meetings);
       return;
     }
     const counts = new Map();
@@ -3150,10 +3188,21 @@ class Threads {
   mineView() {
     const mine = this.mine();
     return el('div', { class: 't-wrap' }, [
-      el('div', { class: 't-head' }, [el('div', {}, [el('h1', {}, ['Shared with you']), el('p', {}, ['The threads Suresh shared with you, newest activity first.'])])]),
+      el('div', { class: 't-head' }, [el('div', {}, [el('h1', {}, ['Shared with you']), el('p', {}, ['What Suresh shared with you: collections first, then threads, newest activity first.'])])]),
       ...this.nextMeetingCard('Your next meeting'),
-      el('div', { class: 't-list' }, mine.length > 0 ? mine.map((thread) => this.row(thread, firstLine(thread), { quiet: ['received'] })) : [el('div', { class: 't-empty' }, ['Nothing is shared with you yet.'])]),
-      el('p', { class: 't-note' }, ['Only the threads Suresh invites you to show here.']),
+      ...(this.sharedCollections.length > 0
+        ? [
+            el('section', { class: 't-section' }, [
+              el('div', { class: 't-section-head' }, [el('h2', {}, ['Collections']), el('span', { class: 't-n' }, [String(this.sharedCollections.length)])]),
+              el('div', { class: 't-list' }, this.sharedCollections.map((one) => this.collectionRow(one))),
+            ]),
+          ]
+        : []),
+      el('section', { class: 't-section' }, [
+        ...(this.sharedCollections.length > 0 ? [el('div', { class: 't-section-head' }, [el('h2', {}, ['Threads']), el('span', { class: 't-n' }, [String(mine.length)])])] : []),
+        el('div', { class: 't-list' }, mine.length > 0 ? mine.map((thread) => this.row(thread, firstLine(thread), { quiet: ['received'] })) : [el('div', { class: 't-empty' }, [this.sharedCollections.length > 0 ? 'No thread is shared with you on its own.' : 'Nothing is shared with you yet.'])]),
+      ]),
+      el('p', { class: 't-note' }, ['Only what Suresh invites you to shows here. A collection shows every thread in it, the ones he adds later too.']),
     ]);
   }
 
@@ -3285,7 +3334,7 @@ class Threads {
     const paged = thread.main === 'page' && this.shown.page !== null;
     const beside = paged && !this.columnless() && (places.words.length > 0 || this.wordsDraft !== null);
     const doc = el('article', { class: 't-doc' }, [
-      ...(this.member ? [] : this.walkBar(thread)),
+      ...this.walkBar(thread),
       crumbs,
       el('h1', { class: 't-title' }, [el('span', { class: 't-tn' }, [`#${thread.number}`]), ' ', titleOf(thread)]),
       // The byline's last words and its time sit in one box, so the line's gaps never part a link from its comma.
@@ -4891,7 +4940,13 @@ class Threads {
         [
           (this.shown?.people ?? []).length === 0
             ? el('span', { class: 't-dval t-dval-soft' }, ['Only you'])
-            : el('span', { class: 't-dpeople' }, (this.shown?.people ?? []).map((person) => el('span', {}, [this.nameNode(person.number, person.name ?? 'Someone'), ' ', el('small', {}, [person.email ?? ''])]))),
+            : el(
+                'span',
+                { class: 't-dpeople' },
+                (this.shown?.people ?? []).map((person) =>
+                  el('span', {}, [this.nameNode(person.number, person.name ?? 'Someone'), ' ', el('small', {}, [person.through ? `through ${person.through.name}` : (person.email ?? '')])]),
+                ),
+              ),
           el('span', {}, [el('button', { type: 'button', class: 't-text-btn', 'data-act': 'share' }, ['Share…'])]),
         ],
         true,
@@ -5491,6 +5546,9 @@ class Threads {
       ]),
       el('span', { class: 't-row-meta' }, [
         el('span', {}, [ago(collection.changedAt)]),
+        ...(this.member
+          ? []
+          : [
         el(
           'button',
           {
@@ -5504,6 +5562,7 @@ class Threads {
           },
           [icon('pin')],
         ),
+            ]),
       ]),
     ]);
   }
@@ -5573,17 +5632,36 @@ class Threads {
         el('div', { class: 't-missing' }, [
           el('h1', {}, [this.collectionMissing !== null ? 'Nothing here' : 'Loading…']),
           el('p', {}, [this.collectionMissing !== null ? `There's no collection #${this.collectionMissing}.` : '']),
-          el('a', { href: COLLECTIONS_PATH, 'data-go': 'collections' }, ['Back to Collections']),
+          this.member ? el('a', { href: ME, 'data-go': 'today' }, ['Back to your threads']) : el('a', { href: COLLECTIONS_PATH, 'data-go': 'collections' }, ['Back to Collections']),
         ]),
       ]);
     }
     const collection = shown.collection;
+    if (this.member) {
+      // A person he shared it with reads it, in his order, and opens each thread; none of his controls.
+      return el('div', { class: 't-thread' }, [
+        el('article', { class: 't-doc' }, [
+          el('div', { class: 't-crumbs' }, [el('a', { href: ME, 'data-go': 'today' }, ['Shared with you']), el('span', {}, ['/']), el('span', {}, [collection.name])]),
+          el('h1', { class: 't-title' }, [collection.name]),
+          ...(collection.description ? [el('p', { class: 't-byline' }, [collection.description])] : []),
+          el('div', { class: 't-kept-head', 'data-kept-head': '' }, this.keptHead(shown)),
+          el('div', { class: 't-section', 'data-kept-body': '' }, this.keptBody(shown)),
+        ]),
+        el('div', { class: 't-rail' }, [
+          el('aside', { class: 't-details', 'aria-label': 'About this collection' }, [
+            el('div', { class: 't-drow' }, [el('span', { class: 't-dlabel' }, ['Shared with you']), el('span', { class: 't-dval t-dval-soft' }, ['By Suresh, with every thread in it, the ones he adds later too.'])]),
+            el('div', { class: 't-drow' }, [el('span', { class: 't-dlabel' }, ['Threads']), el('span', { class: 't-dval t-dval-soft' }, [threadsLine(collection.threads)])]),
+          ]),
+        ]),
+      ]);
+    }
     const add = el('input', { class: 't-field', id: 'kept-add', placeholder: 'Add a thread: its number, or words from it', autocomplete: 'off', 'aria-label': 'Add a thread', value: this.addWords });
     const doc = el('article', { class: 't-doc' }, [
       el('div', { class: 't-crumbs' }, [el('a', { href: COLLECTIONS_PATH, 'data-go': 'collections' }, ['Collections']), el('span', {}, ['/']), el('span', {}, [`#${collection.number}`])]),
       el('h1', { class: 't-title' }, [collection.name]),
       ...(collection.description ? [el('p', { class: 't-byline' }, [collection.description])] : []),
       el('div', { class: 't-moves' }, [
+        el('button', { type: 'button', class: 't-btn', 'data-act': 'collection-share' }, [icon('people'), 'Share ', kbd('S')]),
         el('button', { type: 'button', class: 't-btn', 'data-act': 'kept-add-focus' }, [icon('plus'), 'Add a thread ', kbd('L')]),
         el('span', { class: 't-grow' }),
         el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'collection-edit' }, [icon('pen'), 'Edit ', kbd('W')]),
@@ -5612,7 +5690,7 @@ class Threads {
 
   /** The rows, Show more, and the line under them. @param {CollectionShown} shown */
   keptBody(shown) {
-    const inOrder = this.keptInOrder();
+    const inOrder = this.keptInOrder() && !this.member;
     const total = shown.collection.threads;
     const more = moreLabel(shown.threads.length, shown.count, KEPT_PAGE);
     const rows =
@@ -5628,6 +5706,8 @@ class Threads {
           ? total > 1
             ? ['Drag to set the order they are read in. ', kbd('⌥'), kbd('↑'), kbd('↓'), ' moves the focused one; ⋯ moves it to the top, the bottom or any place.']
             : []
+          : this.member && this.keptInOrder()
+            ? ['In the order Suresh set. ', kbd('J'), ' and ', kbd('K'), ' walk them once you open one.']
           : [`${shown.count} of ${total} match. The numbers are each thread's place. Clear the search to reorder.`]),
       ]),
     ];
@@ -5643,7 +5723,7 @@ class Threads {
     const meta = el('span', { class: 't-row-meta' }, []);
     const tag = tagOf(thread, []);
     if (tag) meta.append(el('span', { class: 't-chip t-chip-status', 'data-status': tag.status }, [tag.words]));
-    meta.append(
+    if (!this.member) meta.append(
       el('button', { type: 'button', class: 't-icon-button', 'data-act': 'kept-menu', 'data-number': String(thread.number), 'aria-haspopup': 'dialog', 'aria-label': `More for #${thread.number}` }, [icon('more')]),
     );
     return el('div', { class: 't-row t-row-kept', tabindex: '0', 'data-kept': String(thread.number), 'data-place': String(thread.place), ...(movable ? { draggable: 'true' } : {}) }, [
@@ -5716,7 +5796,15 @@ class Threads {
             ]),
           ];
     return el('aside', { class: 't-details', 'aria-label': 'About this collection' }, [
-      row('Who can see it', [el('span', { class: 't-dval' }, [el('span', { class: 't-level' }, [icon('lock'), 'Only you'])])]),
+      row('Who can see it', [
+        el('span', { class: 't-dval' }, [
+          (this.collectionShared ?? []).length === 0
+            ? el('span', { class: 't-level' }, [icon('lock'), 'Only you'])
+            : el('span', { class: 't-level' }, [icon('people'), listed((this.collectionShared ?? []).map((one) => one.name ?? 'Someone'))]),
+        ]),
+        el('span', { class: 't-dval t-dval-soft' }, [(this.collectionShared ?? []).length === 0 ? 'Share it, and each person reads every thread in it.' : 'Every thread in it, and every one you add later.']),
+        el('span', {}, [el('button', { type: 'button', class: 't-text-btn', 'data-act': 'collection-share' }, ['Share…'])]),
+      ]),
       row('In the menu', [
         el('span', { class: 't-dval' }, [
           el('button', { type: 'button', class: 't-text-btn', 'data-act': 'collection-pin', 'data-number': String(collection.number) }, [collection.pinned ? 'Pinned. Unpin it' : 'Pin it to the menu']),
@@ -5763,7 +5851,7 @@ class Threads {
         shown = await showCollection(number, { after: shown.next });
         threads.push(...shown.threads);
       }
-      for (const thread of threads) if (!this.threads.has(thread.number)) this.remember(thread);
+      if (!this.member) for (const thread of threads) if (!this.threads.has(thread.number)) this.remember(thread);
       this.walking = { number, name: shown.collection.name, threads: threads.map((thread) => thread.number) };
     } catch {
       this.walking = null;
@@ -5781,7 +5869,7 @@ class Threads {
    */
   adoptWalk(state) {
     const collection = readPageState(state)?.collection;
-    if (collection === undefined || this.member) return;
+    if (collection === undefined) return;
     this.from = 'collection';
     this.fromCollection = collection;
     void this.loadWalk(collection);
@@ -6172,6 +6260,175 @@ class Threads {
     });
   }
 
+  /** The people a collection is shared with, for its side panel, read again after a change. @param {number} number */
+  async loadCollectionPeople(number) {
+    try {
+      const read = await collectionPeople(number);
+      if (this.route.view !== 'collection' || this.route.number !== number) return;
+      this.collectionShared = read.people;
+      if (this.collectionSharing?.number === number) {
+        this.collectionSharing.people = read.people;
+        this.collectionSharing.count = read.invitedCount;
+      }
+    } catch (error) {
+      if (!(error instanceof Missing)) this.fail(error, "Who it is shared with didn't load.");
+      return;
+    }
+    this.drawKept();
+  }
+
+  /** The collections shared with an invited person, for their door and rail. */
+  async loadSharedCollections() {
+    try {
+      this.sharedCollections = (await listCollections('', null)).collections;
+    } catch (error) {
+      this.fail(error, "The collections didn't load.");
+      return;
+    }
+    if (this.overlay === null) {
+      this.keepScroll = true;
+      this.render();
+    }
+  }
+
+  /** The collection's Share: who it is shared with, an invitation, and what they read. */
+  async openCollectionShare() {
+    const shown = this.collection;
+    if (this.member || !shown) return;
+    const number = shown.collection.number;
+    this.collectionSharing = { number, people: this.collectionShared ?? [], count: 0, email: '', name: '', problem: '', invited: null, busy: false };
+    this.renderCollectionShare();
+    focusIn(this.dialog, '#cshare-email');
+    try {
+      const read = await collectionPeople(number);
+      if (this.collectionSharing?.number !== number) return;
+      this.collectionSharing.people = read.people;
+      this.collectionSharing.count = read.invitedCount;
+      this.redrawCollectionShare();
+    } catch (error) {
+      this.fail(error, "Who it is shared with didn't load.");
+    }
+  }
+
+  /** Redraws the sheet keeping the box being typed in and its cursor. */
+  redrawCollectionShare() {
+    const typing = document.activeElement;
+    const id = typing instanceof HTMLInputElement && this.dialog.contains(typing) ? typing.id : '';
+    const at = typing instanceof HTMLInputElement ? typing.selectionStart : null;
+    this.renderCollectionShare();
+    if (id !== '') {
+      const again = this.dialog.querySelector(`#${id}`);
+      if (again instanceof HTMLInputElement) {
+        again.focus();
+        if (at !== null && again.type !== 'email') again.setSelectionRange(at, at);
+      }
+    }
+  }
+
+  renderCollectionShare() {
+    const sharing = this.collectionSharing;
+    const shown = this.collection;
+    if (sharing === null || !shown || shown.collection.number !== sharing.number) return;
+    const collection = shown.collection;
+    const lines = collectionSeesLines(collection.threads);
+    const form = el('form', { class: 't-invite', 'data-submit': 'cshare', novalidate: '' }, [
+      el('label', { class: 't-fld' }, [el('span', { class: 't-lbl' }, ['Email']), el('input', { class: 't-field', id: 'cshare-email', type: 'email', autocomplete: 'off', placeholder: 'meera@example.com', value: sharing.email })]),
+      el('label', { class: 't-fld' }, [el('span', { class: 't-lbl' }, ['Name']), el('input', { class: 't-field', id: 'cshare-name', autocomplete: 'off', placeholder: 'Meera', value: sharing.name })]),
+      el('button', { type: 'submit', class: 't-btn t-btn-primary', ...(sharing.busy ? { disabled: '' } : {}) }, ['Invite ', kbd('↵')]),
+    ]);
+    const rows = [
+      el('div', { class: 't-prow' }, [avatar('owner', '', this.ownerPhoto), el('span', { class: 't-prow-name' }, [el('b', {}, ['You']), el('small', {}, ['owner'])]), el('span', { class: 't-prow-role' }, ['Everything'])]),
+      ...sharing.people.map((person) =>
+        el('div', { class: 't-prow' }, [
+          avatar('member', person.name ?? '', person.photo ?? null),
+          el('span', { class: 't-prow-name' }, [el('b', {}, [person.name ?? 'Someone']), el('small', {}, [person.email ?? ''])]),
+          el('button', { type: 'button', class: 't-text-btn', 'data-act': 'cshare-remove', 'data-person': person.id ?? '', ...(sharing.busy ? { disabled: '' } : {}) }, ['Remove']),
+        ]),
+      ),
+    ];
+    const invited = sharing.invited;
+    const draft = invited === null ? null : collectionInvitation({ name: collection.name, path: collectionPath(collection) }, invited, location.origin);
+    this.openOverlay('collection-share', `Share ${collection.name}`, 'form', [
+      this.sheetHead(`Share ${collection.name}`),
+      el('div', { class: 't-sheet-body' }, [
+        form,
+        ...(sharing.problem ? [el('p', { class: 't-err', role: 'alert' }, [sharing.problem])] : []),
+        el('div', { class: 't-plist' }, rows),
+        el('div', { class: 't-sees' }, [el('span', {}, [el('b', {}, ['They see']), ' ', lines.sees]), el('span', {}, [el('b', {}, ['Never']), ' ', lines.never])]),
+        el('div', { class: 't-seats' }, [el('meter', { class: 't-seat-bar', min: '0', max: '50', value: String(sharing.count), 'aria-label': 'People with access' }), el('span', {}, [collectionSeatsLine(sharing.count)])]),
+        ...(draft === null || invited === null
+          ? []
+          : [
+              el('div', { class: 't-reply' }, [
+                el('div', { class: 't-reply-head' }, [el('h2', {}, [`Send ${invited.name} the link`]), el('span', {}, [`to ${invited.email}`])]),
+                el('div', { class: 't-reply-body' }, [el('span', { class: 't-note' }, ['Nothing is sent from the site. Gmail opens a draft as you; read it, change it if you like, and press Send there.'])]),
+                el('div', { class: 't-reply-actions' }, [el('a', { class: 't-btn t-btn-primary', href: gmailLink(draft, this.me), target: '_blank', rel: 'noopener' }, [icon('mail'), 'Open the draft in Gmail'])]),
+              ]),
+            ]),
+      ]),
+    ]);
+  }
+
+  /** Reads the sheet's fields into its state. */
+  readCollectionShare() {
+    const sharing = this.collectionSharing;
+    if (sharing === null) return;
+    const email = this.dialog.querySelector('#cshare-email');
+    const name = this.dialog.querySelector('#cshare-name');
+    if (email instanceof HTMLInputElement) sharing.email = email.value;
+    if (name instanceof HTMLInputElement) sharing.name = name.value;
+    sharing.problem = '';
+  }
+
+  /** Invites the person typed to the collection, then offers the draft. */
+  async sendCollectionInvite() {
+    this.readCollectionShare();
+    const sharing = this.collectionSharing;
+    if (sharing === null || sharing.busy) return;
+    const email = addressOf(sharing.email);
+    const name = sharing.name.trim();
+    const problem = invitationProblem(sharing.email, sharing.name, this.me, sharing.people);
+    if (problem !== null) {
+      sharing.problem = problem.replace('this thread', 'this collection').replace("You're in every thread.", 'Everything here is yours.');
+      this.redrawCollectionShare();
+      return;
+    }
+    sharing.busy = true;
+    this.redrawCollectionShare();
+    try {
+      const read = await shareCollection(sharing.number, { add: { email, name } });
+      sharing.people = read.people;
+      sharing.count = read.invitedCount;
+      sharing.invited = { name, email };
+      sharing.email = '';
+      sharing.name = '';
+      this.collectionShared = read.people;
+    } catch (error) {
+      this.fail(error, "The invitation wasn't kept.");
+    }
+    sharing.busy = false;
+    this.renderCollectionShare();
+    this.drawKept();
+  }
+
+  /** Takes a person's invitation to the collection back: every thread it opened to them closes at once. @param {string} id */
+  async removeCollectionPerson(id) {
+    const sharing = this.collectionSharing;
+    if (sharing === null || sharing.busy) return;
+    sharing.busy = true;
+    try {
+      const read = await shareCollection(sharing.number, { remove: id });
+      sharing.people = read.people;
+      sharing.count = read.invitedCount;
+      this.collectionShared = read.people;
+    } catch (error) {
+      this.fail(error, "The invitation wasn't taken back.");
+    }
+    sharing.busy = false;
+    this.renderCollectionShare();
+    this.drawKept();
+  }
+
   /** Asks to delete the collection shown, saying what goes and what stays. */
   openDeleteCollection() {
     const shown = this.collection;
@@ -6426,7 +6683,10 @@ class Threads {
         el('div', { class: 't-prow' }, [
           avatar('member', person.name ?? '', person.photo ?? null),
           el('span', { class: 't-prow-name' }, [el('b', {}, [person.name ?? 'Someone']), el('small', {}, [person.email ?? ''])]),
-          el('button', { type: 'button', class: 't-text-btn', 'data-act': 'share-remove', 'data-person': person.id ?? '', ...(sharing.busy ? { disabled: '' } : {}) }, ['Remove']),
+          // Someone a shared collection reaches is changed in that collection's Share, not here.
+          person.through
+            ? el('a', { class: 't-prow-role', href: collectionPath(person.through), 'data-collection': String(person.through.number) }, [`through ${person.through.name}`])
+            : el('button', { type: 'button', class: 't-text-btn', 'data-act': 'share-remove', 'data-person': person.id ?? '', ...(sharing.busy ? { disabled: '' } : {}) }, ['Remove']),
         ]),
       ),
     ];
@@ -7046,7 +7306,7 @@ class Threads {
     this.readShare();
     const sharing = this.sharing;
     if (sharing === null || sharing.busy) return;
-    const problem = invitationProblem(sharing.email, sharing.name, this.me, sharing.people);
+    const problem = invitationProblem(sharing.email, sharing.name, this.me, sharing.people.filter((person) => !person.through));
     if (problem !== null) {
       this.sharing = { ...sharing, problem };
       this.renderShare();
@@ -7418,6 +7678,12 @@ class Threads {
       case 'collection-delete-confirm':
         void this.deleteCollection();
         break;
+      case 'collection-share':
+        void this.openCollectionShare();
+        break;
+      case 'cshare-remove':
+        void this.removeCollectionPerson(button.dataset.person ?? '');
+        break;
       case 'kept-more':
         if (this.collection) void this.loadCollection(this.collection.collection.number, { more: true });
         break;
@@ -7751,6 +8017,7 @@ class Threads {
       if (target.id === 'meet-find' || (target.id === 'meet-time' && timed !== (this.meetingDraft.time !== ''))) this.redrawMeeting();
     }
     else if (target.id.startsWith('share-')) this.readShare();
+    else if (target.id.startsWith('cshare-')) this.readCollectionShare();
     else if (target.id === 'person-note' && target instanceof HTMLTextAreaElement) this.personDraft = target.value;
     else if (target.id === 'journal-edit' && target instanceof HTMLTextAreaElement && this.route.view === 'entry') {
       const editing = this.journalEdits.get(this.route.key);
@@ -7810,6 +8077,7 @@ class Threads {
     if (kind === 'journal-edit') void this.saveJournalEdit();
     if (kind === 'now') void this.saveNowLine();
     if (kind === 'collection') void this.saveCollectionDraft();
+    if (kind === 'cshare') void this.sendCollectionInvite();
     if (kind === 'rule') void this.saveRule();
     if (kind === 'kept-place') {
       const box = this.dialog.querySelector('#kept-place');
@@ -8080,6 +8348,7 @@ class Threads {
         break;
       case 'share':
         if (this.route.view === 'thread' && thread) void this.openShare(thread);
+        if (this.route.view === 'collection') void this.openCollectionShare();
         break;
       case 'meeting':
         if (this.route.view === 'thread' && thread) this.openMeeting(thread);

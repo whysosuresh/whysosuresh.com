@@ -14,8 +14,15 @@
 //
 // A new thread whose title meets a collection's rule is kept by the batch that makes it (`ruleStatements` in
 // src/store.ts), not here, because only that batch knows the thread is new.
+//
+// A collection may be shared with people he invites (`collection_members`, migrations/0024_collection_members.sql):
+// each reads every thread in it, the ones added later included, through the one membership test every read holds
+// (`standing` in src/store.ts), and nothing is written per thread. An invited person lists only the collections shared
+// with them and reads one only while that invitation stands (`collectionsFor`, `findCollectionFor`); they never read
+// its people, its rule or its pin. Deleting a collection deletes its invitations in the same batch, so nobody keeps a
+// reach through it.
 
-import { COLUMNS, Params, TABS, statement, type Author, type ThreadRow } from "./store.ts";
+import { COLUMNS, NEXT_PERSON, Params, TABS, statement, type Author, type Invitee, type PersonRow, type ThreadRow } from "./store.ts";
 
 /** A collection as the calls answer it, with how many threads it holds. */
 export interface CollectionRow {
@@ -178,8 +185,9 @@ export type CollectionChange =
 export async function changeCollection(db: D1Database, number: number, change: CollectionChange): Promise<CollectionRow | "deleted" | "no-collection" | "name-taken"> {
   const now = new Date().toISOString();
   if ("delete" in change) {
-    const [, gone] = await db.batch<{ number: number }>([
+    const [, , gone] = await db.batch<{ number: number }>([
       db.prepare("DELETE FROM collection_threads WHERE collection_number = ?1").bind(number),
+      db.prepare("DELETE FROM collection_members WHERE collection_number = ?1").bind(number),
       db.prepare("DELETE FROM collections WHERE number = ?1 RETURNING number").bind(number),
     ]);
     return (gone?.results.length ?? 0) > 0 ? "deleted" : "no-collection";
@@ -339,4 +347,107 @@ export async function moveKept(db: D1Database, collection: number, thread: numbe
   const results = await db.batch([changed, shift, moved]);
   if ((results[2]?.results.length ?? 0) === 0) return (await missing(db, collection, thread)) ?? "not-kept";
   return standing(db, collection, thread);
+}
+
+/** An invitation that stands to the collection `collection` names (an SQL expression for its number), for the address bound in. */
+function invitedTo(collection: string, email: string, p: Params): string {
+  return `EXISTS (SELECT 1 FROM collection_members JOIN people ON people.id = collection_members.person_id
+    WHERE collection_members.collection_number = ${collection} AND collection_members.removed_at IS NULL AND people.email = ${p.add(email)})`;
+}
+
+/** The most collections an invited person's list answers. */
+const SHARED_COLLECTIONS = 200;
+
+/**
+ * The collections shared with an invited person now, the most recently changed first; with words, only those whose
+ * name or description holds them.
+ */
+export async function collectionsFor(db: D1Database, email: string, words: string | null = null): Promise<CollectionRow[]> {
+  const p = new Params();
+  const like = words === null ? null : pattern(words, p);
+  const matching = like === null ? "" : ` AND (collections.name LIKE ${like} ESCAPE '\\' OR collections.description LIKE ${like} ESCAPE '\\')`;
+  return (
+    await statement(db, `SELECT ${COLLECTION_COLUMNS} FROM collections WHERE ${invitedTo("collections.number", email, p)}${matching} ${RECENT} LIMIT ${SHARED_COLLECTIONS}`, p).all<CollectionRow>()
+  ).results;
+}
+
+/** A collection by its number while it is shared with the address; null otherwise, as a number never used. */
+export async function findCollectionFor(db: D1Database, number: number, email: string): Promise<CollectionRow | null> {
+  const p = new Params();
+  return statement(db, `SELECT ${COLLECTION_COLUMNS} FROM collections WHERE collections.number = ${p.add(number)} AND ${invitedTo("collections.number", email, p)}`, p).first<CollectionRow>();
+}
+
+/** The people a collection is shared with now, in the order they were invited. */
+export async function collectionPeople(db: D1Database, number: number): Promise<PersonRow[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT people.id, people.number, people.email, people.name, collection_members.added_at, people.photo_id
+         FROM collection_members JOIN people ON people.id = collection_members.person_id
+         WHERE collection_members.collection_number = ?1 AND collection_members.removed_at IS NULL ORDER BY collection_members.added_at, people.id`,
+      )
+      .bind(number)
+      .all<PersonRow>()
+  ).results;
+}
+
+/** The collections a person is invited to now, by number and name, for their page. */
+export async function collectionsOfPerson(db: D1Database, personId: string): Promise<{ number: number; name: string }[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT collections.number, collections.name FROM collection_members JOIN collections ON collections.number = collection_members.collection_number
+         WHERE collection_members.person_id = ?1 AND collection_members.removed_at IS NULL ORDER BY lower(collections.name), collections.number`,
+      )
+      .bind(personId)
+      .all<{ number: number; name: string }>()
+  ).results;
+}
+
+/**
+ * Invites a person to a collection, by the owner, in one batch: the person (kept once per address, their name the one
+ * typed now), the invitation (a new one, or a removed one standing again) and the collection's `changed_at`. Inviting
+ * someone already in it changes nothing but their name. `no-collection` when nobody has the number, and then nothing
+ * is written, the person included.
+ */
+export async function inviteToCollection(db: D1Database, number: number, invitee: Invitee): Promise<"invited" | "no-collection"> {
+  const now = new Date().toISOString();
+  const p = new Params();
+  const person = statement(
+    db,
+    `INSERT INTO people (id, number, email, name, created_at)
+     SELECT ${p.add(crypto.randomUUID())}, ${NEXT_PERSON}, ${p.list([invitee.email, invitee.name, now])} WHERE EXISTS (SELECT 1 FROM collections WHERE number = ${p.add(number)})
+     ON CONFLICT (email) DO UPDATE SET name = excluded.name`,
+    p,
+  );
+  const m = new Params();
+  const member = statement(
+    db,
+    `INSERT INTO collection_members (collection_number, person_id, added_at)
+     SELECT collections.number, people.id, ${m.add(now)} FROM collections JOIN people ON people.email = ${m.add(invitee.email)} WHERE collections.number = ${m.add(number)}
+     ON CONFLICT (collection_number, person_id) DO UPDATE SET added_at = excluded.added_at, removed_at = NULL WHERE collection_members.removed_at IS NOT NULL`,
+    m,
+  );
+  const c = new Params();
+  const changed = statement(db, `UPDATE collections SET changed_at = ${c.add(now)} WHERE number = ${c.add(number)} RETURNING number`, c);
+  const [, , touched] = await db.batch<{ number: number }>([person, member, changed]);
+  return (touched?.results.length ?? 0) > 0 ? "invited" : "no-collection";
+}
+
+/**
+ * Takes back a person's invitation to a collection, by the owner: every thread it opened to them closes at once.
+ * `no-collection`, or `not-invited` when the person has no invitation there that stands; either way nothing is written.
+ */
+export async function uninviteFromCollection(db: D1Database, number: number, personId: string): Promise<"removed" | "no-collection" | "not-invited"> {
+  const now = new Date().toISOString();
+  const [ended] = await db.batch<{ person_id: string }>([
+    db
+      .prepare("UPDATE collection_members SET removed_at = ?1 WHERE collection_number = ?2 AND person_id = ?3 AND removed_at IS NULL RETURNING person_id")
+      .bind(now, number, personId),
+    db
+      .prepare("UPDATE collections SET changed_at = ?1 WHERE number = ?2 AND EXISTS (SELECT 1 FROM collection_members WHERE collection_number = ?2 AND person_id = ?3 AND removed_at = ?1)")
+      .bind(now, number, personId),
+  ]);
+  if ((ended?.results.length ?? 0) > 0) return "removed";
+  return (await findCollection(db, number)) === null ? "no-collection" : "not-invited";
 }

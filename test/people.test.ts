@@ -153,7 +153,7 @@ describe("who is a person", () => {
     await noteOn(open, "A.", "ASHA@example.COM");
     const people = await everyone();
     expect(people.map((one) => [one.number, one.name, one.email])).toEqual([[1, "Asha", "asha@example.com"]]);
-    expect(people[0]?.counts).toEqual({ sent: 2, told: 0, invited: 0, removed: 0, commented: 0, noted: 1, met: 0 });
+    expect(people[0]?.counts).toEqual({ sent: 2, told: 0, invited: 0, removed: 0, commented: 0, noted: 1, met: 0, collections: 0 });
     // A visitor's typing never renames anyone, and what they typed stays as typed on their note.
     const shown = await answer<{ thread: { senderName: string; senderEmail: string; senderNumber: number } }>(await call(`/threads/${second}`));
     expect([shown.thread.senderName, shown.thread.senderEmail, shown.thread.senderNumber]).toEqual(["Asha S.", "asha@example.com", 1]);
@@ -251,7 +251,7 @@ describe("the people calls", () => {
         lastContact: expect.any(String),
         invited: true,
         dropped: false,
-        counts: { sent: 0, told: 0, invited: 1, removed: 0, commented: 0, noted: 0, met: 0 },
+        counts: { sent: 0, told: 0, invited: 1, removed: 0, commented: 0, noted: 0, met: 0, collections: 0 },
       });
     }
   });
@@ -272,7 +272,7 @@ describe("the people calls", () => {
 
     const one = await person(1);
     expect(one.person).toMatchObject({ number: 1, name: "Meera", email: MEERA, invited: true, dropped: false, note: null });
-    expect(one.person.counts).toEqual({ sent: 1, told: 1, invited: 1, removed: 1, commented: 1, noted: 1, met: 0 });
+    expect(one.person.counts).toEqual({ sent: 1, told: 1, invited: 1, removed: 1, commented: 1, noted: 1, met: 0, collections: 0 });
     const roles = Object.fromEntries(one.threads.map((row) => [row.number, row.roles]));
     expect(roles).toEqual({ [sent]: ["sent"], [shared]: ["invited", "wrote"], [other]: ["wrote"], [taken]: ["removed"], [taken + 1]: ["told"] });
     expect(one.threads[0]).toMatchObject({ number: taken + 1, source: "told", senderNumber: 1, ref: expect.any(String) });
@@ -418,7 +418,7 @@ describe("a person in meetings", () => {
     const number = added.thread.meeting.attendees[0]?.number ?? 0;
     const one = await person(number);
     expect(one.person).toMatchObject({ name: "Asha's manager", email: null, invited: false, dropped: false });
-    expect(one.person.counts).toEqual({ sent: 0, told: 0, invited: 0, removed: 0, commented: 0, noted: 0, met: 1 });
+    expect(one.person.counts).toEqual({ sent: 0, told: 0, invited: 0, removed: 0, commented: 0, noted: 0, met: 1, collections: 0 });
     expect(one.threads.map((row) => [row.number, row.roles])).toEqual([[n, ["met"]]]);
   });
 });
@@ -435,7 +435,8 @@ describe("names that open a person", () => {
       expect((await answer<{ people: Person[] }>(await call("/search?q=MEERA%40", { as }))).people.map((one) => one.name)).toEqual(["Meera"]);
     }
     const theirs = await answer<Record<string, unknown>>(await call("/search?q=asha", { as: { email: MEERA } }));
-    expect(Object.keys(theirs)).toEqual(["threads"]);
+    // Never people: their search answers threads, and the collections shared with them.
+    expect(Object.keys(theirs)).toEqual(["threads", "collections"]);
   });
 
   it("give the owner and the sync the numbers of a thread's sender and people, and an invited person none", async () => {

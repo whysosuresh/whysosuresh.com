@@ -128,8 +128,8 @@ import { servePage, withSkeleton } from "./page.ts";
 import { handleNow } from "./home.ts";
 import { handleJournal } from "./journal.ts";
 import { handlePeople, personView } from "./people.ts";
-import { collectionView, handleCollections } from "./collections.ts";
-import { collectionsOf, searchCollections } from "./collections-store.ts";
+import { collectionView, handleCollections, sharedView as sharedCollectionView } from "./collections.ts";
+import { collectionsFor, collectionsOf, searchCollections } from "./collections-store.ts";
 import { addCard, listCards } from "./cards.ts";
 import { handlePhoto } from "./photos.ts";
 import { ownerPhotoId, personPhotoId } from "./photos-store.ts";
@@ -336,7 +336,16 @@ function meetingView(row: ThreadRow, reader: Reader): JsonValue {
  */
 function peopleView(people: readonly PersonRow[], reader: Reader): JsonValue {
   if (reader.caller === "member") return [{ name: OWNER_NAME, owner: true }, ...people.map((person) => ({ name: person.name, photo: person.photo_id }))];
-  return people.map((person) => ({ id: person.id, number: person.number, name: person.name, email: person.email, addedAt: person.added_at, photo: person.photo_id }));
+  return people.map((person) => ({
+    id: person.id,
+    number: person.number,
+    name: person.name,
+    email: person.email,
+    addedAt: person.added_at,
+    photo: person.photo_id,
+    // Someone a shared collection reaches the thread through: which collection, so Share says so and offers no Remove here.
+    through: person.through_number === null || person.through_number === undefined ? null : { number: person.through_number, name: person.through_name ?? "" },
+  }));
 }
 
 /**
@@ -483,7 +492,7 @@ async function show(number: number, env: Bindings, caller: Caller): Promise<Resp
   const [{ comments, events }, pages, people, answered, kept] = await Promise.all([
     history(env.DB, row.id, HISTORY + 1, caller),
     pagesOf(env.DB, row.id),
-    peopleOf(env.DB, row.id),
+    peopleOf(env.DB, row.id, caller.caller !== "member"),
     answering ? answeredBy(env.DB, row.id) : Promise.resolve([]),
     // The collections it is kept in are his and the sync's; an invited person never learns their names.
     owners ? collectionsOf(env.DB, row.id) : Promise.resolve([]),
@@ -596,8 +605,8 @@ async function lookUp(url: URL, env: Bindings, caller: Caller): Promise<Response
   const trimmed = line(words, MAX_SEARCH);
   if (trimmed === null) return refuse(400, "query");
   const threads = (await search(env.DB, trimmed, caller)).map((row) => thread(row, caller));
-  // People and collections are the owner's and the sync's alone; an invited person's answer is threads only, as it always was.
-  if (caller.caller === "member") return json(200, { threads });
+  // People are the owner's and the sync's alone; an invited person's answer is threads, and the collections shared with them.
+  if (caller.caller === "member") return json(200, { threads, collections: (await collectionsFor(env.DB, caller.email, trimmed)).slice(0, 20).map(sharedCollectionView) });
   const [people, collections] = await Promise.all([searchPeople(env.DB, trimmed), searchCollections(env.DB, trimmed)]);
   return json(200, { threads, people: people.map(personView), collections: collections.map(collectionView) });
 }
@@ -673,7 +682,7 @@ async function replaceLink(request: Request, number: number, env: Bindings, call
 
 /** A thread's people, as the owner's Share reads them, with how many people have access to any of his threads. */
 async function peopleAnswer(row: ThreadRow, env: Bindings, caller: Caller): Promise<Response> {
-  const [people, count] = await Promise.all([peopleOf(env.DB, row.id), invitedCount(env.DB)]);
+  const [people, count] = await Promise.all([peopleOf(env.DB, row.id, caller.caller !== "member"), invitedCount(env.DB)]);
   return json(200, { people: peopleView(people, caller), invitedCount: count });
 }
 

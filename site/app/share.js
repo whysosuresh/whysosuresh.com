@@ -99,6 +99,43 @@ export function invitation(thread, person, origin) {
 }
 
 /**
+ * What a person invited to a collection reads there, and what they never do: every thread in it, as it changes, and
+ * never who else it is shared with.
+ * @param {number} threads how many threads it holds now
+ */
+export function collectionSeesLines(threads) {
+  const held = threads === 0 ? 'no threads yet' : `${threads} thread${threads === 1 ? '' : 's'} now`;
+  return {
+    sees: `every thread in it (${held}) and every one you add later, each as an invited person reads a thread, and can comment on each.`,
+    never: 'who else it is shared with, its rule, your Only me notes, a visitor\'s email, or your other threads and collections.',
+  };
+}
+
+/**
+ * The line under a collection's sheet: an invite opens every thread in it, and how many people have access in all.
+ * @param {number} count
+ */
+export function collectionSeatsLine(count) {
+  return `An invite opens every thread in this collection, now and as it changes. ${count} ${count === 1 ? 'person has' : 'people have'} access to your threads; Cloudflare signs in ${SEATS} free.`;
+}
+
+/**
+ * The invitation to a collection, as a draft for his Gmail: to the person, about the collection, with its `?invite` link.
+ * @param {{ name: string, path: string }} collection
+ * @param {{ name: string, email: string }} person
+ * @param {string} origin the site's own origin
+ * @returns {{ to: string, subject: string, body: string }}
+ */
+export function collectionInvitation(collection, person, origin) {
+  const first = person.name.trim().split(/\s+/)[0] || 'there';
+  return {
+    to: person.email,
+    subject: collection.name,
+    body: `Hi ${first},\n\nI've shared a set of threads with you on my site: ${collection.name}.\n\n${origin}${collection.path}?invite\n\nOpen the link and type this address. Cloudflare emails you a code to sign in; one code lasts a week on that device. You'll see every thread in it, the ones I add later too, and can comment on each.\n\nSuresh`,
+  };
+}
+
+/**
  * Names as a sentence: "Meera", "Meera and Dev", "Meera, Dev and Asha".
  * @param {readonly string[]} names
  */
