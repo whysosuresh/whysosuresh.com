@@ -271,8 +271,8 @@ describe("a platform", () => {
     const read = await room();
     expect(read.platforms).toEqual([{ platform: "reddit", state: "active", note: null, until: null, pace: 3, changedAt: expect.any(String) }]);
     expect(read.acts.map((one) => [one.kind, one.platform, one.line, one.ref.startsWith("platform:stigmer:reddit:")])).toEqual([
-      ["event", "reddit", "reddit is active", true],
-      ["event", "reddit", "reddit is on hold: Posts held back; look again in a month", true],
+      ["event", "reddit", "Now active", true],
+      ["event", "reddit", "Now on hold: Posts held back; look again in a month", true],
     ]);
     expect((await room("?product=capsjump")).platforms).toEqual([]);
   });

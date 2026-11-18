@@ -47,7 +47,10 @@
 // seed's threads; and 41 more holding a handful of the decisions each, so the room pages and searches. Every screen is
 // shared with the guest, so `--member` shows it on their door beside the thread shared with them on its own. Talk
 // material is public, its link printed at start, and holds a told thread and an ask's beside his own, which strangers
-// never read, so `--signed-out` shows what its link opens. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
+// never read, so `--signed-out` shows what its link opens. Distribution's room as a few days of the sync's runs leave
+// it, for both products: platforms in every state with paces, acts of ours, made-up people who wrote to us (one still
+// waiting on a reply, so Today and the rail carry it), a team act kept apart, weekly readings, a "Distribution"
+// collection whose threads wait on a condition or on him, and the quarter's Engage log. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
 // played keys.
 
 import { readFileSync } from "node:fs";
@@ -567,15 +570,82 @@ async function seedCollections(): Promise<void> {
   });
   if (!published.ok) throw new Error(`making Talk material public answered ${published.status}`);
 
-  const names = ["Talks I give", "Investor updates", "CapsJump launch", "Episode ideas", "Hiring", "Customer calls", "Pricing", "Onboarding", "Demo scripts", "Conference notes", "Partner ideas", "Docs to rewrite", "Security reviews", "Brand and look", "Home page posts", "Reading list", "Interview notes", "Distribution", "Weekly reviews", "Merch", "Community", "Founder letters", "Tools I use", "Mac tricks", "Releases", "Postmortems", "Roadmap bets", "Friends asked", "Podcast guests", "Thumbnails", "Cold emails that worked", "Design references", "Open questions", "Ideas for later", "Health", "Meet-ups", "Books", "Things to write about", "Small fixes", "Rituals", "Someday"];
+  const names = ["Talks I give", "Investor updates", "CapsJump launch", "Episode ideas", "Hiring", "Customer calls", "Pricing", "Onboarding", "Demo scripts", "Conference notes", "Partner ideas", "Docs to rewrite", "Security reviews", "Brand and look", "Home page posts", "Reading list", "Interview notes", "Weekly reviews", "Merch", "Community", "Founder letters", "Tools I use", "Mac tricks", "Releases", "Postmortems", "Roadmap bets", "Friends asked", "Podcast guests", "Thumbnails", "Cold emails that worked", "Design references", "Open questions", "Ideas for later", "Health", "Meet-ups", "Books", "Things to write about", "Small fixes", "Rituals", "Someday"];
   for (const [i, name] of names.entries()) {
     const number = await make(name);
     for (let k = 0; k < 2 + (i % 5); k += 1) await keep(number, settled[(i * 7 + k * 13) % settled.length] ?? 1);
   }
 }
 
+/** Sends one distribution write as the sync, as `inbox acts`, `platform` and `readings` do. */
+async function asSyncDistribution(path: string, body: unknown): Promise<Record<string, unknown>> {
+  const response = await harness.fetch(`${THREADS}/threads/api/distribution${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": sync() },
+    body: new TextEncoder().encode(JSON.stringify(body)),
+  });
+  if (!response.ok) throw new Error(`seeding distribution${path} answered ${response.status}: ${await response.text()}`);
+  return (await response.json()) as Record<string, unknown>;
+}
+
+async function seedDistribution(): Promise<void> {
+  const hours = (n: number): string => new Date(Date.now() - n * 3600 * 1000).toISOString();
+  const platforms: [string, string, string, string | null, string | null, number | null][] = [
+    ["stigmer", "linkedin", "active", null, null, 3],
+    ["stigmer", "linkedin-page", "active", "The product's record, about once a week", null, 1],
+    ["stigmer", "bluesky", "active", null, null, 3],
+    ["stigmer", "hn", "warming", "Briefings only; you write in your own words", null, null],
+    ["stigmer", "reddit", "hold", "Posts held back; comment in your own words elsewhere first", addDays(new Date().toISOString().slice(0, 10), -1), null],
+    ["capsjump", "reddit", "hold", "The launch post waits for the account to be clear", null, null],
+    ["capsjump", "x", "later", "A demo clip pinned; the share waits for followers", null, null],
+    ["capsjump", "bluesky", "later", null, null, null],
+  ];
+  for (const [product, platform, state, note, until, pace] of platforms) await asSyncDistribution(`/platforms/${product}/${platform}`, { state, note, until, pace });
+  const post = "https://bsky.app/profile/example.com/post/";
+  const acts: Record<string, unknown>[] = [
+    { at: hours(3), platform: "bluesky", kind: "in", audience: "peer", person: { name: "Rhea Kapoor" }, conversation: `${post}1`, url: `${post}1r`, line: "Asked whether a sleeping sandbox keeps its open files." },
+    { at: hours(30), platform: "bluesky", kind: "post", url: `${post}1`, conversation: `${post}1`, line: "Posted on sandboxes that sleep between turns and wake on the next message." },
+    { at: hours(28), platform: "bluesky", kind: "reply", audience: "peer", person: { name: "Tomás Vidal" }, url: `${post}2r`, conversation: `${post}2`, line: "Replied on keeping state outside the sandbox, and followed." },
+    { at: hours(27), platform: "bluesky", kind: "in", audience: "peer", person: { name: "Tomás Vidal" }, conversation: `${post}2`, line: "Thanked us and asked for the docs page." },
+    { at: hours(26), platform: "bluesky", kind: "reply", audience: "peer", person: { name: "Tomás Vidal" }, conversation: `${post}2`, line: "Sent the docs page on sandboxes." },
+    { at: hours(50), platform: "linkedin", kind: "comment", audience: "peer", person: { name: "Ines Ward" }, url: "https://www.linkedin.com/feed/update/urn:li:activity:1", line: "Commented on her post about agents that wait for a person's yes." },
+    { at: hours(52), platform: "linkedin", kind: "post", url: "https://www.linkedin.com/feed/update/urn:li:activity:2", line: "Founder post: one agent, two customers, and the wrong ID between them." },
+    { at: hours(170), platform: "linkedin-page", kind: "post", line: "What's new in the latest release." },
+    { at: hours(60), platform: "hn", kind: "briefing", line: "Briefed a thread on agent sandboxes; you wrote and posted it." },
+    { at: hours(20), platform: "reddit", kind: "skipped", line: "A thread on self-hosted agents, dropped: the account is held back." },
+    { at: hours(10), platform: "linkedin", kind: "in", audience: "team", person: { name: "Dev Teammate" }, conversation: "https://www.linkedin.com/feed/update/urn:li:activity:2", line: "A teammate liked and shared the post." },
+    { at: hours(90), platform: "github", kind: "event", line: "A release went out." },
+    { at: hours(200), product: "capsjump", platform: "reddit", kind: "comment", audience: "community", person: { name: "Priya Nair" }, line: "Answered which browsers it switches between." },
+    { at: hours(400), product: "capsjump", platform: "x", kind: "post", line: "Pinned the 24-second demo clip." },
+  ];
+  for (const [i, act] of acts.entries()) await asSyncDistribution("/acts", { ref: `seed:${i}`, product: "stigmer", ...act });
+  const week = weekOf(new Date().toISOString().slice(0, 10));
+  const before = weekOf(addDays(new Date().toISOString().slice(0, 10), -7));
+  await asSyncDistribution(`/readings/stigmer/${before}`, { outside_stars: 7, downloads: 40 });
+  await asSyncDistribution(`/readings/stigmer/${week}`, { outside_stars: 9, downloads: 57 });
+  await asSyncDistribution(`/readings/capsjump/${week}`, { outside_stars: 2 });
+
+  const work = ((await asSyncTo("", { name: "Distribution", description: "Every piece of distribution work, waiting on its condition or on you." })).collection as { number: number }).number;
+  const items: [string, string, string][] = [
+    ["stigmer", "Show HN: Stigmer", "Decided: one post, written in your own words.\nWaiting on: newcomer onboarding shipping"],
+    ["stigmer", "List Stigmer on a curated agents list", "Waiting on: 100 outside stars on the repository"],
+    ["stigmer", "Record the video on putting an agent in your product", "Waiting on: Suresh, to record it\nNext: the script is drafted"],
+    ["stigmer", "Write the founder post on the build-or-buy question", "Waiting on: nothing"],
+    ["capsjump", "Directory listings for CapsJump", "Waiting on: Suresh, to check whether they were accepted"],
+    ["capsjump", "The launch post on a Mac apps forum", "Waiting on: the account being clear to post"],
+  ];
+  for (const [i, [space, title, summary]] of items.entries()) {
+    const number = ((await asSync("", { ref: `chat:seed-distribution-${i}`, source: "self", status: "act", space, title, body: `${title}.` })).thread as { number: number }).number;
+    await asSync(`/${number}/text`, { field: "summary", text: summary });
+    await asSyncTo(`/${work}/threads`, { add: number });
+  }
+  const log = ((await asSync("", { ref: "log:engage-2026-Q4", source: "self", status: "act", space: "stigmer", title: "Engage log, 2026 Q4", body: "One comment per run." })).thread as { number: number }).number;
+  await asSync(`/${log}`, { action: "done" });
+}
+
 await seed();
 await seedCollections();
+await seedDistribution();
 const links = (
   await (await harness.db())
     .prepare("SELECT number, title, share_key, public_by_number FROM threads WHERE share_key IS NOT NULL ORDER BY number")

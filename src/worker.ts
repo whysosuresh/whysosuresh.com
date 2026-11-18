@@ -72,6 +72,7 @@ function threads(request: Request, env: Bindings, pathname: string): Promise<Res
   if (pathname === "/asks" || pathname.startsWith("/ask/")) return handlePage(request, env);
   if (pathname === "/journal" || pathname.startsWith("/journal/")) return handlePage(request, env);
   if (pathname === "/collections" || pathname.startsWith("/collections/")) return handlePage(request, env);
+  if (pathname === "/distribution" || pathname.startsWith("/distribution/")) return handlePage(request, env);
   return json(404, { reason: "not-found" });
 }
 
