@@ -126,12 +126,15 @@
  * @typedef {{ id: number, at: string, actor: 'owner' | 'sync' | 'visitor' | 'import' | string, type: string, data: Record<string, unknown> }} Event
  * @typedef {{ thread: Thread, page: Page | null, people: Person[], comments: Comment[], events: Event[], truncated: boolean, answeredBy?: Answerer[], collections?: KeptIn[] }} Shown
  * @typedef {{ number: number, name: string }} KeptIn a collection a thread is kept in
- * @typedef {{ number: number, name: string, description: string | null, rule: string | null, pinned: boolean, changedAt: string, createdAt: string, threads: number }} Collection
+ * @typedef {{ number: number, name: string, description: string | null, rule: string | null, pinned: boolean, changedAt: string, createdAt: string, threads: number,
+ *   publicAt?: string | null, shareKey?: string | null, hidden?: number }} Collection
+ *   A collection as he reads it; an invited person's answer leaves out the rule, the pin and the link, which the page never reads for them.
  * @typedef {{ pinned: Collection[], collections: Collection[], next: number | null, count: number }} CollectionList
  * @typedef {Thread & { place: number }} KeptThread
  * @typedef {{ collection: Collection, threads: KeptThread[], next: number | null, count: number }} CollectionShown
  * @typedef {{ words?: string, status?: 'open' | 'done' | null, after?: number | null }} CollectionQuery
- * @typedef {{ name: string } | { description: string } | { rule: string | null } | { pinned: boolean } | { delete: true }} CollectionChange
+ * @typedef {{ name: string } | { description: string } | { rule: string | null } | { pinned: boolean } | { public: boolean } | { delete: true }} CollectionChange
+ * @typedef {{ collection: { name: string, description: string | null }, threads: (PublicThread & { place: number })[], ownerPhoto?: string | null }} PublicCollection
  * @typedef {{ add: number } | { remove: number } | { move: number, to: number }} KeptChange
  * @typedef {{ threads: Thread[], counts: Record<List, number>, next: number | null }} Listing
  * @typedef {{ action: 'act' | 'discuss' | 'unsort' | 'done' | 'reopen' | 'reply-opened' | 'publish' | 'unpublish' | 'post' | 'unpost' }
@@ -330,6 +333,36 @@ async function readPublic(path, key) {
   } catch {
     throw new Failed('answer');
   }
+}
+
+/**
+ * A public collection as anyone reads it by its link's key, with no sign-in (/api/collections/<key>, src/public-collections.ts):
+ * its name and description and the threads of his own words in it, in his order.
+ * @param {string} key
+ * @returns {Promise<PublicCollection>}
+ */
+export async function showPublicCollection(key) {
+  return /** @type {PublicCollection} */ (await readPublic(`/api/collections/${key}`, null));
+}
+
+/**
+ * One thread of a public collection, as anyone reads it there: what it says and the comments written for anyone.
+ * @param {string} key
+ * @param {number} number
+ * @returns {Promise<PublicShown>}
+ */
+export async function showPublicKept(key, number) {
+  return /** @type {PublicShown} */ (await readPublic(`/api/collections/${key}/threads/${number}`, null));
+}
+
+/**
+ * The address a public collection's thread's page loads one version from, sealed as a public thread's is.
+ * @param {string} key
+ * @param {number} number
+ * @param {number} version
+ */
+export function publicKeptPageAddress(key, number, version) {
+  return `/api/collections/${key}/threads/${number}/pages/${version}`;
 }
 
 /**

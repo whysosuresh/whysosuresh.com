@@ -7,7 +7,8 @@
 // behind their Cloudflare Access application and the Worker's own check of the caller against its tag; under
 // /api/access/, the site's answer to Access's sign-in question for invited people, with the public key it is signed
 // with (src/evaluate.ts), which Access calls itself and so are outside the application; a thread Suresh made public,
-// read and a note sent on it under /api/threads/ (src/public.ts), outside Access too, with no sign-in; an ask, a
+// read and a note sent on it under /api/threads/ (src/public.ts), outside Access too, with no sign-in; a collection he
+// made public, read under /api/collections/ (src/public-collections.ts), the same way; an ask, a
 // questions page anyone answers by its link, read and answered under /api/asks/ (src/asks.ts), outside Access too;
 // an avatar's photo under /api/photos/ (src/photos.ts), outside Access too, because a public thread shows his photo;
 // a public thread's preview card under /api/cards/ (src/cards.ts), outside Access too, because a chat's preview
@@ -22,6 +23,7 @@
 // (src/outside.ts) and, beside it, looks up the Gravatars of people he invited (src/photos.ts), each failing on its own
 // without stopping the other, and awaits both, so Cloudflare's record of each run says how it ended.
 
+import { handlePublicCollections } from "./public-collections.ts";
 import { isThreadsHost } from "../site/hosts.js";
 import { serveCard } from "./cards.ts";
 import { handleAsks } from "./asks.ts";
@@ -61,6 +63,7 @@ function threads(request: Request, env: Bindings, pathname: string): Promise<Res
     return handleKeys(env);
   }
   if (pathname.startsWith("/api/threads/")) return handlePublic(request, env);
+  if (pathname.startsWith("/api/collections/")) return handlePublicCollections(request, env);
   if (pathname.startsWith("/api/asks/")) return handleAsks(request, env);
   if (pathname.startsWith("/api/photos/")) return servePhoto(request, env);
   if (pathname.startsWith("/api/cards/")) return serveCard(request, env);

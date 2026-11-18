@@ -21,8 +21,13 @@
 // with them and reads one only while that invitation stands (`collectionsFor`, `findCollectionFor`); they never read
 // its people, its rule or its pin. Deleting a collection deletes its invitations in the same batch, so nobody keeps a
 // reach through it.
+//
+// He may also make a collection public (`public_at`, `share_key`, migrations/0025_public_collections.sql): anyone with
+// its link reads it, with no sign-in, through src/public-collections.ts, but only the threads in it of his own words
+// that aren't an ask's, a condition every such query holds in its own SQL (`IN_PUBLIC_COLLECTION`), as `PUBLIC` holds a
+// public thread's. A thread read that way needn't be public itself, and nothing about it changes.
 
-import { COLUMNS, NEXT_PERSON, Params, TABS, statement, type Author, type Invitee, type PersonRow, type ThreadRow } from "./store.ts";
+import { COLUMNS, NEXT_PERSON, Params, TABS, newShareKey, statement, type Author, type CommentRow, type Invitee, type PageRow, type PersonRow, type ThreadRow } from "./store.ts";
 
 /** A collection as the calls answer it, with how many threads it holds. */
 export interface CollectionRow {
@@ -34,6 +39,10 @@ export interface CollectionRow {
   changed_at: string;
   created_at: string;
   threads: number;
+  /** When he made it public, null while it isn't; its link's key, kept for good once given; how many of its threads strangers can't read. */
+  public_at: string | null;
+  share_key: string | null;
+  hidden: number;
 }
 
 /** A thread in a collection: the thread's own columns and its place, from 0. */
@@ -42,8 +51,17 @@ export type KeptThreadRow = ThreadRow & { position: number };
 /** Which of a collection's threads a read answers: every one, the open ones or the closed ones. */
 export type KeptFilter = "open" | "done" | null;
 
-const COLLECTION_COLUMNS =
-  "collections.number, collections.name, collections.description, collections.rule_prefix, collections.pinned_at, collections.changed_at, collections.created_at, (SELECT COUNT(*) FROM collection_threads WHERE collection_threads.collection_number = collections.number) AS threads";
+/**
+ * A thread strangers may read through a public collection, on `threads`: his own words, and not an ask's thread or a
+ * thread answering one. With the collection public and named by its key, it is `IN_PUBLIC_COLLECTION`.
+ */
+const READABLE_BY_STRANGERS = "threads.source = 'self' AND threads.ask_slug IS NULL AND threads.ask_thread_id IS NULL";
+
+const COLLECTION_COLUMNS = `collections.number, collections.name, collections.description, collections.rule_prefix, collections.pinned_at, collections.changed_at, collections.created_at,
+  (SELECT COUNT(*) FROM collection_threads WHERE collection_threads.collection_number = collections.number) AS threads,
+  collections.public_at, collections.share_key,
+  (SELECT COUNT(*) FROM collection_threads JOIN threads ON threads.id = collection_threads.thread_id
+   WHERE collection_threads.collection_number = collections.number AND NOT (${READABLE_BY_STRANGERS})) AS hidden`;
 
 /** The newest change first, then the newest collection: one order every page of the list keeps. */
 const RECENT = "ORDER BY collections.changed_at DESC, collections.number DESC";
@@ -169,9 +187,10 @@ export async function createCollection(db: D1Database, name: string, description
   return (await findCollection(db, made.number)) ?? "name-taken";
 }
 
-/** One change to a collection: its name, its description, its rule (a title prefix, or none), pinned or not, or gone. */
+/** One change to a collection: its name, its description, its rule (a title prefix, or none), pinned or not, public or not, or gone. */
 export type CollectionChange =
   | { readonly name: string }
+  | { readonly public: boolean }
   | { readonly description: string | null }
   | { readonly rule: string | null }
   | { readonly pinned: boolean }
@@ -199,6 +218,12 @@ export async function changeCollection(db: D1Database, number: number, change: C
     const own = p.add(number);
     update = `UPDATE collections SET name = ${name}, changed_at = ${p.add(now)} WHERE number = ${own}
       AND NOT EXISTS (SELECT 1 FROM collections AS other WHERE lower(other.name) = lower(${name}) AND other.number <> ${own}) RETURNING number`;
+  } else if ("public" in change) {
+    // The key is given the first time and kept for good, so turning it off and on again brings the same link back.
+    const at = p.add(now);
+    update = change.public
+      ? `UPDATE collections SET public_at = COALESCE(public_at, ${at}), share_key = COALESCE(share_key, ${p.add(newShareKey())}), changed_at = ${at} WHERE number = ${p.add(number)} RETURNING number`
+      : `UPDATE collections SET public_at = NULL, changed_at = ${at} WHERE number = ${p.add(number)} RETURNING number`;
   } else if ("pinned" in change) {
     const at = p.add(now);
     update = `UPDATE collections SET pinned_at = ${change.pinned ? `COALESCE(pinned_at, ${at})` : "NULL"}, changed_at = ${at} WHERE number = ${p.add(number)} RETURNING number`;
@@ -450,4 +475,76 @@ export async function uninviteFromCollection(db: D1Database, number: number, per
   ]);
   if ((ended?.results.length ?? 0) > 0) return "removed";
   return (await findCollection(db, number)) === null ? "no-collection" : "not-invited";
+}
+
+/** The one condition a stranger's read through a public collection holds: it is public, named by its key, and the thread is his own words. */
+function inPublicCollection(key: string, p: Params): string {
+  return `collection_threads.collection_number = (SELECT collections.number FROM collections WHERE collections.public_at IS NOT NULL AND collections.share_key = ${p.add(key)})
+    AND ${READABLE_BY_STRANGERS}`;
+}
+
+/** A public collection by its key, as strangers read it; null for any key that isn't one. */
+export async function findPublicCollection(db: D1Database, key: string): Promise<{ number: number; name: string; description: string | null } | null> {
+  return db
+    .prepare("SELECT number, name, description FROM collections WHERE share_key = ?1 AND public_at IS NOT NULL")
+    .bind(key)
+    .first<{ number: number; name: string; description: string | null }>();
+}
+
+/** The most threads a public collection's read answers. */
+const PUBLIC_THREADS = 500;
+
+/** The threads strangers may read in a public collection, in his order. */
+export async function publicCollectionThreads(db: D1Database, key: string): Promise<KeptThreadRow[]> {
+  const p = new Params();
+  return (
+    await statement(
+      db,
+      `SELECT ${COLUMNS}, collection_threads.position AS position FROM collection_threads
+       JOIN threads ON threads.id = collection_threads.thread_id
+       WHERE ${inPublicCollection(key, p)} ORDER BY collection_threads.position LIMIT ${PUBLIC_THREADS}`,
+      p,
+    ).all<KeptThreadRow>()
+  ).results;
+}
+
+/** One thread strangers may read through a public collection, by its number; null for anything else. */
+export async function findInPublicCollection(db: D1Database, key: string, number: number): Promise<ThreadRow | null> {
+  const p = new Params();
+  return statement(
+    db,
+    `SELECT ${COLUMNS} FROM collection_threads JOIN threads ON threads.id = collection_threads.thread_id
+     WHERE ${inPublicCollection(key, p)} AND threads.number = ${p.add(number)}`,
+    p,
+  ).first<ThreadRow>();
+}
+
+/** One version of the page of a thread strangers may read through a public collection, while the page is its main section. */
+export async function findPageInPublicCollection(db: D1Database, key: string, number: number, version: number): Promise<PageRow | null> {
+  const p = new Params();
+  return statement(
+    db,
+    `SELECT pages.version, pages.object_key, pages.created_at, pages.actor, pages.bytes, pages.source_url
+     FROM pages JOIN threads ON threads.id = pages.thread_id JOIN collection_threads ON collection_threads.thread_id = threads.id
+     WHERE ${inPublicCollection(key, p)} AND threads.number = ${p.add(number)} AND pages.version = ${p.add(version)} AND threads.main = 'page'`,
+    p,
+  ).first<PageRow>();
+}
+
+/** The comments on a thread strangers read through a public collection: those he or others wrote for anyone that are shown, no answers. */
+export async function publicCollectionComments(db: D1Database, threadId: string, limit: number): Promise<CommentRow[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT comments.id, comments.thread_id, comments.author, comments.body, comments.created_at, comments.audience, comments.state, comments.person_id,
+           CASE WHEN comments.author = 'member' THEN people.name END AS person_name, people.number AS person_number,
+           CASE WHEN comments.author = 'member' THEN people.photo_id END AS person_photo, comments.sender_name, comments.sender_email, comments.parent_id,
+           comments.question, comments.quote, comments.quote_prefix, comments.quote_suffix, comments.page_version, NULL AS person_email, comments.visitor_key
+         FROM comments LEFT JOIN people ON people.id = comments.person_id
+         WHERE comments.thread_id = ?1 AND comments.audience = 'public' AND comments.state = 'shown' AND comments.question IS NULL AND comments.parent_id IS NULL
+         ORDER BY comments.created_at, comments.id LIMIT ${limit}`,
+      )
+      .bind(threadId)
+      .all<CommentRow>()
+  ).results;
 }

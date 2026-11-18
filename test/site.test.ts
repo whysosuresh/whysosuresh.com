@@ -608,7 +608,7 @@ describe("the threads page", () => {
     expect(doc.querySelectorAll('link[rel="canonical"], meta[property^="og:"], meta[name="description"]')).toEqual([]);
   });
 
-  it("loads only its own script, whose calls reach the threads' calls and a public thread's, and nothing else of the site's", async () => {
+  it("loads only its own script, whose calls reach the threads' calls, a public thread's and a public collection's, and nothing else of the site's", async () => {
     const loaded = (await parse("threads/index.html")).querySelectorAll('script[type="module"]').map((el) => attr(el, "src"));
     expect(loaded).toEqual(["/app/threads.js"]);
     const store = read("app/threads-store.js");
@@ -620,7 +620,7 @@ describe("the threads page", () => {
     // sender (talk-send.js).
     expect(store.match(/fetch\(/g)).toHaveLength(2);
     expect(store).toContain("response = await fetch(path, { redirect: 'manual', credentials: 'omit'");
-    expect([...store.matchAll(/readPublic\(`([^`]*)`/g)].map((m) => m[1])).toEqual(["/api/threads/${pathPart(address)}", "/api/asks/${encodeURIComponent(slug)}"]);
+    expect([...store.matchAll(/readPublic\(`([^`]*)`/g)].map((m) => m[1])).toEqual(["/api/collections/${key}", "/api/collections/${key}/threads/${number}", "/api/threads/${pathPart(address)}", "/api/asks/${encodeURIComponent(slug)}"]);
     for (const script of ["app/threads.js", "app/keys.js", "app/markdown.js", "app/standing.js", "app/byline.js", "app/card.js", "app/card-paint.js"]) expect([script, read(script).includes("fetch(")]).toEqual([script, false]);
   });
 

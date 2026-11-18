@@ -7,7 +7,9 @@
 // thread, /threads/<n>, with its title after the number or not (/threads/42-who-owns-what), or a public thread's link,
 // /threads/<key>, its 32-character key and nothing after it; and Suresh's journal, /journal with a day, a week or the storylines under it,
 // which reads nothing either; and his collections, /collections and /collections/<n> with the name after it or not,
-// which read nothing either (/collections/ redirects to /collections). People lived under
+// which read nothing either (/collections/ redirects to /collections), and a public collection's link,
+// /collections/<key>, with a thread of it at /collections/<key>/<n>, whose preview names the collection with the site's
+// card while it is public. People lived under
 // /threads/ before the rooms were peers: /threads/people and every person's address there redirect to /people for
 // good, and /people/ to /people. Each gets the one page, site/threads/index.html,
 // handed over from the site's own files through the assets binding, so it carries site/_headers (the CSP among
@@ -42,6 +44,7 @@ import { parse, type Inline } from "../site/app/markdown.js";
 import type { Bindings } from "./bindings.ts";
 import { SLUG_SHAPE } from "./asks.ts";
 import { findAsk, publicPreview, type PreviewRow, type PublicAddress } from "./store.ts";
+import { findPublicCollection } from "./collections-store.ts";
 
 /**
  * The root (Today), the meetings, the asks, everyone and a person by their number, the collections and one by its number, the list, a thread by its number with any title
@@ -49,7 +52,7 @@ import { findAsk, publicPreview, type PreviewRow, type PublicAddress } from "./s
  * a day or a week by its key, the storylines and one storyline by its name's slug. A key is matched by its shape, so an
  * impossible day gets the shell like any other and says "Nothing here" itself.
  */
-const PAGE = /^(?:\/|\/meetings|\/asks|\/journal(?:\/(?:\d{4}-\d{2}-\d{2}|\d{4}-W\d{2}|storylines(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?))?|\/people(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/collections(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?)?|\/threads\/([0-9a-f]{32})|\/ask\/([^/]+))$/;
+const PAGE = /^(?:\/|\/meetings|\/asks|\/journal(?:\/(?:\d{4}-\d{2}-\d{2}|\d{4}-W\d{2}|storylines(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?))?|\/people(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/collections(?:\/[1-9]\d{0,8}(?:-[^/]*)?)?|\/collections\/([0-9a-f]{32})(?:\/[1-9]\d{0,8})?|\/threads\/(?:([1-9]\d{0,8})(?:-[^/]*)?)?|\/threads\/([0-9a-f]{32})|\/ask\/([^/]+))$/;
 
 /** What an ask's preview says beside its title, the same for every ask. */
 export const ASK_DESCRIPTION = "A few questions from Suresh";
@@ -191,13 +194,20 @@ export async function handlePage(request: Request, env: Bindings): Promise<Respo
   }
   const page = PAGE.exec(url.pathname);
   if (page === null || (request.method !== "GET" && request.method !== "HEAD")) return env.ASSETS.fetch(request);
-  const [, number, shareKey, slug] = page;
+  const [, collectionKey, number, shareKey, slug] = page;
   if (slug !== undefined && !SLUG_SHAPE.test(slug)) return env.ASSETS.fetch(request);
   const shell = new URL(SHELL, url.origin);
   let preview: Preview | null = null;
   try {
     const address: PublicAddress | null = number !== undefined ? { number: Number(number) } : shareKey !== undefined ? { shareKey } : null;
-    preview = address !== null ? await threadOf(env, address, url.origin) : slug !== undefined ? await askOf(env, slug, url.origin) : null;
+    preview =
+      collectionKey !== undefined
+        ? await collectionOf(env, collectionKey, url.origin)
+        : address !== null
+          ? await threadOf(env, address, url.origin)
+          : slug !== undefined
+            ? await askOf(env, slug, url.origin)
+            : null;
   } catch {
     preview = null;
   }
@@ -213,6 +223,19 @@ async function threadOf(env: Bindings, address: PublicAddress, origin: string): 
   const row = await publicPreview(env.DB, address);
   return row === null || row.public !== 1 ? null : threadPreview(row, address, origin);
 }
+
+/**
+ * A public collection's preview at its link and at each thread's address under it, else null: its name and description
+ * with the site's card, never a thread's title, so a link to one of its threads says only whose set it is.
+ */
+async function collectionOf(env: Bindings, key: string, origin: string): Promise<Preview | null> {
+  const collection = await findPublicCollection(env.DB, key);
+  if (collection === null) return null;
+  return { title: `${collection.name} · whysosuresh.com`, type: "website", url: `${origin}/collections/${key}`, description: collection.description ?? COLLECTION_DESCRIPTION, image: `${origin}${SITE_CARD}` };
+}
+
+/** What a public collection's preview says when it has no description. */
+export const COLLECTION_DESCRIPTION = "Threads Suresh keeps together";
 
 /** An ask's preview while it is open or closed, else null: its title and the fixed line, never its summary. */
 async function askOf(env: Bindings, slug: string, origin: string): Promise<Preview | null> {

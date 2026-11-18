@@ -45,7 +45,9 @@
 // ("Design page:") keeps the six design pages seeded after it; "Every decision", pinned, holding 180 made-up settled
 // calls (two thirds of them done), enough for its search, its filter and its pages; "Talk material" with a few of the
 // seed's threads; and 41 more holding a handful of the decisions each, so the room pages and searches. Every screen is
-// shared with the guest, so `--member` shows it on their door beside the thread shared with them on its own. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
+// shared with the guest, so `--member` shows it on their door beside the thread shared with them on its own. Talk
+// material is public, its link printed at start, and holds a told thread and an ask's beside his own, which strangers
+// never read, so `--signed-out` shows what its link opens. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
 // played keys.
 
 import { readFileSync } from "node:fs";
@@ -554,6 +556,16 @@ async function seedCollections(): Promise<void> {
   if (!shared.ok) throw new Error(`sharing Every screen answered ${shared.status}`);
   const talk = await make("Talk material", "Everything the December talk draws on.");
   for (const number of [5, 3, 2]) await keep(talk, number);
+  // Public, as he makes it from its Share: a told thread and an ask's are in it too, and strangers read neither.
+  const told = (await (await harness.db()).prepare("SELECT number FROM threads WHERE source = 'told' ORDER BY number LIMIT 1").first<{ number: number }>())?.number;
+  const asked = (await (await harness.db()).prepare("SELECT number FROM threads WHERE ask_slug IS NOT NULL ORDER BY number LIMIT 1").first<{ number: number }>())?.number;
+  for (const number of [told, asked]) if (number !== undefined) await keep(talk, number);
+  const published = await harness.fetch(`${THREADS}/threads/api/collections/${talk}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()), Origin: THREADS },
+    body: new TextEncoder().encode(JSON.stringify({ public: true })),
+  });
+  if (!published.ok) throw new Error(`making Talk material public answered ${published.status}`);
 
   const names = ["Talks I give", "Investor updates", "CapsJump launch", "Episode ideas", "Hiring", "Customer calls", "Pricing", "Onboarding", "Demo scripts", "Conference notes", "Partner ideas", "Docs to rewrite", "Security reviews", "Brand and look", "Home page posts", "Reading list", "Interview notes", "Distribution", "Weekly reviews", "Merch", "Community", "Founder letters", "Tools I use", "Mac tricks", "Releases", "Postmortems", "Roadmap bets", "Friends asked", "Podcast guests", "Thumbnails", "Cold emails that worked", "Design references", "Open questions", "Ideas for later", "Health", "Meet-ups", "Books", "Things to write about", "Small fixes", "Rituals", "Someday"];
   for (const [i, name] of names.entries()) {
@@ -569,6 +581,9 @@ const links = (
     .prepare("SELECT number, title, share_key, public_by_number FROM threads WHERE share_key IS NOT NULL ORDER BY number")
     .all<{ number: number; title: string; share_key: string; public_by_number: number }>()
 ).results;
+const publicCollections = (
+  await (await harness.db()).prepare("SELECT name, share_key FROM collections WHERE public_at IS NOT NULL ORDER BY number").all<{ name: string; share_key: string }>()
+).results;
 await seedJournal();
 await seedNow();
 await seedOutside();
@@ -581,6 +596,7 @@ createServer((request, response) => {
   const as = signedOut ? "signed out" : member === null ? "signed in as the owner" : `signed in as ${member}, invited to one thread`;
   console.log(`hey.whysosuresh.com, ${as}: ${LOCAL_THREADS}/ (Ctrl-C stops it)`);
   console.log(`whysosuresh.com, the home page: ${LOCAL}/`);
+  for (const link of publicCollections) console.log(`${link.name}, a public collection: ${LOCAL_THREADS}/collections/${link.share_key}`);
   for (const link of links) {
     console.log(`#${link.number} ${link.title}: ${LOCAL_THREADS}/threads/${link.share_key}${link.public_by_number === 1 ? `, and its number, #${link.number}, as before keys` : ""}`);
   }

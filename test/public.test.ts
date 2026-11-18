@@ -910,3 +910,117 @@ describe("a public thread's link", () => {
     expect(await (await publicRead(String(n))).text()).toBe(JSON.stringify({ reason: "no-thread" }));
   });
 });
+
+describe("a public collection", () => {
+  /** A collection of #own, a page thread, a told thread, a site note and an ask's thread, made public; answers its key and numbers. */
+  async function stage(): Promise<{ c: number; key: string; own: number; paged: number; told: number; note: number; ask: number; outside: number }> {
+    const c = (await answer<{ collection: { number: number } }>(await call("/collections", { body: { name: "Every screen", description: "The design pages." } }), 201)).collection.number;
+    const own = await thread({ title: "His own words" });
+    const paged = await thread({ title: "His own page" });
+    await savePage(paged, "<!doctype html><p>A page.</p>");
+    const told = await thread({ source: "told", name: "Dev K.", title: "Told to him" });
+    const note = await siteNote();
+    const ask = await thread({ title: "An ask" });
+    await savePage(ask, '<!doctype html><p data-thread-question="why">Why?</p>');
+    await answer(await call(`/threads/${ask}/ask`, { body: { slug: "why-collections" } }));
+    const outside = await thread({ title: "Not in it" });
+    for (const n of [own, paged, told, note, ask]) await answer(await call(`/collections/${c}/threads`, { body: { add: n } }));
+    const made = await answer<{ collection: { shareKey: string | null; publicAt: string | null; hidden: number } }>(await call(`/collections/${c}`, { body: { public: true } }));
+    expect([made.collection.publicAt, made.collection.hidden]).toEqual([expect.any(String), 3]);
+    return { c, key: made.collection.shareKey ?? "", own, paged, told, note, ask, outside };
+  }
+
+  const read = (path: string): Promise<Response> => harness.fetch(`${THREADS}/api/collections/${path}`);
+
+  it("reads the threads of his own words in it, in his order, and nothing else", async () => {
+    const { key, own, paged } = await stage();
+    expect(key).toMatch(/^[0-9a-f]{32}$/);
+    const response = await read(key);
+    expect(response.headers.get("x-robots-tag")).toBe("noindex");
+    const listed = await answer<{ collection: Record<string, unknown>; threads: { number: number; place: number }[] }>(response);
+    expect(listed.collection).toEqual({ name: "Every screen", description: "The design pages." });
+    expect(listed.threads.map((one) => [one.number, one.place])).toEqual([[own, 1], [paged, 2]]);
+    const one = await answer<{ thread: { number: number; title: string }; comments: unknown[] }>(await read(`${key}/threads/${own}`));
+    expect([one.thread.number, one.thread.title]).toEqual([own, "His own words"]);
+    const page = await answer<{ page: { version: number } }>(await read(`${key}/threads/${paged}`));
+    const frame = await read(`${key}/threads/${paged}/pages/${page.page.version}`);
+    expect([frame.status, frame.headers.get("content-security-policy")?.includes("sandbox"), frame.headers.get("x-robots-tag")]).toEqual([200, true, "noindex"]);
+    // Neither thread is public on its own, and nothing about it changed.
+    expect(await keyOf(own)).toBe(null);
+    expect((await publicRead(String(own))).status).toBe(404);
+  });
+
+  it("answers the same 404 bytes for a wrong key, someone else's words, an ask's thread and a number outside it", async () => {
+    const { key, told, note, ask, outside, paged } = await stage();
+    const missing = await (await publicRead("999999")).text();
+    for (const path of [
+      "f".repeat(32),
+      "not-a-key",
+      `${key}/threads/${told}`,
+      `${key}/threads/${note}`,
+      `${key}/threads/${ask}`,
+      `${key}/threads/${outside}`,
+      `${key}/threads/999`,
+      `${key}/threads/x`,
+      `${key}/threads/${paged}/pages/99`,
+      `${key}/threads/${told}/pages/1`,
+      `${key}/other`,
+    ]) {
+      const response = await read(path);
+      expect([path, response.status, await response.text()]).toEqual([path, 404, missing]);
+    }
+  });
+
+  it("never carries a thread's key, a person's address or the collection's own number", async () => {
+    const { key, own } = await stage();
+    await answer(await move(own, "publish"));
+    const ownKey = (await keyOf(own)) ?? "";
+    const texts = [await (await read(key)).text(), await (await read(`${key}/threads/${own}`)).text()];
+    for (const text of texts) {
+      expect(text).not.toContain(ownKey);
+      expect(text).not.toMatch(/@example|shareKey|senderEmail|"number":1,"name"/);
+    }
+  });
+
+  it("shows only comments written for anyone that are shown, and takes no note or answer", async () => {
+    const { key, own } = await stage();
+    await answer(await call(`/threads/${own}/comments`, { body: { body: "For the people in it." } }), 201);
+    const listed = await answer<{ comments: unknown[] }>(await read(`${key}/threads/${own}`));
+    expect(listed.comments).toEqual([]);
+    for (const path of [`${key}/threads/${own}/notes`, `${key}/threads/${own}/answers`]) expect((await harness.fetch(`${THREADS}/api/collections/${path}`, { method: "POST", body: "{}" })).status).toBe(404);
+    expect((await harness.fetch(`${THREADS}/api/collections/${key}`, { method: "POST", body: "{}" })).status).toBe(405);
+  });
+
+  it("closes when he turns it off, and opens at the same link when he turns it on again", async () => {
+    const { c, key } = await stage();
+    await answer(await call(`/collections/${c}`, { body: { public: false } }));
+    expect((await read(key)).status).toBe(404);
+    const again = await answer<{ collection: { shareKey: string } }>(await call(`/collections/${c}`, { body: { public: true } }));
+    expect(again.collection.shareKey).toBe(key);
+    expect((await read(key)).status).toBe(200);
+    await answer(await call(`/collections/${c}`, { body: { delete: true } }));
+    expect((await read(key)).status).toBe(404);
+  });
+
+  it("is his alone to make public: the sync and an invited person are refused, and another site", async () => {
+    const c = (await answer<{ collection: { number: number } }>(await call("/collections", { body: { name: "Set" } }), 201)).collection.number;
+    expect(await reasonOf(await call(`/collections/${c}`, { as: "sync", body: { public: true } }))).toEqual([403, "owner-only"]);
+    expect(await reasonOf(await call(`/collections/${c}`, { body: { public: true }, origin: "https://example.com" }))).toEqual([403, "origin"]);
+    await answer(await call(`/collections/${c}/people`, { body: { add: { email: MEERA, name: "Meera" } } }));
+    expect(await reasonOf(await call(`/collections/${c}`, { as: { email: MEERA }, body: { public: true } }))).toEqual([403, "owner-only"]);
+    const shared = await answer<{ collection: Record<string, unknown> }>(await call(`/collections/${c}`, { as: { email: MEERA } }));
+    expect(shared.collection).not.toHaveProperty("shareKey");
+  });
+
+  it("gives its link and a thread's under it the collection's preview, and a wrong key the shell", async () => {
+    const { key, own } = await stage();
+    const page = await (await harness.fetch(`${THREADS}/collections/${key}`)).text();
+    expect(page).toContain('<meta property="og:title" content="Every screen · whysosuresh.com">');
+    expect(page).toContain(`<meta property="og:url" content="${THREADS}/collections/${key}">`);
+    expect(page).toContain('content="The design pages."');
+    expect(page).toContain(`<meta property="og:image" content="${THREADS}/img/card.png">`);
+    expect(await (await harness.fetch(`${THREADS}/collections/${key}/${own}`)).text()).toContain("Every screen · whysosuresh.com");
+    const shell = await (await harness.fetch(`${THREADS}/threads/`)).text();
+    expect(await (await harness.fetch(`${THREADS}/collections/${"f".repeat(32)}`)).text()).toBe(shell);
+  });
+});

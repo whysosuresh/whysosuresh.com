@@ -136,6 +136,25 @@ export function collectionInvitation(collection, person, origin) {
 }
 
 /**
+ * What a collection's Public switch says: its label, the line under it, and its link while it is on and has its key.
+ * Strangers read only the threads of his own words in it that aren't an ask's, read only; the line says how many
+ * they won't see.
+ * @param {string} origin the threads' own origin
+ * @param {{ threads: number, hidden?: number, shareKey?: string | null }} collection
+ * @param {boolean} on
+ * @returns {{ label: string, note: string, link: string | null }}
+ */
+export function collectionPublicLines(origin, collection, on) {
+  const hidden = collection.hidden ?? 0;
+  const readable = Math.max(0, collection.threads - hidden);
+  const unseen = hidden === 0 ? '' : ` ${hidden} ${hidden === 1 ? 'thread' : 'threads'} they won't see: someone else's words or an ask.`;
+  const note = on
+    ? `Anyone with the link reads ${readable} ${readable === 1 ? 'thread' : 'threads'} of your own words in it, and the ones you add later, read only.${unseen}`
+    : `Off: only you and the people you invite. Turned on, anyone with its link reads the threads of your own words in it, read only.${unseen}`;
+  return { label: 'Public', note, link: on && collection.shareKey ? `${origin}/collections/${collection.shareKey}` : null };
+}
+
+/**
  * Names as a sentence: "Meera", "Meera and Dev", "Meera, Dev and Asha".
  * @param {readonly string[]} names
  */

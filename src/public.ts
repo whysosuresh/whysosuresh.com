@@ -55,18 +55,18 @@ const OWNER_NAME = "Suresh";
 const NOINDEX = { "X-Robots-Tag": "noindex" };
 
 /** A JSON answer with the public calls' header, logging a refusal's status and reason only. */
-function answer(status: number, body: { readonly [key: string]: JsonValue }, headers: Record<string, string> = {}): Response {
+export function answer(status: number, body: { readonly [key: string]: JsonValue }, headers: Record<string, string> = {}): Response {
   if (status >= 400) console.log(JSON.stringify({ refused: status, reason: body.reason ?? null }));
   return json(status, body, { ...NOINDEX, ...headers });
 }
 
 /** The one answer every address that isn't a public thread's gets, on every call. */
-function noThread(): Response {
+export function noThread(): Response {
   return answer(404, { reason: "no-thread" });
 }
 
 /** A public thread as anyone reads it: what it says, and its main section only as it now stands. */
-function publicThread(row: ThreadRow): { readonly [key: string]: JsonValue } {
+export function publicThread(row: ThreadRow): { readonly [key: string]: JsonValue } {
   return {
     number: row.number,
     title: row.title,
@@ -96,7 +96,7 @@ export async function readerKey(request: Request): Promise<string | null> {
  * the question it answers (null for a note or a comment), whether it is the reader's own answer, and an invited
  * person's photo.
  */
-function publicComment(row: CommentRow, key: string | null): { readonly [key: string]: JsonValue } {
+export function publicComment(row: CommentRow, key: string | null): { readonly [key: string]: JsonValue } {
   const name = row.author === "owner" ? OWNER_NAME : (row.person_name ?? row.sender_name);
   const said = { author: row.author, name, body: row.body, createdAt: row.created_at, question: row.question, mine: key !== null && row.visitor_key === key };
   return row.author === "member" ? { ...said, photo: row.person_photo } : said;
