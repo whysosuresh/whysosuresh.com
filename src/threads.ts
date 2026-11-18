@@ -37,6 +37,7 @@
 //   POST /threads/api/photo (a JPEG or PNG), DELETE /threads/api/photo       owner: his photo (src/photos.ts)
 //   GET  /threads/api/cards                                                   owner: every public thread's card stamp (src/cards.ts)
 //   GET  /threads/api/collections[/<n>], POST /threads/api/collections[/<n>[/threads]]   owner and sync; never invited people (src/collections.ts)
+//   GET  /threads/api/distribution?product=<p>, POST /threads/api/distribution/...   owner and sync read; sync writes; never invited people (src/distribution.ts)
 //   POST /threads/api/threads/<n>/card?stamp=<hex>   a PNG                    owner: a public thread's preview card (src/cards.ts)
 //
 // An invited person reads only the threads they are in: every read takes the caller as its reader, and the
@@ -129,6 +130,7 @@ import { handleNow } from "./home.ts";
 import { handleJournal } from "./journal.ts";
 import { handlePeople, personView } from "./people.ts";
 import { collectionView, handleCollections, sharedView as sharedCollectionView } from "./collections.ts";
+import { handleDistribution } from "./distribution.ts";
 import { collectionsFor, collectionsOf, searchCollections } from "./collections-store.ts";
 import { addCard, listCards } from "./cards.ts";
 import { handlePhoto } from "./photos.ts";
@@ -847,6 +849,9 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
   }
   if (url.pathname === "/threads/api/collections" || url.pathname.startsWith("/threads/api/collections/")) {
     return handleCollections(request, url, env, who, (row) => thread(row, who));
+  }
+  if (url.pathname === "/threads/api/distribution" || url.pathname.startsWith("/threads/api/distribution/")) {
+    return handleDistribution(request, url, env, who, (row) => thread(row, who));
   }
   if (url.pathname === "/threads/api/now") return handleNow(request, env, who);
   if (url.pathname === "/threads/api/photo") return handlePhoto(request, env, who);

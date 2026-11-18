@@ -9,7 +9,10 @@
 // exiting non-zero), a photo uploaded by its file's type and read back to a file byte for byte, a day's answers and the
 // storylines; collections listed through every page or found by words, one read with every thread through its pages,
 // made, and changed one call per flag (keep, take out, move to a place, a rule set or cleared, pinned, renamed,
-// described), stopping at the first refusal, with no verb that shares one or makes it public; the Worker's refusals and the edge's passed through with a
+// described), stopping at the first refusal, with no verb that shares one or makes it public; a product's distribution
+// room read (stigmer when not named, --since passed through), acts sent one call a line from stdin with a result line
+// each, an act voided by its id, a platform's state sent with every field (a flag left out as null), and a week's
+// readings sent as one object, a flag's hyphens the metric's underscores; the Worker's refusals and the edge's passed through with a
 // non-zero exit; usage errors; and the secret in no line it prints. One run of the real entry point as a child
 // process proves Node runs the TypeScript as it is.
 
@@ -788,4 +791,128 @@ describe("journal", () => {
     expect(await run(["journal", "write", "2026-03-03", "--base", "0"], io)).toBe(2);
     expect(sent).toEqual([]);
   });
+});
+
+const DISTRIBUTION = `${ORIGIN}/threads/api/distribution`;
+const ACT = { id: "00000000-0000-4000-8000-0000000000aa", ref: "engage:1", kind: "reply" };
+
+describe("distribution", () => {
+  it("reads stigmer's room when no product is named, and passes --product and --since", async () => {
+    const { io, sent, out } = client([
+      { status: 200, body: { product: "stigmer", acts: [] } },
+      { status: 200, body: { product: "capsjump", acts: [] } },
+    ]);
+    expect(await run(["distribution"], io)).toBe(0);
+    expect(await run(["distribution", "--product", "capsjump", "--since", "2026-11-12"], io)).toBe(0);
+    expect(sent.map((one) => [one.method, one.url])).toEqual([
+      ["GET", `${DISTRIBUTION}?product=stigmer`],
+      ["GET", `${DISTRIBUTION}?product=capsjump&since=2026-11-12`],
+    ]);
+    expect(out.map((line) => (JSON.parse(line) as { product: string }).product)).toEqual(["stigmer", "capsjump"]);
+  });
+
+  it.each([[["distribution", "--product", "feed-said-so"]], [["distribution", "--since", "yesterday"]], [["distribution", "--product", "stigmer", "--product", "capsjump"]], [["distribution", "stigmer"]]])(
+    "is a usage error for %j, sending nothing",
+    async (argv) => {
+      const { io, sent } = client([]);
+      expect(await run(argv, io)).toBe(2);
+      expect(sent).toEqual([]);
+    },
+  );
+});
+
+describe("acts", () => {
+  it("sends one call a line from stdin and prints a result line each, exiting non-zero when any is refused", async () => {
+    const lines = [JSON.stringify({ ref: "engage:1" }), "", "not json", JSON.stringify({ ref: "engage:2" }), JSON.stringify({ ref: "engage:3" })];
+    const { io, sent, out } = client(
+      [
+        { status: 201, body: { act: ACT } },
+        { status: 200, body: { act: ACT } },
+        { status: 400, body: { reason: "kind" } },
+      ],
+      { stdin: lines.join("\n") },
+    );
+    expect(await run(["acts"], io)).toBe(1);
+    expect(sent.map((one) => [one.method, one.url, one.body])).toEqual([
+      ["POST", `${DISTRIBUTION}/acts`, lines[0]],
+      ["POST", `${DISTRIBUTION}/acts`, lines[3]],
+      ["POST", `${DISTRIBUTION}/acts`, lines[4]],
+    ]);
+    expect(out.map((line) => JSON.parse(line) as unknown)).toEqual([
+      { line: 1, status: 201, act: ACT },
+      { line: 3, status: 0, reason: "not-json" },
+      { line: 4, status: 200, act: ACT },
+      { line: 5, status: 400, reason: "kind" },
+    ]);
+  });
+
+  it("is a usage error with nothing on stdin, or with an argument", async () => {
+    expect(await run(["acts"], client([]).io)).toBe(2);
+    expect(await run(["acts", "x"], client([], { stdin: "{}" }).io)).toBe(2);
+  });
+});
+
+describe("act", () => {
+  it("voids an act by its id and prints it", async () => {
+    const { io, sent, out } = client([{ status: 200, body: { act: { ...ACT, voidedAt: "2026-11-18T00:00:00.000Z" } } }]);
+    expect(await run(["act", ACT.id, "--void"], io)).toBe(0);
+    expect(sent.map((one) => [one.method, one.url, one.body])).toEqual([["POST", `${DISTRIBUTION}/acts/${ACT.id}/void`, null]]);
+    expect(JSON.parse(out[0] ?? "null")).toEqual({ ...ACT, voidedAt: "2026-11-18T00:00:00.000Z" });
+  });
+
+  it.each([[["act", "not-an-id", "--void"]], [["act", "00000000-0000-4000-8000-0000000000aa"]], [["act", "00000000-0000-4000-8000-0000000000aa", "--delete"]]])("is a usage error for %j", async (argv) => {
+    const { io, sent } = client([]);
+    expect(await run(argv, io)).toBe(2);
+    expect(sent).toEqual([]);
+  });
+});
+
+describe("platform", () => {
+  it("sends every field, a flag left out as null, and prints the platform", async () => {
+    const answer = { platform: "reddit", state: "hold" };
+    const { io, sent, out } = client([
+      { status: 200, body: { platform: answer } },
+      { status: 200, body: { platform: answer } },
+    ]);
+    expect(await run(["platform", "stigmer", "reddit", "--state", "hold", "--note", "Posts held back", "--until", "2026-12-05"], io)).toBe(0);
+    expect(await run(["platform", "capsjump", "x", "--state", "active", "--pace", "3"], io)).toBe(0);
+    expect(sent.map((one) => [one.url, JSON.parse(one.body ?? "null") as unknown])).toEqual([
+      [`${DISTRIBUTION}/platforms/stigmer/reddit`, { state: "hold", note: "Posts held back", until: "2026-12-05", pace: null }],
+      [`${DISTRIBUTION}/platforms/capsjump/x`, { state: "active", note: null, until: null, pace: 3 }],
+    ]);
+    expect(out.map((line) => JSON.parse(line) as unknown)).toEqual([answer, answer]);
+  });
+
+  it.each([[["platform", "stigmer", "reddit"]], [["platform", "other", "reddit", "--state", "hold"]], [["platform", "stigmer", "reddit", "--state", "hold", "--pace", "x"]], [["platform", "stigmer", "reddit", "--state"]]])(
+    "is a usage error for %j",
+    async (argv) => {
+      const { io, sent } = client([]);
+      expect(await run(argv, io)).toBe(2);
+      expect(sent).toEqual([]);
+    },
+  );
+});
+
+describe("readings", () => {
+  it("sends the week's numbers as one object, a flag's hyphens the metric's underscores", async () => {
+    const { io, sent, out } = client([{ status: 200, body: { product: "stigmer", week: "2026-W47", readings: [] } }]);
+    expect(await run(["readings", "stigmer", "2026-W47", "--outside-stars", "4", "--downloads", "0"], io)).toBe(0);
+    expect(sent.map((one) => [one.method, one.url, JSON.parse(one.body ?? "null") as unknown])).toEqual([["POST", `${DISTRIBUTION}/readings/stigmer/2026-W47`, { outside_stars: 4, downloads: 0 }]]);
+    expect(JSON.parse(out[0] ?? "null")).toEqual({ product: "stigmer", week: "2026-W47", readings: [] });
+  });
+
+  it("passes a refusal through with a non-zero exit", async () => {
+    const { io, err } = client([{ status: 400, body: { reason: "week" } }]);
+    expect(await run(["readings", "stigmer", "2026-W54", "--downloads", "1"], io)).toBe(1);
+    expect(err).toEqual(["inbox: readings refused (400 week)"]);
+  });
+
+  it.each([[["readings", "stigmer", "2026-W47"]], [["readings", "stigmer", "W47", "--downloads", "1"]], [["readings", "stigmer", "2026-W47", "--downloads", "-1"]], [["readings", "stigmer", "2026-W47", "--Downloads", "1"]]])(
+    "is a usage error for %j",
+    async (argv) => {
+      const { io, sent } = client([]);
+      expect(await run(argv, io)).toBe(2);
+      expect(sent).toEqual([]);
+    },
+  );
 });

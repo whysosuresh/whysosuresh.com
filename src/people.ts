@@ -4,7 +4,7 @@
 // site or on a public thread with an address, and people who told him something in person.
 //
 //   GET  /threads/api/people              owner and sync: everyone, whoever was last in touch first
-//   GET  /threads/api/people/<n>          owner and sync: one person, their threads and what they said
+//   GET  /threads/api/people/<n>          owner and sync: one person, their threads, what they said and their distribution acts
 //   POST /threads/api/people/<n>          {"name"} | {"email"} | {"note"}   owner
 //
 // A person's page holds what other people said to him, so only he and the sync read it, and only he changes it,
@@ -18,8 +18,10 @@
 // invitation `removed`, `wrote` a comment or note there, `met` in its meeting), shaped as the threads' calls shape a
 // thread, its meeting included, and what they said, newest first: their site notes, their comments as an invited
 // person, and their notes on public threads with whether each is waiting or dropped. Up to 200 of each; `truncated`
-// says there are more. The counts include the meetings they are in (`met`) and the collections shared with them now
-// (`collections`), and a person's call names those collections; `invited` holds while either kind of invitation stands.
+// says there are more. The counts include the meetings they are in (`met`), the collections shared with them now
+// (`collections`) and the distribution acts that name them (`acted`), and a person's call names those collections and
+// lists those acts, newest first (`acts`, up to 200, voided ones left out; src/distribution.ts); `invited` holds while
+// either kind of invitation stands.
 //
 // A change is one field: their name; their address, given once while they have none (lowercased, never his own,
 // 409 `has-email` once they have one, 409 `email-taken` with the number of the person who holds it), because it is
@@ -32,6 +34,7 @@ import { json, type JsonValue } from "./json.ts";
 import { sameOrigin } from "./request.ts";
 import { editPerson, findPerson, listPeople, threadsOfPerson, wordsOfPerson, type PeopleRow, type PersonChange, type PersonThreadRow, type ThreadRow, type WordsRow } from "./store.ts";
 import { collectionsOfPerson } from "./collections-store.ts";
+import { personActs } from "./distribution.ts";
 import { MAX_BODY, MAX_PERSON_NAME, MAX_TEXT_BYTES, exactly, lengthRefusal, line, readEmail, readJson, refuse, text } from "./wire.ts";
 
 /** The most people the list answers; `truncated` says there are more. */
@@ -56,7 +59,17 @@ export function personView(row: PeopleRow): { readonly [key: string]: JsonValue 
     // Invited to a thread or to a collection: either is what lets them sign in.
     invited: row.invited + row.collections > 0,
     dropped: row.live === 0,
-    counts: { sent: row.sent, told: row.told, invited: row.invited, removed: row.removed, commented: row.commented, noted: row.noted, met: row.met, collections: row.collections },
+    counts: {
+      sent: row.sent,
+      told: row.told,
+      invited: row.invited,
+      removed: row.removed,
+      commented: row.commented,
+      noted: row.noted,
+      met: row.met,
+      collections: row.collections,
+      acted: row.acted,
+    },
   };
 }
 
@@ -82,13 +95,19 @@ async function everyone(env: Bindings): Promise<Response> {
 async function one(number: number, env: Bindings, shape: ThreadView): Promise<Response> {
   const person = await findPerson(env.DB, number);
   if (person === null) return refuse(404, "no-person");
-  const [threads, words, collections] = await Promise.all([threadsOfPerson(env.DB, person.id, SHOWN + 1), wordsOfPerson(env.DB, person.id, SHOWN + 1), collectionsOfPerson(env.DB, person.id)]);
+  const [threads, words, collections, acted] = await Promise.all([
+    threadsOfPerson(env.DB, person.id, SHOWN + 1),
+    wordsOfPerson(env.DB, person.id, SHOWN + 1),
+    collectionsOfPerson(env.DB, person.id),
+    personActs(env.DB, person.id),
+  ]);
   return json(200, {
     person: { ...personView(person), note: person.note },
     collections,
     threads: threads.slice(0, SHOWN).map((row) => ({ ...shape(row), roles: rolesOf(row) })),
     words: words.slice(0, SHOWN).map(wordsView),
-    truncated: threads.length > SHOWN || words.length > SHOWN,
+    acts: acted.acts,
+    truncated: threads.length > SHOWN || words.length > SHOWN || acted.more,
   });
 }
 
