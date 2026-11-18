@@ -128,7 +128,7 @@
  * @typedef {{ name: string } | { email: string } | { note: string }} PersonChange
  * @typedef {{ threads: Thread[], people: Someone[], collections: Collection[] }} Found
  * @typedef {{ people: Person[], invitedCount: number }} People
- * @typedef {{ caller: 'owner' | 'sync' | 'member', email: string | null, ownerPhoto?: string | null, photo?: string | null }} Me
+ * @typedef {{ caller: 'owner' | 'sync' | 'member', email: string | null, name?: string | null, ownerPhoto?: string | null, photo?: string | null }} Me
  * @typedef {{ number: number, title: string | null, stamp: string | null }} CardDue
  * @typedef {{ id: number, at: string, actor: 'owner' | 'sync' | 'visitor' | 'import' | string, type: string, data: Record<string, unknown> }} Event
  * @typedef {{ thread: Thread, page: Page | null, people: Person[], comments: Comment[], events: Event[], truncated: boolean, answeredBy?: Answerer[], collections?: KeptIn[] }} Shown

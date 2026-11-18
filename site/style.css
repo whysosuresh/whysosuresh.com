@@ -485,39 +485,68 @@ a.topic { text-decoration: none; }
 .t-i { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 
 .t-app {
-  display: grid; grid-template-columns: 200px minmax(0, 1fr); height: 100vh; height: 100dvh;
+  display: grid; grid-template-columns: 248px minmax(0, 1fr); height: 100vh; height: 100dvh;
   padding-top: env(safe-area-inset-top, 0px);
 }
-.t-side { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; padding: 14px 10px; padding-left: max(10px, env(safe-area-inset-left, 0px)); border-right: 1px solid var(--line); background: var(--surface); }
-.t-side-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 8px; }
-.t-brand { font-size: 15px; font-weight: 800; letter-spacing: -0.01em; text-decoration: none; }
-.t-side-find, .t-side-new {
-  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px;
-  border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--muted); font-size: 12px; text-align: left;
+.t-side { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 10px 8px 8px; padding-left: max(8px, env(safe-area-inset-left, 0px)); border-right: 1px solid var(--line); background: var(--surface); }
+/* The menu, from its design page: the site's name with New beside it, Find, the rooms in groups, sections that fold,
+   and who is signed in at the foot. Rows are 32px; a grey number says how many, a pill that someone waits on him. */
+.t-side-head { display: flex; align-items: center; gap: 6px; padding: 4px 4px 8px 6px; }
+.t-brand { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14.5px; font-weight: 750; letter-spacing: -0.01em; text-decoration: none; }
+.t-side-new { display: grid; place-items: center; flex: none; width: 30px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
+.t-side-new:hover { background: var(--hover); }
+.t-side-new .t-i { width: 16px; height: 16px; }
+.t-side-find {
+  display: flex; align-items: center; gap: 10px; width: 100%; height: 32px; margin-bottom: 10px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--faint); font-size: 13px; text-align: left;
 }
-.t-side-find kbd, .t-side-new kbd { margin-left: auto; }
-.t-side-new { background: var(--ink); color: var(--accent-ink); border-color: var(--ink); font-weight: 600; }
-.t-side-new kbd { background: transparent; color: inherit; border-color: currentColor; opacity: 0.6; }
-.t-nav { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; }
-.t-nav-label { padding: 10px 8px 3px; color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.t-side-find:hover { color: var(--muted); }
+.t-side-find .t-i { width: 16px; height: 16px; }
+.t-side-find-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t-side-find kbd { color: var(--faint); }
+.t-nav { display: grid; grid-template-columns: minmax(0, 1fr); }
+.t-nav-group { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; }
+.t-nav-group + .t-nav-group { margin-top: 10px; }
+.t-nav-sec {
+  display: flex; align-items: center; gap: 6px; width: 100%; height: 28px; margin-top: 12px; padding: 0 10px;
+  border: 0; border-radius: 8px; background: none; color: var(--faint); font-size: 12px; font-weight: 600; text-align: left;
+}
+.t-nav-sec:hover { color: var(--ink); }
+.t-nav-sec .t-i { width: 12px; height: 12px; transition: transform 0.15s; }
+.t-nav-sec[aria-expanded="false"] .t-i { transform: rotate(-90deg); }
 .t-nav-item {
-  display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px;
-  border-radius: 7px; color: var(--muted); font-size: 13px; font-weight: 600; text-decoration: none;
+  display: flex; align-items: center; gap: 10px; width: 100%; height: 32px; padding: 0 10px;
+  border-radius: 8px; font-size: 13.5px; font-weight: 500; text-decoration: none;
 }
+.t-nav-item .t-i { width: 16px; height: 16px; color: var(--faint); }
 .threads .t-nav-item { color: var(--muted); }
 .threads .t-nav-item:hover { background: var(--hover); color: var(--ink); }
-.threads .t-nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--ink); }
-.t-nav-pad { width: 15px; flex: none; }
-/* A space under Threads, or a guest's thread under Yours: set in from the room it belongs to. */
-.t-nav-item.t-nav-sub { padding-left: 22px; font-weight: 500; }
-.t-nav-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.t-nav-count { margin-left: auto; font-size: 11.5px; font-variant-numeric: tabular-nums; color: var(--faint); }
-.t-side-foot { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 8px; font-size: 12px; }
-/* Who is signed in: his opens his photo sheet, a person he invited's only names them. */
-.t-side-me { display: flex; align-items: center; gap: 8px; min-width: 0; margin: -4px; padding: 4px; border: 0; border-radius: 8px; background: none; color: var(--ink); font: inherit; text-align: left; }
-button.t-side-me:hover { background: var(--hover); }
-.t-side-who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.t-side-who small { display: block; color: var(--muted); font-size: 11px; }
+.threads .t-nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+.t-nav-item:hover .t-i, .t-nav-item[aria-current="page"] .t-i { color: var(--ink); }
+.t-nav-pad { width: 16px; flex: none; }
+/* A space's mark: a small square, so a space never reads as a room. */
+.t-nav-glyph { display: grid; place-items: center; width: 16px; height: 16px; flex: none; }
+.t-nav-glyph::before { content: ""; width: 9px; height: 9px; border: 1.5px solid currentColor; border-radius: 3px; }
+/* An invited reader's open thread: filled for To do, a ring for To discuss, a ring with a point for New. */
+.t-nav-mark { position: relative; width: 8px; height: 8px; margin: 0 4px; flex: none; border: 1.5px solid var(--ink); border-radius: 50%; }
+.t-nav-mark[data-status="act"] { background: var(--ink); }
+.t-nav-mark[data-status="received"]::after { content: ""; position: absolute; inset: 1px; border-radius: 50%; background: var(--ink); }
+.t-nav-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t-nav-count { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--faint); }
+.t-nav-badge {
+  margin-left: auto; min-width: 20px; height: 18px; padding: 0 6px; border-radius: 9px; background: var(--ink); color: var(--accent-ink);
+  font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.t-side-foot { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--line); }
+/* Who is signed in, opening the account menu above it. */
+.t-side-me { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px; border: 0; border-radius: 8px; background: none; color: var(--ink); text-align: left; }
+.t-side-me:hover { background: var(--hover); }
+.t-side-me .t-av { width: 26px; height: 26px; font-size: 12px; }
+.t-side-me .t-i { width: 16px; height: 16px; color: var(--faint); }
+.t-side-who { flex: 1; min-width: 0; line-height: 1.3; }
+.t-side-who b, .t-side-who small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t-side-who b { font-size: 13px; font-weight: 600; }
+.t-side-who small { color: var(--muted); font-size: 11.5px; }
 .t-icon-button { margin-left: auto; display: inline-grid; place-items: center; padding: 4px; border: 0; border-radius: 6px; background: none; color: var(--muted); }
 .t-icon-button:hover { color: var(--ink); background: var(--hover); }
 .t-main { min-width: 0; min-height: 0; overflow-y: auto; background: var(--bg); padding-right: env(safe-area-inset-right, 0px); }
@@ -758,6 +787,19 @@ textarea.t-field { resize: vertical; line-height: 1.5; }
 .t-dialog[data-kind="narrow"] { width: min(340px, calc(100% - 32px)); }
 .t-dialog[data-kind="wide"] { width: min(720px, calc(100% - 32px)); }
 .t-dialog[data-kind="find"] { width: min(580px, calc(100% - 32px)); overflow: hidden; }
+/* The account menu: above the menu's foot on a wide screen, a bottom sheet on a phone, as every dialog is. */
+@media (min-width: 720px) {
+  .t-dialog[data-kind="menu"] { width: 232px; margin: auto auto 64px 8px; padding: 6px; border-radius: 10px; box-shadow: 0 10px 30px var(--shadow); }
+  .t-dialog[data-kind="menu"]::backdrop { background: transparent; }
+}
+.t-menu-head { display: grid; gap: 1px; margin-bottom: 4px; padding: 6px 8px 8px; border-bottom: 1px solid var(--line); line-height: 1.35; }
+.t-menu-head b { font-size: 13px; }
+.t-menu-head small { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.t-menu-list { display: grid; gap: 1px; }
+.t-menu-row { display: flex; align-items: center; gap: 10px; width: 100%; height: 32px; padding: 0 8px; border: 0; border-radius: 7px; background: none; color: var(--ink); font-size: 13px; text-align: left; }
+.t-menu-row:hover, .t-menu-row:focus-visible { background: var(--hover); }
+.t-menu-row .t-i { width: 16px; height: 16px; color: var(--muted); }
+.t-menu-row kbd { margin-left: auto; }
 .t-sheet-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px 8px; }
 .t-sheet-head h2 { margin: 0; font-size: 15px; }
 .t-x { margin-left: auto; display: inline-grid; place-items: center; border: 0; background: none; color: var(--muted); padding: 4px; border-radius: 6px; }
@@ -908,6 +950,7 @@ textarea.t-field { resize: vertical; line-height: 1.5; }
   .t-pub-doc { padding: 6px var(--gutter-r) 40px var(--gutter-l); }
 }
 @media (prefers-reduced-motion: reduce) {
+  .t-nav-sec .t-i { transition: none; }
   .t-toast-bar { animation: none; }
   .t-switch::after { transition: none; }
 }

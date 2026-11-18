@@ -193,9 +193,17 @@ describe("who gets in", () => {
 
   it("admits an invited person as themselves", async () => {
     await invite(await thread(), MEERA);
-    expect(await answer(await call("/me", { as: { email: "MEERA@example.com" } }))).toEqual({ caller: "member", email: MEERA, ownerPhoto: null, photo: null });
+    expect(await answer(await call("/me", { as: { email: "MEERA@example.com" } }))).toEqual({ caller: "member", email: MEERA, name: "Meera", ownerPhoto: null, photo: null });
     expect(await answer(await call("/me"))).toEqual({ caller: "owner", email: OWNER, ownerPhoto: null });
     expect(await answer(await call("/me", { as: "sync" }))).toEqual({ caller: "sync", email: null, ownerPhoto: null });
+  });
+
+  it("names an invited person whose People row has no name with null, never their address or anyone else's name", async () => {
+    await invite(await thread(), DEV, "Dev");
+    await (await harness.db()).prepare("UPDATE people SET name = NULL WHERE email = ?1").bind(DEV).run();
+    const said = await answer<{ name: string | null; email: string }>(await call("/me", { as: { email: DEV } }));
+    expect(said.name).toBeNull();
+    expect(said.email).toBe(DEV);
   });
 
   it("refuses a person removed from their last thread on their next call, and keeps one still in another", async () => {
