@@ -788,8 +788,9 @@ textarea.t-field { resize: vertical; line-height: 1.5; }
 .t-dialog[data-kind="wide"] { width: min(720px, calc(100% - 32px)); }
 .t-dialog[data-kind="find"] { width: min(580px, calc(100% - 32px)); overflow: hidden; }
 /* The account menu: above the menu's foot on a wide screen, a bottom sheet on a phone, as every dialog is. */
+.t-dialog[data-kind="menu"] { padding: 6px; }
 @media (min-width: 720px) {
-  .t-dialog[data-kind="menu"] { width: 232px; margin: auto auto 64px 8px; padding: 6px; border-radius: 10px; box-shadow: 0 10px 30px var(--shadow); }
+  .t-dialog[data-kind="menu"] { width: 232px; margin: auto auto 64px 8px; border-radius: 10px; box-shadow: 0 10px 30px var(--shadow); }
   .t-dialog[data-kind="menu"]::backdrop { background: transparent; }
 }
 .t-menu-head { display: grid; gap: 1px; margin-bottom: 4px; padding: 6px 8px 8px; border-bottom: 1px solid var(--line); line-height: 1.35; }
