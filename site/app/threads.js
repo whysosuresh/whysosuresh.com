@@ -85,6 +85,17 @@
 // thread is from, a comment's author, a thread's people), and ⌘K finds people too. Invited people get none of this:
 // at a people address they get their own home, as the Worker refuses them every people call.
 //
+// The threads worth keeping sit in his collections (collections.js holds their words): named sets in his own order, at
+// /collections, a room with a search, its pinned ones first, then the rest by their last change, 25 at a time; and
+// each at /collections/3-every-screen, with an add box, its threads 50 at a time in his order, moved by drag, ⌥↑ and
+// ⌥↓ (⇧ to the top or the bottom) or ⋯ (the top, the bottom, a place, out), a search and an Open / Done filter past 20,
+// and a side panel with its pin, its rule (a title prefix new threads join by) and Delete. L on a thread opens a picker
+// of its collections and the most recently changed, which searches every collection as he types, keeps the thread in
+// one or takes it out, and makes one from a new name. The rail lists Collections with its pinned ones under it, the
+// thread's panel names the collections it is in, and ⌘K finds them. A thread opened from a collection walks it with J
+// and K under a bar that says where it is, because the history entry names the collection (site/app/page-view.js),
+// which a reload keeps and a copied address never carries. Collections are his alone: an invited person never sees one.
+//
 // Any thread can be one meeting (meetings.js holds their words): a day, its time not set, or a moment shown in the
 // reader's own zone, with a length, a where and the people in the room besides him. A meeting's thread opens with
 // it as a strip above the summary, and his B (or the strip's button) opens its editor: the day and a time typed in
@@ -152,6 +163,28 @@ import { PHOTO_SHEET, VIA, photoProblem, photoSaved, startedLine, viaClaude, wri
 import { ASKS_PATH, ASK_PATH, CLOSED_LINE, DRAFTS_HINT, agoWords, FIRST_ANSWERERS, answeredHead, answererName, answerersShown, askEventWords, askLink, askShown, countLine, foldWaiting, foldedTitle, foldedWho, markReadLabel, markedWords, nobodyLine, savedLine, stateWords, summaryNoteFor, talkLinkFor, topicLine, visitorHint } from './asks.js';
 import { DRAFT, KEY, discussionFor, helloFor, placesOf, readPageMessage, stack, takesAnswers } from './page-talk.js';
 import { pageFull, readPageState, threadLabel } from './page-view.js';
+import {
+  COLLECTIONS_PAGE,
+  COLLECTIONS_PATH,
+  COLLECTION_PATH,
+  KEPT_PAGE,
+  KEPT_SEARCH_FROM,
+  MAX_DESCRIPTION,
+  MAX_NAME,
+  collectionLine,
+  collectionPath,
+  deleteLine,
+  keptToast,
+  keptWords as keptHistory,
+  makesNew,
+  moreLabel,
+  movedTo,
+  nameProblem,
+  pickList,
+  ruleLine,
+  threadsLine,
+  walkLine,
+} from './collections.js';
 import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, saidOn, takenLine } from './people.js';
 import { addressOf, feedLines, invitation, invitationProblem, isAddress, levelOf, linkShown, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
 import { prepare as prepareBotCheck, sendTo } from '../talk-send.js';
@@ -163,8 +196,13 @@ import {
   askAction,
   askPageAddress,
   attendee,
+  changeCollection,
+  changeKept,
   comment,
   edit,
+  listCollections,
+  makeCollection,
+  showCollection,
   editPerson,
   invite,
   answerJournal,
@@ -244,15 +282,22 @@ import {
  * @typedef {{ view: 'today' } | { view: 'list', tab: Tab, only: Open | null, space: string | null } | { view: 'thread', number: number } | { view: 'people' }
  *   | { view: 'person', number: number } | { view: 'meetings' } | { view: 'asks' } | { view: 'ask', slug: string }
  *   | { view: 'journal' } | { view: 'entry', key: string } | { view: 'storylines' } | { view: 'storyline', slug: string }
- *   | { view: 'shared', shareKey: string }} Route
+ *   | { view: 'shared', shareKey: string } | { view: 'collections' } | { view: 'collection', number: number }} Route
+ * @typedef {import('./threads-store.js').Collection} Collection
+ * @typedef {import('./threads-store.js').CollectionShown} CollectionShown
+ * @typedef {import('./threads-store.js').KeptThread} KeptThread
+ * @typedef {import('./threads-store.js').KeptIn} KeptIn
+ * @typedef {{ words: string, pinned: Collection[], rows: Collection[], next: number | null, count: number, loaded: boolean, ticket: number }} Room
+ * @typedef {{ number: number, kept: KeptIn[], found: Collection[] | null, words: string, sel: number, busy: boolean }} Keeping
+ * @typedef {{ number: number | null, name: string, description: string, problem: string, busy: boolean }} CollectionDraft
  * @typedef {import('./threads-store.js').PublicAddress} PublicAddress
  * @typedef {{ to: string, subject: string, body: string }} Draft
  * @typedef {{ title: string, summary: string, body: string }} Editing
  * @typedef {{ title: string, space: string, status: 'received' | 'act' | 'discuss', body: string }} NewDraft
- * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share' | 'discussion' | 'meeting' | 'more' | 'photo'} Overlay
+ * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share' | 'discussion' | 'meeting' | 'more' | 'photo' | 'keep' | 'kept-menu' | 'collection-edit' | 'collection-delete'} Overlay
  * @typedef {{ number: number, people: Person[], count: number, email: string, name: string, problem: string,
  *   invited: { name: string, email: string } | null, busy: boolean }} Sharing
- * @typedef {{ label: string, sub: string, side: string, number: number | null, person: number | null, photo?: string | null, run: () => void }} FindItem
+ * @typedef {{ label: string, sub: string, side: string, number: number | null, person: number | null, collection?: number | null, photo?: string | null, run: () => void }} FindItem
  * @typedef {{ text: string } | { email: string, holder: { number: number, name: string | null, email: string | null } }} AddressProblem
  * @typedef {{ name: string, email: string, body: string, sent: boolean, busy: boolean, problem: string }} NoteForm
  * @typedef {{ name: string, key: string, kept: boolean, naming: boolean, missing: boolean }} Visitor
@@ -694,10 +739,10 @@ function meetingData(value) {
   return { when: value.when, minutes, where };
 }
 
-/** Whether a view is his alone: the Threads room, the people, the asks and the journal. @param {Route} route */
+/** Whether a view is his alone: the Threads room, the people, the asks, the journal and the collections. @param {Route} route */
 function isHis(route) {
   const view = route.view;
-  return view === 'list' || view === 'people' || view === 'person' || view === 'asks' || view === 'journal' || view === 'entry' || view === 'storylines' || view === 'storyline';
+  return view === 'collections' || view === 'collection' || view === 'list' || view === 'people' || view === 'person' || view === 'asks' || view === 'journal' || view === 'entry' || view === 'storylines' || view === 'storyline';
 }
 
 /** The journal's view an address names, or null when it names none. @param {string} path @returns {Route | null} */
@@ -769,6 +814,9 @@ function routeOf(at) {
   if (at.pathname === ME) return { view: 'today' };
   if (at.pathname === MEETINGS) return { view: 'meetings' };
   if (at.pathname === ASKS) return { view: 'asks' };
+  if (at.pathname === COLLECTIONS_PATH) return { view: 'collections' };
+  const collection = COLLECTION_PATH.exec(at.pathname);
+  if (collection) return { view: 'collection', number: Number(collection[1]) };
   const journal = journalRoute(at.pathname);
   if (journal) return journal;
   const ask = ASK_PATH.exec(at.pathname);
@@ -784,6 +832,8 @@ function pathOf(route, threads, people = []) {
   if (route.view === 'today') return ME;
   if (route.view === 'meetings') return MEETINGS;
   if (route.view === 'asks') return ASKS;
+  if (route.view === 'collections') return COLLECTIONS_PATH;
+  if (route.view === 'collection') return `${COLLECTIONS_PATH}/${route.number}`;
   if (route.view === 'ask') return `/ask/${route.slug}`;
   if (route.view === 'journal') return JOURNAL_PATH;
   if (route.view === 'entry') return entryPath(route.key);
@@ -1012,8 +1062,52 @@ class Threads {
 
     /** @type {Route} */
     this.route = routeOf(location);
-    /** Where a thread was opened from, so Esc and the pager go back there. @type {'today' | 'list' | 'person' | 'meetings' | 'asks'} */
+    /** Where a thread was opened from, so Esc and the pager go back there. @type {'today' | 'list' | 'person' | 'meetings' | 'asks' | 'collection'} */
     this.from = 'today';
+    /** The collection a thread was opened from, which J and K walk. @type {number | null} */
+    this.fromCollection = null;
+    /** That collection's threads in his order, read whole, for the walk. @type {{ number: number, name: string, threads: number[] } | null} */
+    this.walking = null;
+    /** The Collections room: the words searched, the pinned ones, the rest as paged so far. @type {Room} */
+    this.room = { words: '', pinned: [], rows: [], next: null, count: 0, loaded: false, ticket: 0 };
+    /** Every pinned collection, the most recently changed ones and how many there are: the rail and the L picker. @type {Collection[]} */
+    this.pins = [];
+    /** @type {Collection[]} */
+    this.recentCollections = [];
+    this.collectionsCount = 0;
+    /** The collection shown with its threads as paged so far, and the number of one that isn't there. @type {CollectionShown | null} */
+    this.collection = null;
+    /** @type {number | null} */
+    this.collectionMissing = null;
+    /** The collection's search and filter, and a ticket so an answer for an older ask is dropped. @type {'open' | 'done' | null} */
+    this.keptFilter = null;
+    this.keptWords = '';
+    this.keptTicket = 0;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    this.keptTimer = undefined;
+    /** The add box's words and the threads it found. @type {Thread[]} */
+    this.addFound = [];
+    this.addWords = '';
+    this.addTicket = 0;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    this.addTimer = undefined;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    this.roomTimer = undefined;
+    /** The L picker while it is open. @type {Keeping | null} */
+    this.keep = null;
+    this.keepTicket = 0;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    this.keepTimer = undefined;
+    /** The rule being typed, null while it isn't. @type {string | null} */
+    this.ruleDraft = null;
+    /** The collection editor's draft. @type {CollectionDraft | null} */
+    this.collectionDraft = null;
+    /** The thread the ⋯ menu is for, and the thread being dragged. @type {number | null} */
+    this.keptMenu = null;
+    /** @type {number | null} */
+    this.dragging = null;
+    /** The kept thread whose row has the focus, given back after a redraw; null once the focus is anywhere else. @type {number | null} */
+    this.keptFocus = null;
     /** The person whose page a thread was opened from. @type {number | null} */
     this.fromPerson = null;
     /** Everyone he deals with, as the people call answered. @type {Someone[]} */
@@ -1173,6 +1267,15 @@ class Threads {
     document.addEventListener('input', (event) => this.onInput(event));
     document.addEventListener('change', (event) => this.onChange(event));
     document.addEventListener('submit', (event) => this.onSubmit(event));
+    document.addEventListener('focusin', (event) => {
+      const target = event.target;
+      this.keptFocus = target instanceof HTMLElement && target.classList.contains('t-row-kept') ? Number(target.dataset.kept) : null;
+    });
+    // A click anywhere lets the row go; a click on a row gives it the focus again, and the focusin above says so.
+    document.addEventListener('mousedown', () => {
+      this.keptFocus = null;
+    });
+    for (const type of ['dragstart', 'dragover', 'drop', 'dragend']) document.addEventListener(type, (event) => this.onDrag(/** @type {DragEvent} */ (event)));
     // His notes on a person, and their name, are saved when he leaves the box for anywhere outside its own form.
     document.addEventListener('focusout', (event) => {
       const box = event.target;
@@ -1196,6 +1299,9 @@ class Threads {
       this.sharing = null;
       this.discussionShown = null;
       this.meetingDraft = null;
+      this.keep = null;
+      this.keptMenu = null;
+      this.collectionDraft = null;
       this.dialog.replaceChildren();
       this.main.focus({ preventScroll: true });
     });
@@ -1234,7 +1340,8 @@ class Threads {
       this.myPhoto = who.photo ?? null;
       if (this.caller === 'member' && isHis(route)) this.route = { view: 'today' };
       const person = this.caller === 'owner' && route.view === 'person' ? this.loadPerson(route.number) : Promise.resolve();
-      await Promise.all([this.loadAll(), thread, person]);
+      const collection = this.caller === 'owner' && this.route.view === 'collection' ? this.loadCollection(this.route.number) : Promise.resolve();
+      await Promise.all([this.loadAll(), thread, person, collection]);
     } catch (error) {
       if (error instanceof SignedOut && inviting) location.replace(signInAddress(location.pathname));
       else if (error instanceof SignedOut) {
@@ -1247,6 +1354,15 @@ class Threads {
     if (inviting || (this.caller === 'member' && isHis(route))) history.replaceState(null, '', this.route.view === 'thread' ? location.pathname : ME);
     this.applyCaller();
     rememberSignedIn();
+    if (!this.member) {
+      void this.loadCollections();
+      if (this.route.view === 'collections') void this.loadRoom();
+      if (this.route.view === 'collection') {
+        this.from = 'collection';
+        this.fromCollection = this.route.number;
+      }
+      if (this.route.view === 'thread') this.adoptWalk(history.state);
+    }
     if (this.route.view === 'entry') void this.openEntry(this.route.key);
     if (this.member && this.missing !== null && (await this.tryPublic(route))) return;
     this.pageFull = this.route.view === 'thread' && this.fullFor(this.shown?.thread.main);
@@ -1511,7 +1627,8 @@ class Threads {
     }
     if (error instanceof SignedOut) {
       const here = location.pathname;
-      const link = el('a', { href: signInAddress(here === ME || here === MEETINGS || here === ASKS || here === THREADS || isThreadAddress(here) || isPeopleAddress(here) || isJournalAddress(here) ? here : ME) }, ['Sign in again']);
+      const room = here === ME || here === MEETINGS || here === ASKS || here === THREADS || here === COLLECTIONS_PATH || COLLECTION_PATH.test(here);
+      const link = el('a', { href: signInAddress(room || isThreadAddress(here) || isPeopleAddress(here) || isJournalAddress(here) ? here : ME) }, ['Sign in again']);
       this.banner.replaceChildren(icon('lock'), 'Your sign-in ended. Nothing you did was lost. ', link);
     } else {
       this.banner.replaceChildren(`${what} Check your connection and try again.`);
@@ -1547,6 +1664,21 @@ class Threads {
     if (route.view === 'today') this.from = 'today';
     if (route.view === 'meetings') this.from = 'meetings';
     if (route.view === 'asks') this.from = 'asks';
+    if (route.view === 'collection') {
+      // A thread opened from here, by its row or by ⌘K, walks this collection.
+      this.from = 'collection';
+      this.fromCollection = route.number;
+      if (this.collection?.collection.number !== route.number) {
+        this.collection = null;
+        this.keptWords = '';
+        this.keptFilter = null;
+      }
+      this.collectionMissing = null;
+      this.addWords = '';
+      this.addFound = [];
+      this.ruleDraft = null;
+    }
+    if (route.view === 'thread' && !push) this.adoptWalk(history.state);
     this.answeredAll = false;
     this.answeredQuery = '';
     this.route = route;
@@ -1555,7 +1687,10 @@ class Threads {
     this.personAddress = '';
     this.personProblem = null;
     // An entry made inside the app opens its thread in the thread view, a reload included (site/app/page-view.js).
-    if (push) history.pushState(/** @type {PageState} */ ({ page: 'thread' }), '', pathOf(route, this.threads, this.people));
+    // A thread opened from a collection says so in its entry, so J and K walk the collection, a reload included.
+    const walk = route.view === 'thread' && this.from === 'collection' && this.fromCollection !== null ? { collection: this.fromCollection } : {};
+    if (push) history.pushState(/** @type {PageState} */ ({ page: 'thread', ...walk }), '', pathOf(route, this.threads, this.people));
+    if (route.view === 'thread' && push && this.fromCollection !== null && this.from === 'collection') void this.loadWalk(this.fromCollection);
     if (route.view === 'person') {
       this.shown = null;
       this.missing = null;
@@ -1577,6 +1712,8 @@ class Threads {
     }
     if (route.view === 'people') void this.loadPeople();
     if (route.view === 'asks') void this.loadAsks();
+    if (route.view === 'collections') void this.loadRoom();
+    if (route.view === 'collection') void this.loadCollection(route.number);
     if (route.view === 'journal' || route.view === 'storylines' || route.view === 'storyline') void this.loadJournal();
     if (route.view === 'entry') {
       this.shown = null;
@@ -1666,7 +1803,8 @@ class Threads {
   showThread() {
     const url = new URL(location.href);
     url.searchParams.delete('full');
-    history.pushState(/** @type {PageState} */ ({ page: 'thread', back: true }), '', `${url.pathname}${url.search}${url.hash}`);
+    const walk = readPageState(history.state)?.collection;
+    history.pushState(/** @type {PageState} */ ({ page: 'thread', back: true, ...(walk === undefined ? {} : { collection: walk }) }), '', `${url.pathname}${url.search}${url.hash}`);
     this.pageFull = false;
     this.redrawPage();
   }
@@ -1681,7 +1819,8 @@ class Threads {
       history.back();
       return;
     }
-    history.replaceState(/** @type {PageState} */ ({ page: 'full' }), '', location.href);
+    const walk = readPageState(history.state)?.collection;
+    history.replaceState(/** @type {PageState} */ ({ page: 'full', ...(walk === undefined ? {} : { collection: walk }) }), '', location.href);
     this.pageFull = true;
     this.redrawPage();
   }
@@ -1720,6 +1859,8 @@ class Threads {
     if (this.route.view === 'entry' || this.route.view === 'storylines') void this.go({ view: 'journal' });
     else if (this.route.view === 'storyline') void this.go({ view: 'storylines' });
     else if (this.route.view === 'person') void this.go({ view: 'people' });
+    else if (this.route.view === 'collection') void this.go({ view: 'collections' });
+    else if (this.from === 'collection' && this.fromCollection !== null) void this.go({ view: 'collection', number: this.fromCollection });
     else if (this.from === 'person' && this.fromPerson !== null) void this.go({ view: 'person', number: this.fromPerson });
     else if (this.from === 'meetings') void this.go({ view: 'meetings' });
     else if (this.from === 'asks') void this.go({ view: 'asks' });
@@ -1780,6 +1921,7 @@ class Threads {
 
   /** The threads J and K walk: an invited person's own, Today's, the meetings', or the list's. */
   walk() {
+    if (this.from === 'collection' && !this.member) return this.walking !== null && this.walking.number === this.fromCollection ? this.walking.threads : [];
     if (this.from === 'asks' && !this.member) return this.asks.map((ask) => ask.number);
     if (this.from === 'meetings') {
       const { coming, past } = this.meetings();
@@ -1798,7 +1940,7 @@ class Threads {
   /** The thread a key acts on: the open one, or the selected row. */
   target() {
     if (this.route.view === 'thread') return this.shown?.thread ?? null;
-    if (this.inJournal()) return null;
+    if (this.inJournal() || this.route.view === 'collections' || this.route.view === 'collection') return null;
     if (this.route.view === 'people' || this.route.view === 'person' || this.route.view === 'meetings' || this.route.view === 'asks') return this.route.view === 'meetings' && this.sel !== null ? (this.threads.get(this.sel) ?? null) : null;
     // A folded row is several people's answers, so the moves have nothing to act on; Enter opens the ask.
     if (this.route.view === 'today' && this.sel !== null && this.folded().some((entry) => entry.kind === 'fold' && entry.number === this.sel)) return null;
@@ -1807,7 +1949,7 @@ class Threads {
 
   /** @param {number} by */
   step(by) {
-    if (this.route.view === 'people' || this.route.view === 'person' || this.route.view === 'asks' || this.inJournal()) return;
+    if (this.route.view === 'people' || this.route.view === 'person' || this.route.view === 'asks' || this.route.view === 'collections' || this.route.view === 'collection' || this.inJournal()) return;
     if (this.route.view === 'meetings') this.from = 'meetings';
     const list = this.walk();
     if (list.length === 0) return;
@@ -1833,6 +1975,7 @@ class Threads {
     // A box being typed in keeps its focus and its cursor across a redraw (a page saying where its words moved).
     const typing = document.activeElement;
     const kept = typing instanceof HTMLTextAreaElement && typing.id !== '' && this.main.contains(typing) ? { id: typing.id, from: typing.selectionStart, to: typing.selectionEnd } : null;
+
     this.renderNav();
     this.renderTabbar();
     if (this.route.view === 'thread') {
@@ -1861,6 +2004,14 @@ class Threads {
     } else if (this.route.view === 'asks') {
       this.main.replaceChildren(this.asksView());
       document.title = 'Asks · whysosuresh.com';
+    } else if (this.route.view === 'collections') {
+      this.main.replaceChildren(this.collectionsView());
+      document.title = 'Collections · whysosuresh.com';
+    } else if (this.route.view === 'collection') {
+      this.main.replaceChildren(this.collectionView());
+      const shown = this.collection?.collection;
+      document.title = shown ? `${shown.name} · Collections` : 'Collections · whysosuresh.com';
+      if (shown && shown.number === this.route.number && location.pathname !== collectionPath(shown)) history.replaceState(history.state, '', collectionPath(shown));
     } else if (this.route.view === 'journal') {
       this.main.replaceChildren(this.journalView());
       document.title = 'Journal · whysosuresh.com';
@@ -1898,6 +2049,8 @@ class Threads {
       again.focus({ preventScroll: true });
       again.setSelectionRange(kept.from, kept.to);
     }
+    // So does a kept thread's row, which ⌥↑ and ⌥↓ move while it has the focus, whichever redraw took it away.
+    if (this.keptFocus !== null && this.route.view === 'collection' && (document.activeElement === null || document.activeElement === document.body)) this.focusKept(this.keptFocus);
     const selected = this.main.querySelector('.t-row[aria-selected="true"]');
     if (selected && this.route.view !== 'thread') selected.scrollIntoView({ block: 'nearest' });
   }
@@ -1942,6 +2095,18 @@ class Threads {
     const open = this.asks.filter((ask) => ask.state !== 'closed').length;
     const asksItem = el('a', { class: 't-nav-item', href: ASKS, 'data-go': 'asks' }, [icon('ask'), 'Asks', el('span', { class: 't-nav-count' }, [String(open)])]);
     if (view === 'asks') asksItem.setAttribute('aria-current', 'page');
+    const collectionsItem = el('a', { class: 't-nav-item', href: COLLECTIONS_PATH, 'data-go': 'collections' }, [icon('stack'), 'Collections', el('span', { class: 't-nav-count' }, [String(this.collectionsCount)])]);
+    if (view === 'collections') collectionsItem.setAttribute('aria-current', 'page');
+    // Only the pinned ones sit under it; every other is a search away in the room, so the menu stays short at hundreds.
+    const pinned = this.pins.map((one) => {
+      const item = el('a', { class: 't-nav-item t-nav-sub', href: collectionPath(one), 'data-collection': String(one.number) }, [
+        el('span', { class: 't-nav-pad' }),
+        el('span', { class: 't-nav-text' }, [one.name]),
+        el('span', { class: 't-nav-count' }, [String(one.threads)]),
+      ]);
+      if (view === 'collection' && this.route.view === 'collection' && this.route.number === one.number) item.setAttribute('aria-current', 'page');
+      return item;
+    });
     const journalItem = el('a', { class: 't-nav-item', href: JOURNAL_PATH, 'data-go': 'journal' }, [icon('book'), 'Journal']);
     if (this.inJournal()) journalItem.setAttribute('aria-current', 'page');
     if (view === 'today') todayItem.setAttribute('aria-current', 'page');
@@ -1956,26 +2121,27 @@ class Threads {
       return item;
     });
     // A space is a filter on the threads, so the five sit under Threads rather than beside the rooms.
-    this.nav.replaceChildren(todayItem, allItem, ...spaces, peopleItem, meetingsItem, asksItem, journalItem);
+    this.nav.replaceChildren(todayItem, allItem, ...spaces, collectionsItem, ...pinned, peopleItem, meetingsItem, asksItem, journalItem);
   }
 
   renderTabbar() {
-    const view = this.route.view === 'person' ? 'people' : this.inJournal() ? 'journal' : this.route.view;
+    const view = this.route.view === 'person' ? 'people' : this.route.view === 'collection' ? 'collections' : this.inJournal() ? 'journal' : this.route.view;
     for (const button of this.tabbar.querySelectorAll('[data-go], [data-act="more"]')) {
       if (!(button instanceof HTMLElement)) continue;
       // People, Meetings, Asks and Journal sit under More on his bar, so More is where he is when he is in any of them.
-      const current = button.dataset.act === 'more' ? view === 'people' || view === 'meetings' || view === 'asks' || view === 'journal' : button.dataset.go === view;
+      const current = button.dataset.act === 'more' ? view === 'people' || view === 'meetings' || view === 'asks' || view === 'journal' || view === 'collections' : button.dataset.go === view;
       if (current) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     }
   }
 
   /**
-   * The rooms that don't fit on his phone's bar, in a sheet: People, Meetings, Asks and Journal; and his photo, whose
+   * The rooms that don't fit on his phone's bar, in a sheet: Collections, People, Meetings, Asks and Journal; and his photo, whose
    * sheet the sidebar's foot opens where there is a sidebar.
    */
   openMore() {
     const picks = [
+      el('a', { class: 't-pick', href: COLLECTIONS_PATH, 'data-go': 'collections' }, [icon('stack'), 'Collections']),
       el('a', { class: 't-pick', href: PEOPLE, 'data-go': 'people' }, [icon('person'), 'People']),
       el('a', { class: 't-pick', href: MEETINGS, 'data-go': 'meetings' }, [icon('cal'), 'Meetings']),
       el('a', { class: 't-pick', href: ASKS, 'data-go': 'asks' }, [icon('ask'), 'Asks']),
@@ -3077,7 +3243,7 @@ class Threads {
     const pager = el('span', { class: 't-pager' }, [
       el('button', { type: 'button', 'data-act': 'prev', 'aria-label': 'Previous thread (K)', ...(at <= 0 ? { disabled: '' } : {}) }, [icon('up')]),
       el('button', { type: 'button', 'data-act': 'next', 'aria-label': 'Next thread (J)', ...(at < 0 || at >= list.length - 1 ? { disabled: '' } : {}) }, [icon('down')]),
-      el('button', { type: 'button', 'data-act': 'back', 'aria-label': 'Back to the list (Esc)' }, [icon('x')]),
+      el('button', { type: 'button', 'data-act': 'back', 'aria-label': this.from === 'collection' ? 'Back to the collection (Esc)' : 'Back to the list (Esc)' }, [icon('x')]),
     ]);
     const crumbs = el('div', { class: 't-crumbs' }, [
       thread.space === null || this.member
@@ -3119,6 +3285,7 @@ class Threads {
     const paged = thread.main === 'page' && this.shown.page !== null;
     const beside = paged && !this.columnless() && (places.words.length > 0 || this.wordsDraft !== null);
     const doc = el('article', { class: 't-doc' }, [
+      ...(this.member ? [] : this.walkBar(thread)),
       crumbs,
       el('h1', { class: 't-title' }, [el('span', { class: 't-tn' }, [`#${thread.number}`]), ' ', titleOf(thread)]),
       // The byline's last words and its time sit in one box, so the line's gaps never part a link from its comma.
@@ -3594,6 +3761,7 @@ class Threads {
     if (status === 'done' || status === 'dropped') out.push(button('reopen', 'Reopen', 'U', false));
     if (canReply(thread)) out.push(el('button', { type: 'button', class: 't-btn', 'data-act': 'reply' }, [icon('reply'), 'Reply ', kbd('R')]));
     out.push(el('button', { type: 'button', class: 't-btn', 'data-act': 'share' }, [icon('people'), 'Share ', kbd('S')]));
+    out.push(el('button', { type: 'button', class: 't-btn', 'data-act': 'keep' }, [icon('stack'), 'Keep ', kbd('L')]));
     out.push(el('span', { class: 't-grow' }));
     out.push(el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'edit' }, [icon('pen'), 'Edit ', kbd('W')]));
     return el('div', { class: 't-moves' }, out);
@@ -3962,6 +4130,10 @@ class Threads {
       }
       case 'invited':
         [name, words] = ['people', ['invited ', word(data.name ?? 'someone')]];
+        break;
+      case 'kept':
+      case 'unkept':
+        [name, words] = ['stack', [keptHistory(event.type, data)]];
         break;
       case 'removed':
         [name, words] = ['people', ['removed ', word(data.name ?? 'someone')]];
@@ -4703,6 +4875,12 @@ class Threads {
         el('span', { class: 't-dval' }, [STATUS_NAMES[thread.status], ...(thread.status === 'dropped' && thread.dropReason ? [el('span', { class: 't-chip' }, [thread.dropReason])] : [])]),
       ]),
       row('Space', [el('span', { class: 't-dval' }, [select])]),
+      row('Collections', [
+        this.keptIn().length === 0
+          ? el('span', { class: 't-dval t-dval-soft' }, ['Not kept anywhere yet'])
+          : el('span', { class: 't-dpeople' }, this.keptIn().map((one) => el('a', { href: collectionPath(one), 'data-collection': String(one.number) }, [one.name]))),
+        el('span', {}, [el('button', { type: 'button', class: 't-text-btn', 'data-act': 'keep' }, ['Keep… L'])]),
+      ]),
       row('Who can see it', [this.level(thread), el('span', {}, [el('button', { type: 'button', class: 't-text-btn', 'data-act': 'share' }, ['Share…'])])]),
       row('Started', [el('span', { class: 't-dval t-dval-soft' }, [`${when(thread.createdAt)}, `, ...this.fromNodes(thread)])]),
       row('Last activity', [el('span', { class: 't-dval t-dval-soft' }, [`${ago(thread.activityAt)} ago`])]),
@@ -5073,6 +5251,7 @@ class Threads {
       : [
           { label: 'Go to Today', hay: 'today', key: '', run: () => void this.go({ view: 'today' }) },
           { label: 'Go to Threads', hay: 'threads all list', key: '', run: () => void this.go({ view: 'list', tab: this.tab, only: this.only, space: null }) },
+          { label: 'Go to Collections', hay: 'collections kept keep sets groups saved', key: '', run: () => void this.go({ view: 'collections' }) },
           { label: 'Go to people', hay: 'people person everyone who', key: '', run: () => void this.go({ view: 'people' }) },
           { label: 'Go to Meetings', hay: 'meetings calendar when', key: '', run: () => void this.go({ view: 'meetings' }) },
           { label: 'Go to Asks', hay: 'asks forms questions links answers', key: '', run: () => void this.go({ view: 'asks' }) },
@@ -5099,7 +5278,7 @@ class Threads {
     this.findTimer = setTimeout(() => {
       search(trimmed).then(
         (found) => {
-          if (ticket === this.findTicket && this.overlay === 'find') this.showFound(trimmed, found.threads, 'Threads', found.people);
+          if (ticket === this.findTicket && this.overlay === 'find') this.showFound(trimmed, found.threads, 'Threads', found.people, found.collections);
         },
         (error) => {
           if (ticket === this.findTicket) this.fail(error, "The search didn't run.");
@@ -5113,8 +5292,9 @@ class Threads {
    * @param {Thread[]} threads
    * @param {string} group
    * @param {Someone[]} people
+   * @param {Collection[]} [collections]
    */
-  showFound(words, threads, group, people) {
+  showFound(words, threads, group, people, collections = []) {
     const list = this.dialog.querySelector('#find-list');
     if (!(list instanceof HTMLElement)) return;
     const query = words.toLowerCase().replace(/^#/, '');
@@ -5136,6 +5316,15 @@ class Threads {
         photo: someone.photo ?? null,
         run: () => void this.go({ view: 'person', number: someone.number }),
       })),
+      ...collections.map((collection) => ({
+        label: collection.name,
+        sub: collectionLine(collection),
+        side: ago(collection.changedAt),
+        number: null,
+        person: null,
+        collection: collection.number,
+        run: () => void this.go({ view: 'collection', number: collection.number }),
+      })),
       ...threads.map((thread) => ({ label: titleOf(thread), sub: snippet(thread), side: ago(thread.activityAt), number: thread.number, person: null, run: () => this.openThread(thread.number) })),
       ...this.findActions(words.trim()),
     ];
@@ -5150,19 +5339,21 @@ class Threads {
     const nodes = [];
     let last = '';
     this.found.forEach((item, i) => {
-      const heading = item.person !== null ? 'People' : item.number === null ? 'Do' : group;
+      const heading = item.person !== null ? 'People' : typeof item.collection === 'number' ? 'Collections' : item.number === null ? 'Do' : group;
       if (heading !== last) nodes.push(el('div', { class: 't-find-group', role: 'presentation' }, [(last = heading)]));
       nodes.push(
         el('button', { type: 'button', class: 't-find-item', role: 'option', id: `find-${i}`, 'data-act': 'found', 'data-index': String(i), 'aria-selected': String(i === 0) }, [
           item.person !== null
             ? el('span', { class: 't-num' }, [item.photo ? photoMark(item.photo) : el('span', { class: 't-av', 'aria-hidden': 'true' }, [initials(item.label)])])
-            : el('span', { class: 't-num' }, item.number === null ? [icon(item.label.startsWith('New') ? 'plus' : item.label.startsWith('Show') ? 'keys' : 'move')] : [`#${item.number}`]),
+            : typeof item.collection === 'number'
+              ? el('span', { class: 't-num' }, [icon('stack')])
+              : el('span', { class: 't-num' }, item.number === null ? [icon(item.label.startsWith('New') ? 'plus' : item.label.startsWith('Show') ? 'keys' : 'move')] : [`#${item.number}`]),
           el('span', { class: 't-find-text' }, [el('span', {}, marked(item.label)), ...(item.sub ? [el('small', {}, marked(item.sub))] : [])]),
           el('span', { class: 't-find-side' }, item.side.length === 1 ? [kbd(item.side)] : [item.side]),
         ]),
       );
     });
-    if (threads.length === 0 && people.length === 0 && words.trim() !== '') {
+    if (threads.length === 0 && people.length === 0 && collections.length === 0 && words.trim() !== '') {
       const none = this.member ? `None of your threads matches "${words.trim()}".` : `No thread matches "${words.trim()}". Press ↵ to start one with this title.`;
       nodes.unshift(el('div', { class: 't-empty' }, [none]));
     }
@@ -5184,6 +5375,869 @@ class Threads {
     const item = this.found[index];
     this.closeOverlay();
     item?.run();
+  }
+
+  /* ---------- Collections: the room, a collection, the L picker, and their saves ---------- */
+
+  /** The pinned collections and how many there are, for the rail and the L picker, read again after every change. */
+  async loadCollections() {
+    try {
+      const listed = await listCollections('', null);
+      this.pins = listed.pinned;
+      this.recentCollections = [...listed.pinned, ...listed.collections].sort((a, b) => b.changedAt.localeCompare(a.changedAt) || b.number - a.number);
+      this.collectionsCount = listed.pinned.length + listed.count;
+    } catch (error) {
+      this.fail(error, "The collections didn't load.");
+      return;
+    }
+    if (this.loaded && this.overlay === null) {
+      this.keepScroll = true;
+      this.render();
+    }
+  }
+
+  /**
+   * The room's list, searched by the words typed: a fresh first page, or the next page after the last row shown. Only
+   * the list is drawn again, so the search box keeps its focus and its cursor.
+   * @param {boolean} more
+   */
+  async loadRoom(more = false) {
+    const room = this.room;
+    const ticket = ++room.ticket;
+    try {
+      const listed = await listCollections(room.words, more ? room.next : null);
+      if (ticket !== room.ticket) return;
+      room.pinned = listed.pinned;
+      room.rows = more ? [...room.rows, ...listed.collections] : listed.collections;
+      room.next = listed.next;
+      room.count = listed.count;
+      room.loaded = true;
+    } catch (error) {
+      if (ticket === room.ticket) this.fail(error, "The collections didn't load.");
+      return;
+    }
+    this.drawRoomList();
+  }
+
+  drawRoomList() {
+    if (this.route.view !== 'collections') return;
+    const list = this.main.querySelector('[data-collections-list]');
+    if (list instanceof HTMLElement) list.replaceChildren(...this.roomList());
+    else this.render();
+  }
+
+  /** The Collections room: a search, the pinned ones, then the rest, the most recently changed first, 25 at a time. */
+  collectionsView() {
+    const find = el('input', {
+      class: 't-field',
+      id: 'collections-find',
+      type: 'search',
+      placeholder: 'Find a collection',
+      'aria-label': 'Find a collection',
+      autocomplete: 'off',
+      value: this.room.words,
+    });
+    return el('div', { class: 't-wrap' }, [
+      el('div', { class: 't-head' }, [
+        el('div', {}, [el('h1', {}, ['Collections']), el('p', {}, ['Threads worth keeping, in sets. A thread can be in more than one.'])]),
+        el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'collection-new' }, [icon('plus'), 'New']),
+      ]),
+      el('label', { class: 't-search' }, [icon('search'), find, kbd('/')]),
+      el('div', { class: 't-collections', 'data-collections-list': '' }, this.roomList()),
+      el('p', { class: 't-note' }, ['Pin the few you use most: only those sit in the menu. ', kbd('⌘K'), ' finds collections too.']),
+    ]);
+  }
+
+  /** The room's sections as they stand: the pinned ones while nothing is searched, then the rest or the matches. */
+  roomList() {
+    const room = this.room;
+    if (!room.loaded) return [el('div', { class: 't-empty' }, ['Loading…'])];
+    const words = room.words.trim();
+    /** @type {HTMLElement[]} */
+    const out = [];
+    if (words === '' && room.pinned.length > 0) {
+      out.push(
+        el('section', { class: 't-section' }, [
+          el('div', { class: 't-section-head' }, [el('h2', {}, ['Pinned to the menu']), el('span', { class: 't-n' }, [String(room.pinned.length)])]),
+          el('div', { class: 't-list' }, room.pinned.map((one) => this.collectionRow(one))),
+        ]),
+      );
+    }
+    const head = words !== '' ? `Matching “${words}”` : room.pinned.length > 0 ? 'Everything else, recently changed first' : 'Recently changed first';
+    const more = moreLabel(room.rows.length, room.count, COLLECTIONS_PAGE);
+    /** @type {HTMLElement[]} */
+    const rows =
+      room.rows.length > 0
+        ? room.rows.map((one) => this.collectionRow(one))
+        : words !== ''
+          ? [el('div', { class: 't-empty' }, [`No collection called “${words}”. `, el('button', { type: 'button', class: 't-text-btn', 'data-act': 'collection-new-named' }, ['Make it'])])]
+          : [el('div', { class: 't-empty' }, [room.pinned.length > 0 ? 'Every collection is pinned.' : 'No collections yet. Press L on any thread to keep it in one, or make one here.'])];
+    out.push(
+      el('section', { class: 't-section' }, [
+        el('div', { class: 't-section-head' }, [el('h2', {}, [head]), el('span', { class: 't-n' }, [String(room.count)])]),
+        el('div', { class: 't-list' }, [...rows, ...(more ? [el('button', { type: 'button', class: 't-more', 'data-act': 'collections-more' }, [more])] : [])]),
+      ]),
+    );
+    return out;
+  }
+
+  /** One collection in the room: its name, how many threads and its rule, when it last changed, and its pin. @param {Collection} collection */
+  collectionRow(collection) {
+    return el('div', { class: 't-row t-row-collection' }, [
+      el('span', { class: 't-num' }, [icon('stack')]),
+      el('a', { class: 't-row-main', href: collectionPath(collection), 'data-collection': String(collection.number) }, [
+        el('span', { class: 't-row-title' }, [collection.name]),
+        el('span', { class: 't-row-sub' }, [collectionLine(collection)]),
+      ]),
+      el('span', { class: 't-row-meta' }, [
+        el('span', {}, [ago(collection.changedAt)]),
+        el(
+          'button',
+          {
+            type: 'button',
+            class: 't-pin',
+            'data-act': 'collection-pin',
+            'data-number': String(collection.number),
+            'aria-pressed': String(collection.pinned),
+            'aria-label': collection.pinned ? `Unpin ${collection.name} from the menu` : `Pin ${collection.name} to the menu`,
+            title: collection.pinned ? 'Unpin from the menu' : 'Pin to the menu',
+          },
+          [icon('pin')],
+        ),
+      ]),
+    ]);
+  }
+
+  /**
+   * A collection with its threads as paged so far, searched and filtered by what is asked now: a fresh first page, or
+   * the next after the last place shown; `keep` asks again for at least as many rows as show now, as after a change.
+   * @param {number} number
+   * @param {{ more?: boolean, keep?: boolean }} [how]
+   */
+  async loadCollection(number, how = {}) {
+    const ticket = ++this.keptTicket;
+    const asked = { words: this.keptWords, status: this.keptFilter };
+    const want = how.keep ? Math.max(this.collection?.threads.length ?? 0, KEPT_PAGE) : 0;
+    try {
+      let shown = await showCollection(number, { ...asked, after: how.more ? (this.collection?.next ?? null) : null });
+      if (how.more && this.collection) shown = { ...shown, threads: [...this.collection.threads, ...shown.threads] };
+      while (shown.threads.length < want && shown.next !== null) {
+        const page = await showCollection(number, { ...asked, after: shown.next });
+        shown = { ...page, threads: [...shown.threads, ...page.threads] };
+      }
+      if (ticket !== this.keptTicket) return;
+      this.collection = shown;
+      this.collectionMissing = null;
+    } catch (error) {
+      if (ticket !== this.keptTicket) return;
+      if (error instanceof Missing) {
+        this.collection = null;
+        this.collectionMissing = number;
+      } else {
+        this.fail(error, "The collection didn't load.");
+        return;
+      }
+    }
+    if (this.route.view === 'collection' && this.route.number === number) this.drawKept();
+  }
+
+  /**
+   * Draws a collection again: while its search or add box is being typed in, only its list, the search's line and the
+   * side panel, so the box keeps its focus and its cursor; otherwise the whole page.
+   */
+  drawKept() {
+    const body = this.main.querySelector('[data-kept-body]');
+    const head = this.main.querySelector('[data-kept-head]');
+    const side = this.main.querySelector('.t-thread > .t-rail');
+    const typing = document.activeElement instanceof HTMLInputElement && (document.activeElement.id === 'kept-find' || document.activeElement.id === 'kept-add');
+    if (typing && body instanceof HTMLElement && head instanceof HTMLElement && side instanceof HTMLElement && this.collection) {
+      body.replaceChildren(...this.keptBody(this.collection));
+      head.replaceChildren(...this.keptHead(this.collection));
+      side.replaceChildren(this.collectionDetails(this.collection.collection));
+      return;
+    }
+    this.keepScroll = true;
+    this.render();
+  }
+
+  /** Whether the collection shows every thread in his order, so its rows can be moved. */
+  keptInOrder() {
+    return this.keptWords.trim() === '' && this.keptFilter === null;
+  }
+
+  /** A collection's page: its threads in his order, an add box, a search past 20, and its side panel. */
+  collectionView() {
+    const shown = this.collection;
+    if (shown === null || (this.route.view === 'collection' && shown.collection.number !== this.route.number)) {
+      return el('div', { class: 't-wrap' }, [
+        el('div', { class: 't-missing' }, [
+          el('h1', {}, [this.collectionMissing !== null ? 'Nothing here' : 'Loading…']),
+          el('p', {}, [this.collectionMissing !== null ? `There's no collection #${this.collectionMissing}.` : '']),
+          el('a', { href: COLLECTIONS_PATH, 'data-go': 'collections' }, ['Back to Collections']),
+        ]),
+      ]);
+    }
+    const collection = shown.collection;
+    const add = el('input', { class: 't-field', id: 'kept-add', placeholder: 'Add a thread: its number, or words from it', autocomplete: 'off', 'aria-label': 'Add a thread', value: this.addWords });
+    const doc = el('article', { class: 't-doc' }, [
+      el('div', { class: 't-crumbs' }, [el('a', { href: COLLECTIONS_PATH, 'data-go': 'collections' }, ['Collections']), el('span', {}, ['/']), el('span', {}, [`#${collection.number}`])]),
+      el('h1', { class: 't-title' }, [collection.name]),
+      ...(collection.description ? [el('p', { class: 't-byline' }, [collection.description])] : []),
+      el('div', { class: 't-moves' }, [
+        el('button', { type: 'button', class: 't-btn', 'data-act': 'kept-add-focus' }, [icon('plus'), 'Add a thread ', kbd('L')]),
+        el('span', { class: 't-grow' }),
+        el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'collection-edit' }, [icon('pen'), 'Edit ', kbd('W')]),
+      ]),
+      el('div', { class: 't-picker' }, [add, el('div', { class: 't-picker-list', role: 'listbox', 'aria-label': 'Threads to add', 'data-kept-add-list': '' }, this.addPicks())]),
+      el('div', { class: 't-kept-head', 'data-kept-head': '' }, this.keptHead(shown)),
+      el('div', { class: 't-section', 'data-kept-body': '' }, this.keptBody(shown)),
+    ]);
+    return el('div', { class: 't-thread' }, [doc, el('div', { class: 't-rail' }, [this.collectionDetails(collection)])]);
+  }
+
+  /** The search and the Open / Done filter, once a collection holds more than 20 threads, or while either is in use. @param {CollectionShown} shown */
+  keptHead(shown) {
+    const searching = !this.keptInOrder();
+    if (shown.collection.threads <= KEPT_SEARCH_FROM && !searching) return [];
+    const existing = this.main.querySelector('#kept-find');
+    const find =
+      existing instanceof HTMLInputElement
+        ? existing
+        : el('input', { class: 't-field', id: 'kept-find', type: 'search', placeholder: `Find in ${shown.collection.name}`, 'aria-label': 'Find in this collection', autocomplete: 'off', value: this.keptWords });
+    /** @param {'all' | 'open' | 'done'} which @param {string} label */
+    const chip = (which, label) =>
+      el('button', { type: 'button', 'data-act': 'kept-filter', 'data-filter': which, 'aria-pressed': String((this.keptFilter ?? 'all') === which) }, [label]);
+    return [el('label', { class: 't-search' }, [icon('search'), find, kbd('/')]), el('span', { class: 't-seg' }, [chip('all', 'All'), chip('open', 'Open'), chip('done', 'Done')])];
+  }
+
+  /** The rows, Show more, and the line under them. @param {CollectionShown} shown */
+  keptBody(shown) {
+    const inOrder = this.keptInOrder();
+    const total = shown.collection.threads;
+    const more = moreLabel(shown.threads.length, shown.count, KEPT_PAGE);
+    const rows =
+      total === 0
+        ? [el('div', { class: 't-empty' }, ['Nothing kept here yet. Press ', kbd('L'), ' on any thread, or add one above.'])]
+        : shown.threads.length === 0
+          ? [el('div', { class: 't-empty' }, [`Nothing in ${shown.collection.name} matches.`])]
+          : shown.threads.map((thread) => this.keptRow(thread, inOrder));
+    return [
+      el('div', { class: 't-list', 'data-kept-list': '' }, [...rows, ...(more ? [el('button', { type: 'button', class: 't-more', 'data-act': 'kept-more' }, [more])] : [])]),
+      el('p', { class: 't-note' }, [
+        ...(inOrder
+          ? total > 1
+            ? ['Drag to set the order they are read in. ', kbd('⌥'), kbd('↑'), kbd('↓'), ' moves the focused one; ⋯ moves it to the top, the bottom or any place.']
+            : []
+          : [`${shown.count} of ${total} match. The numbers are each thread's place. Clear the search to reorder.`]),
+      ]),
+    ];
+  }
+
+  /**
+   * One thread in a collection: its place, its title, where it stands, and ⋯. In his order it is dragged, and moved
+   * with ⌥↑ and ⌥↓ while it has the focus.
+   * @param {KeptThread} thread
+   * @param {boolean} movable
+   */
+  keptRow(thread, movable) {
+    const meta = el('span', { class: 't-row-meta' }, []);
+    const tag = tagOf(thread, []);
+    if (tag) meta.append(el('span', { class: 't-chip t-chip-status', 'data-status': tag.status }, [tag.words]));
+    meta.append(
+      el('button', { type: 'button', class: 't-icon-button', 'data-act': 'kept-menu', 'data-number': String(thread.number), 'aria-haspopup': 'dialog', 'aria-label': `More for #${thread.number}` }, [icon('more')]),
+    );
+    return el('div', { class: 't-row t-row-kept', tabindex: '0', 'data-kept': String(thread.number), 'data-place': String(thread.place), ...(movable ? { draggable: 'true' } : {}) }, [
+      el('span', { class: 't-num' }, [String(thread.place)]),
+      el('a', { class: 't-row-main', href: threadPath(thread), 'data-thread': String(thread.number), 'data-from-kept': '' }, [
+        el('span', { class: 't-row-title' }, [...rowMark(thread), `#${thread.number} `, titleOf(thread)]),
+        el('span', { class: 't-row-sub' }, [this.rowLine(thread)]),
+      ]),
+      meta,
+    ]);
+  }
+
+  /** The add box's matches: threads the search answered for the words typed, those already here marked. */
+  addPicks() {
+    const here = new Set((this.collection?.threads ?? []).map((thread) => thread.number));
+    return this.addFound.slice(0, PICKS).map((thread, i) =>
+      el('button', { type: 'button', class: 't-picker-item', 'data-act': 'kept-add', 'data-number': String(thread.number), 'aria-selected': String(i === 0) }, [
+        icon(here.has(thread.number) ? 'check' : 'plus'),
+        el('span', {}, [el('span', { class: 't-tn' }, [`#${thread.number}`]), ' ', titleOf(thread)]),
+        el('small', {}, [here.has(thread.number) ? 'already here' : STATUS_NAMES[thread.status]]),
+      ]),
+    );
+  }
+
+  /** Searches for threads to add as the words are typed, after a short pause. @param {string} words */
+  findToAdd(words) {
+    this.addWords = words;
+    clearTimeout(this.addTimer);
+    const ticket = ++this.addTicket;
+    const draw = () => this.main.querySelector('[data-kept-add-list]')?.replaceChildren(...this.addPicks());
+    if (words.trim() === '') {
+      this.addFound = [];
+      draw();
+      return;
+    }
+    this.addTimer = setTimeout(() => {
+      search(words.trim()).then(
+        (found) => {
+          if (ticket !== this.addTicket) return;
+          this.addFound = found.threads;
+          draw();
+        },
+        (error) => {
+          if (ticket === this.addTicket) this.fail(error, "The search didn't run.");
+        },
+      );
+    }, SEARCH_WAIT_MS);
+  }
+
+  /** A collection's side panel: who can see it, the menu, its rule, when it started, and Delete. @param {Collection} collection */
+  collectionDetails(collection) {
+    /** @param {string} label @param {(Node | string)[]} value */
+    const row = (label, value) => el('div', { class: 't-drow' }, [el('span', { class: 't-dlabel' }, [label]), ...value]);
+    const rule =
+      this.ruleDraft !== null
+        ? [
+            el('form', { class: 't-rule-form', 'data-submit': 'rule' }, [
+              el('input', { class: 't-field', id: 'rule-text', value: this.ruleDraft, maxlength: String(MAX_NAME), placeholder: 'Design page:', autocomplete: 'off', 'aria-label': 'Title prefix' }),
+              el('span', { class: 't-dval' }, [
+                el('button', { type: 'submit', class: 't-text-btn' }, ['Save']),
+                el('button', { type: 'button', class: 't-text-btn', 'data-act': 'rule-cancel' }, ['Cancel']),
+              ]),
+            ]),
+          ]
+        : [
+            el('span', { class: 't-dval t-dval-soft' }, [ruleLine(collection.rule)]),
+            el('span', { class: 't-dval' }, [
+              el('button', { type: 'button', class: 't-text-btn', 'data-act': 'rule-edit' }, [collection.rule ? 'Change' : 'Add a rule…']),
+              ...(collection.rule ? [el('button', { type: 'button', class: 't-text-btn', 'data-act': 'rule-stop' }, ['Stop'])] : []),
+            ]),
+          ];
+    return el('aside', { class: 't-details', 'aria-label': 'About this collection' }, [
+      row('Who can see it', [el('span', { class: 't-dval' }, [el('span', { class: 't-level' }, [icon('lock'), 'Only you'])])]),
+      row('In the menu', [
+        el('span', { class: 't-dval' }, [
+          el('button', { type: 'button', class: 't-text-btn', 'data-act': 'collection-pin', 'data-number': String(collection.number) }, [collection.pinned ? 'Pinned. Unpin it' : 'Pin it to the menu']),
+        ]),
+      ]),
+      row('Joins on its own', rule),
+      row('Threads', [el('span', { class: 't-dval t-dval-soft' }, [threadsLine(collection.threads)])]),
+      row('Started', [el('span', { class: 't-dval t-dval-soft' }, [when(collection.createdAt)])]),
+      row('Last change', [el('span', { class: 't-dval t-dval-soft' }, [`${ago(collection.changedAt)} ago`])]),
+      el('div', { class: 't-drow' }, [el('span', {}, [el('button', { type: 'button', class: 't-text-btn', 'data-act': 'collection-delete' }, ['Delete the collection…'])])]),
+    ]);
+  }
+
+  /**
+   * The bar above a thread opened from a collection, while that collection's walk holds it: the collection, where the
+   * thread is in it, and J and K's buttons.
+   * @param {Thread} thread
+   */
+  walkBar(thread) {
+    const walking = this.walking;
+    if (this.from !== 'collection' || walking === null || walking.number !== this.fromCollection) return [];
+    const at = walking.threads.indexOf(thread.number);
+    if (at < 0) return [];
+    return [
+      el('div', { class: 't-walk' }, [
+        icon('stack'),
+        el('a', { href: collectionPath(walking), 'data-collection': String(walking.number) }, [walking.name]),
+        el('span', { class: 't-n' }, [walkLine(at, walking.threads.length)]),
+      ]),
+    ];
+  }
+
+  /**
+   * The collection a thread was opened from, read whole in his order, so J and K walk it; nothing is read again while it
+   * is the one walked.
+   * @param {number} number
+   */
+  async loadWalk(number) {
+    if (this.walking?.number === number) return;
+    try {
+      let shown = await showCollection(number);
+      const threads = [...shown.threads];
+      while (shown.next !== null) {
+        shown = await showCollection(number, { after: shown.next });
+        threads.push(...shown.threads);
+      }
+      for (const thread of threads) if (!this.threads.has(thread.number)) this.remember(thread);
+      this.walking = { number, name: shown.collection.name, threads: threads.map((thread) => thread.number) };
+    } catch {
+      this.walking = null;
+      return;
+    }
+    if (this.route.view === 'thread' && this.from === 'collection' && this.fromCollection === number) {
+      this.keepScroll = true;
+      this.render();
+    }
+  }
+
+  /**
+   * Walks the collection a history entry names, when it names one: J and K go through it, a reload included.
+   * @param {unknown} state
+   */
+  adoptWalk(state) {
+    const collection = readPageState(state)?.collection;
+    if (collection === undefined || this.member) return;
+    this.from = 'collection';
+    this.fromCollection = collection;
+    void this.loadWalk(collection);
+  }
+
+  /** The collections a thread is kept in, as its own read answered them. */
+  keptIn() {
+    return this.shown?.collections ?? [];
+  }
+
+  /**
+   * The L picker: the thread's collections, then the most recently changed; typing searches every collection, ↵ keeps
+   * the thread in the one chosen or takes it out, and a name no collection has makes one.
+   * @param {Thread} thread
+   */
+  openKeep(thread) {
+    if (this.member) return;
+    const kept = this.route.view === 'thread' && this.shown?.thread.number === thread.number ? this.keptIn() : [];
+    this.keep = { number: thread.number, kept: [...kept], found: null, words: '', sel: 0, busy: false };
+    const input = el('input', { id: 'keep-find', class: 't-find-input', placeholder: 'Find a collection, or name a new one', autocomplete: 'off', 'aria-label': 'Collection', 'aria-controls': 'keep-list' });
+    this.openOverlay('keep', `Keep #${thread.number} in a collection`, 'find', [
+      el('div', { class: 't-find-head' }, [icon('stack'), input, kbd('Esc')]),
+      el('div', { class: 't-find-list', id: 'keep-list', role: 'listbox', 'aria-label': 'Collections' }),
+      el('div', { class: 't-find-foot' }, [el('span', {}, [kbd('↑'), ' ', kbd('↓'), ' choose']), el('span', {}, [kbd('↵'), ' keep it there, or take it out']), el('span', {}, ['A new name makes a collection'])]),
+    ]);
+    input.focus();
+    this.drawKeep();
+    // A thread kept anywhere is read whole when it isn't the one shown, so the picker knows where it already is.
+    if (!(this.route.view === 'thread' && this.shown?.thread.number === thread.number)) {
+      show(thread.number).then(
+        (shown) => {
+          if (this.keep?.number !== thread.number) return;
+          this.keep.kept = shown.collections ?? [];
+          this.drawKeep();
+        },
+        (error) => this.fail(error, "The thread didn't load."),
+      );
+    }
+  }
+
+  /** The L picker's choices as they stand. */
+  keepItems() {
+    const keep = this.keep;
+    if (keep === null) return [];
+    const words = keep.words.trim();
+    const list = pickList(keep.kept, this.recentCollections, words === '' ? null : keep.found);
+    const fresh = words !== '' && keep.found !== null && makesNew(words, [...keep.found, ...keep.kept]);
+    return [...list.map((one) => ({ ...one, make: false })), ...(fresh ? [{ number: 0, name: words, kept: false, make: true }] : [])];
+  }
+
+  drawKeep() {
+    const list = this.dialog.querySelector('#keep-list');
+    if (!(list instanceof HTMLElement) || this.keep === null) return;
+    const items = this.keepItems();
+    this.keep.sel = Math.min(this.keep.sel, Math.max(0, items.length - 1));
+    const nodes = items.map((item, i) =>
+      el(
+        'button',
+        { type: 'button', class: 't-find-item', role: 'option', id: `keep-${i}`, 'data-act': 'keep-pick', 'data-index': String(i), 'aria-selected': String(i === this.keep?.sel), 'aria-checked': String(item.kept) },
+        [
+          el('span', { class: 't-num' }, [item.make ? icon('plus') : el('span', { class: 't-box', 'data-on': String(item.kept) }, item.kept ? [icon('check')] : [])]),
+          el('span', { class: 't-find-text' }, [el('span', {}, [item.make ? `New collection “${item.name}”` : item.name])]),
+          el('span', { class: 't-find-side' }, [item.kept ? 'kept here' : '']),
+        ],
+      ),
+    );
+    if (nodes.length === 0) nodes.push(el('div', { class: 't-empty' }, [this.keep.words.trim() === '' ? 'No collections yet. Type a name to make the first.' : 'Searching…']));
+    list.replaceChildren(...nodes);
+  }
+
+  /** Searches every collection for the L picker's words after a short pause. @param {string} words */
+  findKeep(words) {
+    const keep = this.keep;
+    if (keep === null) return;
+    keep.words = words;
+    keep.found = null;
+    keep.sel = 0;
+    clearTimeout(this.keepTimer);
+    const ticket = ++this.keepTicket;
+    this.drawKeep();
+    if (words.trim() === '') return;
+    this.keepTimer = setTimeout(() => {
+      listCollections(words, null).then(
+        (listed) => {
+          if (ticket !== this.keepTicket || this.keep === null) return;
+          this.keep.found = listed.collections;
+          this.drawKeep();
+        },
+        (error) => {
+          if (ticket === this.keepTicket) this.fail(error, "The collections didn't load.");
+        },
+      );
+    }, SEARCH_WAIT_MS);
+  }
+
+  /** Keeps the thread in the chosen collection, or takes it out, or makes the collection named; the picker stays open. @param {number} index */
+  async pickKeep(index) {
+    const keep = this.keep;
+    const item = this.keepItems()[index];
+    if (keep === null || item === undefined || keep.busy) return;
+    keep.busy = true;
+    try {
+      let target = item.number;
+      let name = item.name;
+      if (item.make) {
+        const made = await makeCollection(item.name);
+        target = made.number;
+        name = made.name;
+      }
+      await this.toggleKept(keep.number, target, name, !item.kept);
+      if (this.keep === keep) {
+        keep.kept = item.kept ? keep.kept.filter((one) => one.number !== target) : [...keep.kept, { number: target, name }];
+        if (item.make) {
+          keep.words = '';
+          keep.found = null;
+          const box = this.dialog.querySelector('#keep-find');
+          if (box instanceof HTMLInputElement) box.value = '';
+        }
+        this.drawKeep();
+      }
+    } catch (error) {
+      if (error instanceof Failed && error.message === 'name-taken') this.say(nameProblem(error.message), null);
+      else this.fail(error, "The collection wasn't changed.");
+    } finally {
+      keep.busy = false;
+    }
+  }
+
+  /**
+   * Keeps a thread in a collection or takes it out, says so with Undo, and reads again whatever shows it.
+   * @param {number} number the thread's
+   * @param {number} collection
+   * @param {string} name
+   * @param {boolean} keeping
+   */
+  async toggleKept(number, collection, name, keeping) {
+    const was = keeping ? null : this.placeBefore(collection, number);
+    const answer = await changeKept(collection, keeping ? { add: number } : { remove: number });
+    const place = keeping ? answer.place : null;
+    void this.afterKept(collection);
+    this.say(keptToast(number, name, keeping), async () => {
+      try {
+        if (keeping) await changeKept(collection, { remove: number });
+        else {
+          await changeKept(collection, { add: number });
+          if (was !== null) await changeKept(collection, { move: number, to: was });
+        }
+      } catch (error) {
+        this.fail(error, "The change wasn't undone.");
+      }
+      void this.afterKept(collection);
+    });
+    return place;
+  }
+
+  /**
+   * Where a thread was in a collection before a take-out, as the collection's page shows it, for Undo to put it back.
+   * @param {number} collection
+   * @param {number} number
+   * @returns {number | null}
+   */
+  placeBefore(collection, number) {
+    const row = this.collection?.collection.number === collection ? this.collection.threads.find((thread) => thread.number === number) : undefined;
+    return row?.place ?? null;
+  }
+
+  /**
+   * After a collection or its threads changed: the rail and the picker's recent list, the walk, the thread shown and
+   * the collection shown are read again; answers once the collection shown is drawn again.
+   * @param {number} collection
+   */
+  async afterKept(collection) {
+    if (this.walking?.number === collection) this.walking = null;
+    void this.loadCollections();
+    const shown = this.route.view === 'collection' && this.route.number === collection ? this.loadCollection(collection, { keep: true }) : Promise.resolve();
+    if (this.route.view === 'collections') void this.loadRoom();
+    if (this.route.view === 'thread' && this.shown) void this.refreshShown(this.shown.thread.number);
+    if (this.from === 'collection' && this.fromCollection === collection) void this.loadWalk(collection);
+    await shown;
+  }
+
+  /**
+   * Moves a thread in the collection shown to a place, from 1: shown at once, saved behind it, read again after, with
+   * Undo back to where it was.
+   * @param {number} number
+   * @param {number} to
+   * @param {boolean} [focus] whether its row keeps the focus, as after ⌥↑
+   */
+  async moveKeptTo(number, to, focus = false) {
+    const shown = this.collection;
+    if (shown === null) return;
+    const collection = shown.collection;
+    const from = shown.threads.find((thread) => thread.number === number)?.place;
+    if (from === undefined || from === to) return;
+    // Shown at once while both places are on the page; the server's order is read back either way.
+    const rows = shown.threads.filter((thread) => thread.number !== number);
+    const moving = shown.threads.find((thread) => thread.number === number);
+    const at = rows.findIndex((thread) => thread.place >= to + (to > from ? 1 : 0));
+    if (moving) rows.splice(at < 0 ? rows.length : at, 0, moving);
+    const first = shown.threads[0]?.place ?? 1;
+    this.collection = { ...shown, threads: rows.map((thread, i) => ({ ...thread, place: first + i })) };
+    this.drawKept();
+    if (focus) this.focusKept(number);
+    try {
+      await changeKept(collection.number, { move: number, to });
+    } catch (error) {
+      this.fail(error, "The thread wasn't moved.");
+    }
+    await this.afterKept(collection.number);
+    if (focus) this.focusKept(number);
+    this.say(`#${number} moved to place ${to}.`, async () => {
+      try {
+        await changeKept(collection.number, { move: number, to: from });
+      } catch (error) {
+        this.fail(error, "The move wasn't undone.");
+      }
+      void this.afterKept(collection.number);
+    });
+  }
+
+  /** Gives a kept thread's row the focus once it is drawn again. @param {number} number */
+  focusKept(number) {
+    const row = this.main.querySelector(`.t-row-kept[data-kept="${number}"]`);
+    if (row instanceof HTMLElement) row.focus({ preventScroll: false });
+  }
+
+  /** The ⋯ menu of a thread in the collection shown: the top, the bottom, a place, or out. @param {number} number */
+  openKeptMenu(number) {
+    const shown = this.collection;
+    const thread = shown?.threads.find((one) => one.number === number);
+    if (!shown || !thread) return;
+    const count = shown.collection.threads;
+    const inOrder = this.keptInOrder();
+    const place = el('input', { class: 't-field', id: 'kept-place', type: 'number', min: '1', max: String(count), value: String(thread.place), 'aria-label': 'Place' });
+    this.keptMenu = number;
+    this.openOverlay('kept-menu', `#${number} in ${shown.collection.name}`, 'narrow', [
+      this.sheetHead(`#${number} in ${shown.collection.name}`),
+      el('div', { class: 't-sheet-body' }, [
+        el('div', { class: 't-pick-list' }, [
+          ...(inOrder
+            ? [
+                el('button', { type: 'button', class: 't-pick', 'data-act': 'kept-top', ...(thread.place === 1 ? { disabled: '' } : {}) }, ['Move to the top', kbd('⌥⇧↑')]),
+                el('button', { type: 'button', class: 't-pick', 'data-act': 'kept-bottom', ...(thread.place === count ? { disabled: '' } : {}) }, ['Move to the bottom', kbd('⌥⇧↓')]),
+                el('form', { class: 't-place-form', 'data-submit': 'kept-place' }, [el('span', {}, ['Move to place']), place, el('span', {}, [`of ${count}`]), el('button', { type: 'submit', class: 't-btn' }, ['Move'])]),
+              ]
+            : [el('p', { class: 't-note' }, ['Clear the search to move it.'])]),
+          el('button', { type: 'button', class: 't-pick', 'data-act': 'kept-out' }, [`Take it out of ${shown.collection.name}`]),
+        ]),
+      ]),
+    ]);
+    const first = this.dialog.querySelector('.t-pick:not([disabled])');
+    if (first instanceof HTMLElement) first.focus();
+  }
+
+  /** Takes the thread the ⋯ menu is for out of the collection shown, with Undo. */
+  async takeOutKept() {
+    const number = this.keptMenu;
+    const shown = this.collection;
+    this.closeOverlay();
+    if (number === null || !shown) return;
+    try {
+      await this.toggleKept(number, shown.collection.number, shown.collection.name, false);
+    } catch (error) {
+      this.fail(error, "The thread wasn't taken out.");
+    }
+  }
+
+  /** The editor for a new collection or this one's name and description. @param {{ number: number | null, name: string, description: string, keepThread?: number }} draft */
+  openCollectionEditor(draft) {
+    this.collectionDraft = { ...draft, problem: '', busy: false };
+    this.renderCollectionEditor();
+    focusIn(this.dialog, '#coll-name');
+  }
+
+  renderCollectionEditor() {
+    const draft = this.collectionDraft;
+    if (draft === null) return;
+    const title = draft.number === null ? 'New collection' : 'Edit the collection';
+    this.openOverlay('collection-edit', title, 'wide', [
+      this.sheetHead(title),
+      el('form', { 'data-submit': 'collection' }, [
+        el('div', { class: 't-sheet-body' }, [
+          el('label', { class: 't-fld' }, [
+            el('span', { class: 't-lbl' }, ['Name ', el('small', {}, ['one line; no two alike'])]),
+            el('input', { class: 't-field', id: 'coll-name', value: draft.name, maxlength: String(MAX_NAME), autocomplete: 'off', required: '' }),
+          ]),
+          el('label', { class: 't-fld' }, [
+            el('span', { class: 't-lbl' }, ['What it is for ', el('small', {}, ['optional'])]),
+            el('input', { class: 't-field', id: 'coll-description', value: draft.description, maxlength: String(MAX_DESCRIPTION), autocomplete: 'off' }),
+          ]),
+          ...(draft.problem ? [el('p', { class: 't-err', role: 'alert' }, [draft.problem])] : []),
+        ]),
+        el('div', { class: 't-sheet-foot' }, [
+          el('span', { class: 't-grow' }),
+          el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'close' }, ['Cancel ', kbd('Esc')]),
+          el('button', { type: 'submit', class: 't-btn t-btn-primary', ...(draft.busy ? { disabled: '' } : {}) }, [draft.number === null ? 'Make it ' : 'Save ', kbd('⌘↵')]),
+        ]),
+      ]),
+    ]);
+  }
+
+  /** Saves the editor: a new collection, which it then opens, or this one's name and description. */
+  async saveCollectionDraft() {
+    const draft = this.collectionDraft;
+    if (draft === null || draft.busy) return;
+    /** @param {string} id */
+    const value = (id) => {
+      const field = this.dialog.querySelector(`#${id}`);
+      return field instanceof HTMLInputElement ? field.value.trim() : '';
+    };
+    draft.name = value('coll-name');
+    draft.description = value('coll-description');
+    if (draft.name === '') {
+      draft.problem = nameProblem('collection');
+      this.renderCollectionEditor();
+      return;
+    }
+    draft.busy = true;
+    try {
+      if (draft.number === null) {
+        const made = await makeCollection(draft.name, draft.description === '' ? undefined : draft.description);
+        this.closeOverlay();
+        this.room.words = '';
+        void this.loadCollections();
+        void this.go({ view: 'collection', number: made.number });
+        this.say(`${made.name} made.`, null);
+        return;
+      }
+      const before = this.collection?.collection;
+      if (before && before.name !== draft.name) await changeCollection(draft.number, { name: draft.name });
+      if (before && (before.description ?? '') !== draft.description) await changeCollection(draft.number, { description: draft.description });
+      this.closeOverlay();
+      void this.afterKept(draft.number);
+    } catch (error) {
+      draft.busy = false;
+      if (error instanceof Failed && (error.message === 'name-taken' || error.message === 'collection')) {
+        draft.problem = nameProblem(error.message);
+        this.renderCollectionEditor();
+      } else this.fail(error, "The collection wasn't saved.");
+    }
+  }
+
+  /** Pins a collection to the menu or unpins it. @param {number} number */
+  async togglePin(number) {
+    const known = [...this.room.pinned, ...this.room.rows, ...this.pins, ...(this.collection ? [this.collection.collection] : [])].find((one) => one.number === number);
+    if (!known) return;
+    try {
+      await changeCollection(number, { pinned: !known.pinned });
+    } catch (error) {
+      this.fail(error, "The menu wasn't changed.");
+      return;
+    }
+    this.say(known.pinned ? `${known.name} unpinned. It's still in Collections.` : `${known.name} pinned to the menu.`, null);
+    void this.afterKept(number);
+  }
+
+  /** Saves the rule being typed: a title prefix, or none when empty. */
+  async saveRule() {
+    const box = this.main.querySelector('#rule-text');
+    const shown = this.collection;
+    if (!(box instanceof HTMLInputElement) || !shown) return;
+    const rule = box.value.trim();
+    await this.setRule(shown.collection, rule === '' ? null : rule);
+  }
+
+  /**
+   * Sets a collection's rule, with Undo back to the one before.
+   * @param {Collection} collection
+   * @param {string | null} rule
+   */
+  async setRule(collection, rule) {
+    const before = collection.rule;
+    try {
+      await changeCollection(collection.number, { rule });
+    } catch (error) {
+      this.fail(error, "The rule wasn't saved.");
+      return;
+    }
+    this.ruleDraft = null;
+    void this.afterKept(collection.number);
+    this.say(rule === null ? 'The rule is off. Threads join when you add them.' : `New threads titled “${rule} …” will join.`, async () => {
+      try {
+        await changeCollection(collection.number, { rule: before });
+      } catch (error) {
+        this.fail(error, "The rule wasn't put back.");
+      }
+      void this.afterKept(collection.number);
+    });
+  }
+
+  /** Asks to delete the collection shown, saying what goes and what stays. */
+  openDeleteCollection() {
+    const shown = this.collection;
+    if (!shown) return;
+    this.openOverlay('collection-delete', 'Delete the collection', 'narrow', [
+      this.sheetHead('Delete the collection'),
+      el('div', { class: 't-sheet-body' }, [el('p', {}, [deleteLine(shown.collection.name, shown.collection.threads)])]),
+      el('div', { class: 't-sheet-foot' }, [
+        el('span', { class: 't-grow' }),
+        el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'close' }, ['Cancel ', kbd('Esc')]),
+        el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'collection-delete-confirm' }, ['Delete it']),
+      ]),
+    ]);
+    focusIn(this.dialog, '.t-sheet-foot [data-act="close"]');
+  }
+
+  /** Deletes the collection shown, for good, and goes back to the room. */
+  async deleteCollection() {
+    const shown = this.collection;
+    this.closeOverlay();
+    if (!shown) return;
+    try {
+      await changeCollection(shown.collection.number, { delete: true });
+    } catch (error) {
+      this.fail(error, "The collection wasn't deleted.");
+      return;
+    }
+    this.collection = null;
+    if (this.walking?.number === shown.collection.number) this.walking = null;
+    void this.loadCollections();
+    void this.go({ view: 'collections' });
+    this.say(`${shown.collection.name} deleted. Its threads are as they were.`, null);
+  }
+
+  /**
+   * A drag in a collection's rows: the row picked up, the row it is over, and where it is dropped.
+   * @param {DragEvent} event
+   */
+  onDrag(event) {
+    const target = event.target instanceof Element ? event.target.closest('.t-row-kept') : null;
+    if (!(target instanceof HTMLElement) || this.route.view !== 'collection' || !this.keptInOrder()) return;
+    const number = Number(target.dataset.kept);
+    if (event.type === 'dragstart') {
+      this.dragging = number;
+      target.dataset.dragging = '';
+      event.dataTransfer?.setData('text/plain', `#${number}`);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+    } else if (event.type === 'dragover' && this.dragging !== null) {
+      event.preventDefault();
+      for (const row of this.main.querySelectorAll('.t-row-kept[data-over]')) if (row !== target) delete (/** @type {HTMLElement} */ (row)).dataset.over;
+      target.dataset.over = '';
+    } else if (event.type === 'drop' && this.dragging !== null) {
+      event.preventDefault();
+      const moving = this.dragging;
+      this.dragging = null;
+      const to = Number(target.dataset.place);
+      if (moving !== number && to >= 1) void this.moveKeptTo(moving, to);
+    } else if (event.type === 'dragend') {
+      this.dragging = null;
+      for (const row of this.main.querySelectorAll('.t-row-kept[data-over], .t-row-kept[data-dragging]')) {
+        if (row instanceof HTMLElement) {
+          delete row.dataset.over;
+          delete row.dataset.dragging;
+        }
+      }
+    }
   }
 
   /* ---------- The toast: six seconds, Undo or Z, paused while the pointer is on it ---------- */
@@ -6119,6 +7173,8 @@ class Threads {
     this.tab = tabOf(thread.status);
     this.only = null;
     this.from = 'list';
+    // A collection's rule may have kept it, so the rail's counts are read again.
+    void this.loadCollections();
     this.openThread(thread.number);
     this.say(`Started #${thread.number}`, null);
   }
@@ -6156,18 +7212,23 @@ class Threads {
       this.onPublicClick(target);
       return;
     }
-    const link = target.closest('a[data-thread], a[data-go], a[data-space], a[data-tab], a[data-person], a[data-journal]');
+    const link = target.closest('a[data-thread], a[data-go], a[data-space], a[data-tab], a[data-person], a[data-journal], a[data-collection]');
     if (link instanceof HTMLAnchorElement && !wantsNewTab(event)) {
       event.preventDefault();
       if (link.dataset.thread !== undefined) {
         if (this.route.view === 'person' && this.person) {
           this.from = 'person';
           this.fromPerson = this.person.person.number;
+        } else if (link.dataset.fromKept !== undefined && this.collection) {
+          this.from = 'collection';
+          this.fromCollection = this.collection.collection.number;
         } else if (link.classList.contains('t-row') || link.classList.contains('t-card') || link.classList.contains('t-ask-main')) {
           this.from = this.route.view === 'today' ? 'today' : this.route.view === 'list' ? 'list' : this.route.view === 'meetings' ? 'meetings' : this.route.view === 'asks' ? 'asks' : this.from;
         }
         this.openThread(Number(link.dataset.thread));
       } else if (link.dataset.person !== undefined) void this.go({ view: 'person', number: Number(link.dataset.person) });
+      else if (link.dataset.collection !== undefined) void this.go({ view: 'collection', number: Number(link.dataset.collection) });
+      else if (link.dataset.go === 'collections') void this.go({ view: 'collections' });
       else if (link.dataset.journal !== undefined) {
         const route = journalRoute(link.dataset.journal);
         if (route !== null) void this.go(route);
@@ -6203,10 +7264,10 @@ class Threads {
       return;
     }
     if (!(button instanceof HTMLElement)) return;
-    if (button.dataset.go === 'today' || button.dataset.go === 'list' || button.dataset.go === 'people' || button.dataset.go === 'meetings' || button.dataset.go === 'asks' || button.dataset.go === 'journal') {
+    if (button.dataset.go === 'today' || button.dataset.go === 'list' || button.dataset.go === 'people' || button.dataset.go === 'meetings' || button.dataset.go === 'asks' || button.dataset.go === 'journal' || button.dataset.go === 'collections') {
       event.preventDefault();
       const go = button.dataset.go;
-      void this.go(go === 'today' ? { view: 'today' } : go === 'people' ? { view: 'people' } : go === 'meetings' ? { view: 'meetings' } : go === 'asks' ? { view: 'asks' } : go === 'journal' ? { view: 'journal' } : { view: 'list', tab: this.tab, only: this.only, space: this.space });
+      void this.go(go === 'collections' ? { view: 'collections' } : go === 'today' ? { view: 'today' } : go === 'people' ? { view: 'people' } : go === 'meetings' ? { view: 'meetings' } : go === 'asks' ? { view: 'asks' } : go === 'journal' ? { view: 'journal' } : { view: 'list', tab: this.tab, only: this.only, space: this.space });
       return;
     }
     const thread = this.target();
@@ -6327,6 +7388,88 @@ class Threads {
       case 'note-show':
       case 'note-drop':
         if (thread && !this.member && button.dataset.note) void this.judgeNote(thread, button.dataset.note, button.dataset.act === 'note-show' ? 'show' : 'drop');
+        break;
+      case 'keep': {
+        const kept = this.target();
+        if (kept && !this.member) this.openKeep(kept);
+        break;
+      }
+      case 'keep-pick':
+        void this.pickKeep(Number(button.dataset.index));
+        break;
+      case 'collection-new':
+        this.openCollectionEditor({ number: null, name: '', description: '' });
+        break;
+      case 'collection-new-named':
+        this.openCollectionEditor({ number: null, name: this.room.words.trim(), description: '' });
+        break;
+      case 'collection-edit':
+        if (this.collection) this.openCollectionEditor({ number: this.collection.collection.number, name: this.collection.collection.name, description: this.collection.collection.description ?? '' });
+        break;
+      case 'collection-pin':
+        void this.togglePin(Number(button.dataset.number));
+        break;
+      case 'collections-more':
+        void this.loadRoom(true);
+        break;
+      case 'collection-delete':
+        this.openDeleteCollection();
+        break;
+      case 'collection-delete-confirm':
+        void this.deleteCollection();
+        break;
+      case 'kept-more':
+        if (this.collection) void this.loadCollection(this.collection.collection.number, { more: true });
+        break;
+      case 'kept-filter': {
+        const which = button.dataset.filter;
+        this.keptFilter = which === 'open' || which === 'done' ? which : null;
+        if (this.collection) void this.loadCollection(this.collection.collection.number);
+        break;
+      }
+      case 'kept-add-focus': {
+        const box = this.main.querySelector('#kept-add');
+        if (box instanceof HTMLInputElement) box.focus();
+        break;
+      }
+      case 'kept-add': {
+        const number = Number(button.dataset.number);
+        const shown = this.collection;
+        if (!shown) break;
+        this.addWords = '';
+        this.addFound = [];
+        const box = this.main.querySelector('#kept-add');
+        if (box instanceof HTMLInputElement) box.value = '';
+        this.toggleKept(number, shown.collection.number, shown.collection.name, true).catch((error) => this.fail(error, "The thread wasn't added."));
+        break;
+      }
+      case 'kept-menu':
+        this.openKeptMenu(Number(button.dataset.number));
+        break;
+      case 'kept-top':
+      case 'kept-bottom': {
+        const number = this.keptMenu;
+        const count = this.collection?.collection.threads ?? 0;
+        this.closeOverlay();
+        if (number !== null) void this.moveKeptTo(number, button.dataset.act === 'kept-top' ? 1 : count);
+        break;
+      }
+      case 'kept-out':
+        void this.takeOutKept();
+        break;
+      case 'rule-edit':
+        this.ruleDraft = this.collection?.collection.rule ?? '';
+        this.keepScroll = true;
+        this.render();
+        focusIn(this.main, '#rule-text');
+        break;
+      case 'rule-cancel':
+        this.ruleDraft = null;
+        this.keepScroll = true;
+        this.render();
+        break;
+      case 'rule-stop':
+        if (this.collection) void this.setRule(this.collection.collection, null);
         break;
       case 'people-fold':
         this.peopleFold = !this.peopleFold;
@@ -6575,6 +7718,19 @@ class Threads {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
     if (target.id === 'find-words' && target instanceof HTMLInputElement) this.findFor(target.value);
+    else if (target.id === 'keep-find' && target instanceof HTMLInputElement) this.findKeep(target.value);
+    else if (target.id === 'kept-add' && target instanceof HTMLInputElement) this.findToAdd(target.value);
+    else if (target.id === 'collections-find' && target instanceof HTMLInputElement) {
+      // The list alone is drawn again when the server answers, so the box keeps its focus and its cursor.
+      this.room.words = target.value;
+      clearTimeout(this.roomTimer);
+      this.roomTimer = setTimeout(() => void this.loadRoom(), SEARCH_WAIT_MS);
+    } else if (target.id === 'kept-find' && target instanceof HTMLInputElement) {
+      this.keptWords = target.value;
+      clearTimeout(this.keptTimer);
+      const number = this.collection?.collection.number;
+      if (number !== undefined) this.keptTimer = setTimeout(() => void this.loadCollection(number), SEARCH_WAIT_MS);
+    }
     else if (target.id === 'answered-find' && target instanceof HTMLInputElement) {
       // Only the list is drawn again, so the box keeps its focus and its cursor.
       this.answeredQuery = target.value;
@@ -6653,6 +7809,16 @@ class Threads {
     if (kind === 'person-email') void this.savePersonEmail();
     if (kind === 'journal-edit') void this.saveJournalEdit();
     if (kind === 'now') void this.saveNowLine();
+    if (kind === 'collection') void this.saveCollectionDraft();
+    if (kind === 'rule') void this.saveRule();
+    if (kind === 'kept-place') {
+      const box = this.dialog.querySelector('#kept-place');
+      const number = this.keptMenu;
+      const count = this.collection?.collection.threads ?? 0;
+      const to = box instanceof HTMLInputElement ? Math.max(1, Math.min(count, Math.round(Number(box.value)) || 1)) : 1;
+      this.closeOverlay();
+      if (number !== null) void this.moveKeptTo(number, to);
+    }
     if (kind === 'journal-answer') {
       const box = this.main.querySelector('#journal-answer');
       if (box instanceof HTMLTextAreaElement) void this.saveJournalAnswer(box.dataset.key ?? '');
@@ -6705,6 +7871,28 @@ class Threads {
       this.onOverlayKey(event, typing);
       return;
     }
+    // A kept thread's row with the focus: ⌥↑ and ⌥↓ move it one place, with ⇧ to the top or the bottom; ↵ opens it.
+    const kept = target instanceof HTMLElement && target.classList.contains('t-row-kept') ? target : null;
+    if (kept && event.altKey && !event.metaKey && !event.ctrlKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+      event.preventDefault();
+      if (!this.collection || !this.keptInOrder()) return;
+      const to = movedTo(Number(kept.dataset.place), this.collection.collection.threads, event.key === 'ArrowUp' ? 'up' : 'down', event.shiftKey);
+      if (to !== null) void this.moveKeptTo(Number(kept.dataset.kept), to, true);
+      return;
+    }
+    if (kept && event.key === 'Enter') {
+      event.preventDefault();
+      const link = kept.querySelector('a[data-thread]');
+      if (link instanceof HTMLElement) link.click();
+      return;
+    }
+    if (event.key === 'Enter' && target instanceof HTMLInputElement && target.id === 'kept-add') {
+      // Enter in the add box adds the first thread it found.
+      event.preventDefault();
+      const first = this.main.querySelector('[data-kept-add-list] .t-picker-item');
+      if (first instanceof HTMLElement) first.click();
+      return;
+    }
     if (event.key === 'Escape' && this.personEdit === 'name') {
       event.preventDefault();
       this.personEdit = null;
@@ -6738,7 +7926,7 @@ class Threads {
         this.render();
       } else if (typing && target instanceof HTMLElement) target.blur();
       // From an edit, Esc goes back to the journal and keeps the words: the edit opens again where he left it.
-      else if (this.route.view === 'thread' || this.route.view === 'person' || this.route.view === 'entry' || this.route.view === 'storyline' || this.route.view === 'storylines') {
+      else if (this.route.view === 'thread' || this.route.view === 'person' || this.route.view === 'entry' || this.route.view === 'storyline' || this.route.view === 'storylines' || this.route.view === 'collection') {
         event.preventDefault();
         this.back();
       }
@@ -6756,6 +7944,19 @@ class Threads {
    * @param {boolean} typing
    */
   onOverlayKey(event, typing) {
+    if (this.overlay === 'keep' && event.target instanceof HTMLInputElement && event.target.id === 'keep-find' && this.keep !== null) {
+      const count = this.keepItems().length;
+      if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && count > 0) {
+        event.preventDefault();
+        this.keep.sel = (this.keep.sel + (event.key === 'ArrowDown' ? 1 : -1) + count) % count;
+        this.drawKeep();
+        this.dialog.querySelector(`#keep-${this.keep.sel}`)?.scrollIntoView({ block: 'nearest' });
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        void this.pickKeep(this.keep.sel);
+      }
+      return;
+    }
     if (this.overlay === 'meeting' && event.key === 'Enter' && event.target instanceof HTMLInputElement && event.target.id === 'meet-find') {
       // Enter in the people box picks the first match, or adds the name typed as someone new.
       event.preventDefault();
@@ -6805,8 +8006,20 @@ class Threads {
         if (this.route.view !== 'thread' && !this.inJournal() && this.sel !== null) this.openThread(this.sel);
         break;
       case 'back':
-        if (this.route.view === 'thread' || this.route.view === 'person' || this.route.view === 'entry' || this.route.view === 'storyline' || this.route.view === 'storylines') this.back();
+        if (this.route.view === 'thread' || this.route.view === 'person' || this.route.view === 'entry' || this.route.view === 'storyline' || this.route.view === 'storylines' || this.route.view === 'collection') this.back();
         break;
+      case 'keep':
+        if (this.route.view === 'collection') focusIn(this.main, '#kept-add');
+        else if (thread) this.openKeep(thread);
+        break;
+      case 'search': {
+        const box = this.main.querySelector('#collections-find, #kept-find') ?? this.main.querySelector('#kept-add');
+        if (box instanceof HTMLInputElement) {
+          box.focus();
+          box.select();
+        }
+        break;
+      }
       case 'tab-pending':
       case 'tab-done': {
         const tab = command.slice(4);
@@ -6854,6 +8067,10 @@ class Threads {
         if (this.route.view === 'thread' && thread) this.startEdit(thread);
         if (this.route.view === 'person') this.startPersonEdit('name');
         if (this.route.view === 'entry') this.startJournalEdit();
+        if (this.route.view === 'collection' && this.collection) {
+          const shown = this.collection.collection;
+          this.openCollectionEditor({ number: shown.number, name: shown.name, description: shown.description ?? '' });
+        }
         break;
       case 'reply':
         if (this.route.view === 'thread' && thread && canReply(thread)) this.startReply(thread);

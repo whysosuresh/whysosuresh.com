@@ -2,18 +2,20 @@
 // The threads page's keys, as one map: it names what each key does for the page's key handler
 // (site/app/threads.js) and draws the keyboard sheet (`?`), so the two never disagree. The one-key moves are the
 // inbox's, kept as they were, plus 1 and 2 for the list's two tabs (Pending, Done), M (comment), W (edit), N (new),
-// S (share), B (the meeting: book it, move it, change who is in it) and ⌘K (find). A person the owner invited
+// S (share), B (the meeting: book it, move it, change who is in it), L (keep it in a collection), / (search the room
+// or collection shown) and ⌘K (find). ⌥↑ and ⌥↓ move a kept thread in a collection's order, with ⇧ to the top or the
+// bottom; the page reads those itself, as it reads ⌘↵, because every other ⌥ key stays the browser's. A person the owner invited
 // reads and comments, so their page answers only the keys on their own sheet (`MEMBER_SHEET`, `MEMBER_COMMANDS`).
 // A key pressed while typing in a field, or inside a page shown in a thread, never reaches here. Plain data and
 // pure functions, so a test can read them without a page.
 
 /**
  * @typedef {'next' | 'prev' | 'open' | 'back' | 'tab-pending' | 'tab-done' | 'find' | 'act'
- *   | 'discuss' | 'drop' | 'done' | 'reopen' | 'space' | 'undo' | 'comment' | 'edit' | 'reply' | 'new' | 'share' | 'meeting' | 'keys'} Command
+ *   | 'discuss' | 'drop' | 'done' | 'reopen' | 'space' | 'undo' | 'comment' | 'edit' | 'reply' | 'new' | 'share' | 'meeting' | 'keep' | 'search' | 'keys'} Command
  * @typedef {{ keys: string, label: string }} KeyRow
  */
 
-/** The keyboard sheet: three groups, each key as the sheet shows it and what it does. */
+/** The keyboard sheet: four groups, each key as the sheet shows it and what it does. */
 /** @type {readonly { title: string, rows: readonly KeyRow[] }[]} */
 export const SHEET = Object.freeze([
   {
@@ -52,6 +54,15 @@ export const SHEET = Object.freeze([
       { keys: '?', label: 'These keys' },
     ],
   },
+  {
+    title: 'Collections',
+    rows: [
+      { keys: 'L', label: 'Keep it in a collection, or take it out' },
+      { keys: '/', label: 'Search the room or the collection' },
+      { keys: '⌥↑ ⌥↓', label: 'Move a kept thread up or down' },
+      { keys: '⌥⇧↑ ⌥⇧↓', label: 'Move it to the top or the bottom' },
+    ],
+  },
 ]);
 
 /** @type {Readonly<Record<string, Command>>} */
@@ -77,6 +88,8 @@ const PLAIN = Object.freeze({
   n: 'new',
   s: 'share',
   b: 'meeting',
+  l: 'keep',
+  '/': 'search',
   '?': 'keys',
 });
 

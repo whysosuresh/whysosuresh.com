@@ -9,12 +9,12 @@
 // nowhere. The threads' host (hey.whysosuresh.com) answers the two doors' JSON (/threads/api/, and the public threads'
 // and the asks' calls under /api/), and its root, Today, the door everyone signed in enters by, the rooms (/meetings,
 // /asks, /threads/ and the people pages, /people and /people/<n>, and the journal's /journal, a day, a week, the
-// storylines and a storyline), every thread's address and every ask's (/ask/<slug>) with the threads page, the site's
+// storylines and a storyline, and the collections, /collections and /collections/<n>), every thread's address and every ask's (/ask/<slug>) with the threads page, the site's
 // headers (its CSP among them) and status 200, whatever the number, with no sign-in, because Access guards only the
 // threads' calls, never a thread's page; the home page's addresses answer the code's JSON 404 there. /me, Today's
 // old address, and /inbox, the threads' older one, lead nowhere on either host: no redirect, the site's 404 page. A
 // page's .html address redirects to its clean one, /meetings/ to /meetings and /asks/ to /asks; the people pages' old
-// addresses under /threads/, and /people/, redirect to /people for good; and any other path under /threads/ is what
+// addresses under /threads/, and /people/, redirect to /people for good, /collections/ to /collections; and any other path under /threads/ is what
 // the site's files make of it. `"/"` in `run_worker_first` names the root alone: every file beside it, the
 // stylesheet, a picture, a script and the other pages, still comes straight from site/ with no code in its path, and
 // /index.html keeps its redirect to /.
@@ -79,6 +79,8 @@ describe("each host answers only its own addresses", () => {
     "/ask/stigmer",
     "/journal",
     "/journal/2026-11-06",
+    "/collections",
+    "/collections/3",
     "/api/threads/1",
     "/api/threads/0123456789abcdef0123456789abcdef",
     "/api/asks/demo",
@@ -197,6 +199,10 @@ describe("the site's own files", () => {
     "/journal/2026-W44",
     "/journal/storylines",
     "/journal/storylines/the-demo",
+    "/collections",
+    "/collections/3",
+    "/collections/3-every-screen",
+    "/collections/999999999",
   ])(
     "answer %s on the threads' host with the threads page and the site's headers, with no sign-in",
     async (path) => {
@@ -238,13 +244,19 @@ describe("the site's own files", () => {
     expect(response.headers.get("location")).toBe("/journal?x=1");
   });
 
+  it("redirect /collections/ to /collections for good", async () => {
+    const response = await harness.fetch(`${THREADS}/collections/?x=1`, { redirect: "manual" });
+    expect(response.status).toBe(301);
+    expect(response.headers.get("location")).toBe("/collections?x=1");
+  });
+
   it("redirect /threads to /threads/", async () => {
     const response = await harness.fetch(`${THREADS}/threads`, { redirect: "manual" });
     expect(response.status).toBe(307);
     expect(new URL(response.headers.get("location") ?? "", THREADS).pathname).toBe("/threads/");
   });
 
-  it.each(["/threads/042", "/threads/42/comments", "/threads/0123456789abcdef0123456789abcdef-title", "/threads/0123456789abcdef0123456789abcdef/x", "/threads/0123456789ABCDEF0123456789ABCDEF", "/threads/0", "/threads/nope", "/threads/people/07", "/threads/people/7/threads", "/threads/peoples", "/mex", "/people/07", "/people/7/threads", "/peoples", "/meetings/7", "/meetingsx", "/ask", "/ask/", "/askx", "/asksx", "/asks/7", "/ask/Upper", "/ask/-lead", "/ask/demo/7", "/journalx", "/journal/today", "/journal/2026-11-6", "/journal/2026-w44", "/journal/2026-11-06/edit", "/journal/storylines/", "/journal/storylines/The-Demo", "/journal/storylines/a/b"])("answer %s on the threads' host with the site's 404 page", async (path) => {
+  it.each(["/threads/042", "/threads/42/comments", "/threads/0123456789abcdef0123456789abcdef-title", "/threads/0123456789abcdef0123456789abcdef/x", "/threads/0123456789ABCDEF0123456789ABCDEF", "/threads/0", "/threads/nope", "/threads/people/07", "/threads/people/7/threads", "/threads/peoples", "/mex", "/people/07", "/people/7/threads", "/peoples", "/meetings/7", "/meetingsx", "/ask", "/ask/", "/askx", "/asksx", "/asks/7", "/ask/Upper", "/ask/-lead", "/ask/demo/7", "/journalx", "/journal/today", "/journal/2026-11-6", "/journal/2026-w44", "/journal/2026-11-06/edit", "/journal/storylines/", "/journal/storylines/The-Demo", "/journal/storylines/a/b", "/collectionsx", "/collections/0", "/collections/03", "/collections/x", "/collections/3/threads"])("answer %s on the threads' host with the site's 404 page", async (path) => {
     const response = await harness.fetch(`${THREADS}${path}`, { redirect: "manual" });
     expect(response.status).toBe(404);
     expect(response.headers.get("content-type")).toContain("text/html");

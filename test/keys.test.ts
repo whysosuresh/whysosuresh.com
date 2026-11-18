@@ -1,6 +1,7 @@
 // The threads page's keys (site/app/keys.js), one map for the key handler and the keyboard sheet. What it holds:
 // every key the sheet lists does what the sheet says, ⌘K and Ctrl+K find, the browser's own shortcuts stay its own,
-// and a key the page doesn't use does nothing (3 and 4 among them, now the list has two tabs). An invited person's sheet lists only keys their page answers, and
+// and a key the page doesn't use does nothing (3 and 4 among them, now the list has two tabs); L keeps a thread and /
+// searches the room or collection shown. An invited person's sheet lists only keys their page answers, and
 // their page answers no move, edit, reply, new thread or share.
 
 import { describe, expect, it } from "vitest";
@@ -32,6 +33,9 @@ describe("the keys", () => {
     ["s", "share"],
     ["b", "meeting"],
     ["B", "meeting"],
+    ["l", "keep"],
+    ["L", "keep"],
+    ["/", "search"],
     ["?", "keys"],
   ])("reads %s as %s", (key, command) => {
     expect(commandFor(press(key))).toBe(command);
@@ -53,8 +57,8 @@ describe("the keys", () => {
 
   it("lists on the sheet only keys that do something", () => {
     const listed = SHEET.flatMap((group) => group.rows.map((row) => row.keys));
-    const single = listed.filter((keys) => /^[A-Z?]$/.test(keys));
-    for (const key of single) expect([key, commandFor(press(key === "?" ? "?" : key.toLowerCase()))]).not.toEqual([key, null]);
+    const single = listed.filter((keys) => /^[A-Z?/]$/.test(keys));
+    for (const key of single) expect([key, commandFor(press(key === "?" || key === "/" ? key : key.toLowerCase()))]).not.toEqual([key, null]);
     expect(single.length).toBeGreaterThan(10);
   });
 
@@ -64,7 +68,7 @@ describe("the keys", () => {
       const command = commandFor(press(key === "?" ? "?" : key.toLowerCase()));
       expect([key, command !== null && MEMBER_COMMANDS.has(command)]).toEqual([key, true]);
     }
-    for (const owners of ["act", "discuss", "drop", "done", "reopen", "space", "undo", "edit", "reply", "new", "share", "tab-pending", "tab-done"] as const) {
+    for (const owners of ["act", "discuss", "drop", "done", "reopen", "space", "undo", "edit", "reply", "new", "share", "tab-pending", "tab-done", "keep", "search"] as const) {
       expect(MEMBER_COMMANDS.has(owners)).toBe(false);
     }
   });

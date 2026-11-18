@@ -29,6 +29,7 @@ const SERVED = [
   "app/byline.js",
   "app/card-paint.js",
   "app/card.js",
+  "app/collections.js",
   "app/journal.js",
   "app/keys.js",
   "app/markdown.js",
@@ -664,7 +665,7 @@ describe("wrangler.jsonc", () => {
   });
 
   it("runs the code only at the root, every update's page, its feed and its videos' pictures, under /api/ and /threads/ and at the rooms (/meetings, /people, /asks, /journal) and an ask's address, and every other page comes straight from site/", () => {
-    expect(text).toContain('"run_worker_first": ["/", "/updates", "/feed.xml", "/thumbs/*", "/api/*", "/threads/*", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*"]');
+    expect(text).toContain('"run_worker_first": ["/", "/updates", "/feed.xml", "/thumbs/*", "/api/*", "/threads/*", "/meetings", "/people", "/people/*", "/asks", "/ask/*", "/journal", "/journal/*", "/collections", "/collections/*"]');
     expect(text.match(/"run_worker_first"/g)).toHaveLength(1);
   });
 

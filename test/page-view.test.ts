@@ -1,8 +1,8 @@
 // How a thread's page is shown (site/app/page-view.js): a link to a thread whose main section is a page opens the page
 // full screen, while a thread opened inside the app opens in the thread view. What it holds: a history entry's own
 // choice wins over everything, `?full` and a page's main section open full screen when the entry made none, a text or
-// link thread never opens full screen by itself, a state the site didn't write reads as no choice, and the Thread
-// button counts notes in the home page's own word.
+// link thread never opens full screen by itself, a state the site didn't write reads as no choice, the collection a
+// thread was opened from is kept only as a number, and the Thread button counts notes in the home page's own word.
 
 import { describe, expect, it } from "vitest";
 import { pageFull, readPageState, threadLabel } from "../site/app/page-view.js";
@@ -44,6 +44,12 @@ describe("whether the page fills the window", () => {
     expect(readPageState({ page: "thread" })).toEqual({ page: "thread" });
     expect(readPageState({ page: "thread", back: true })).toEqual({ page: "thread", back: true });
     expect(readPageState({ page: "thread", back: "yes" })).toEqual({ page: "thread" });
+  });
+
+  it("keeps the collection a thread was opened from, only as a collection's number", () => {
+    expect(readPageState({ page: "thread", collection: 3 })).toEqual({ page: "thread", collection: 3 });
+    expect(readPageState({ page: "full", back: true, collection: 12 })).toEqual({ page: "full", back: true, collection: 12 });
+    for (const junk of [0, -1, 1.5, "3", null]) expect(readPageState({ page: "thread", collection: junk })).toEqual({ page: "thread" });
   });
 });
 

@@ -57,6 +57,13 @@
 // `listCards` reads every public thread's number, title and the stamp of the card it has, and `setCard` uploads a
 // drawn card as its PNG with the stamp of what it shows (/threads/api/cards and /threads/api/threads/<n>/card, his
 // alone).
+//
+// His collections (src/collections.ts) are named sets of threads in his own order: `listCollections` reads the pinned
+// ones and a page of the rest (25, the most recently changed first), or those whose name or description hold the
+// words; `showCollection` one with a page of its threads (50, in his order), filtered and searched; `makeCollection`
+// and `changeCollection` make and change one (a name taken, ignoring case, is Failed `name-taken`), and `changeKept`
+// keeps a thread in one, takes it out or moves it to a place. A thread's own read names the collections it is in
+// (`collections`), and a search answers the collections beside the threads and people, for him alone.
 
 /**
  * @typedef {import('./standing.js').List} List
@@ -110,12 +117,20 @@
  * }} Said
  * @typedef {{ person: Someone, threads: TheirThread[], words: Said[], truncated: boolean }} PersonShown
  * @typedef {{ name: string } | { email: string } | { note: string }} PersonChange
- * @typedef {{ threads: Thread[], people: Someone[] }} Found
+ * @typedef {{ threads: Thread[], people: Someone[], collections: Collection[] }} Found
  * @typedef {{ people: Person[], invitedCount: number }} People
  * @typedef {{ caller: 'owner' | 'sync' | 'member', email: string | null, ownerPhoto?: string | null, photo?: string | null }} Me
  * @typedef {{ number: number, title: string | null, stamp: string | null }} CardDue
  * @typedef {{ id: number, at: string, actor: 'owner' | 'sync' | 'visitor' | 'import' | string, type: string, data: Record<string, unknown> }} Event
- * @typedef {{ thread: Thread, page: Page | null, people: Person[], comments: Comment[], events: Event[], truncated: boolean, answeredBy?: Answerer[] }} Shown
+ * @typedef {{ thread: Thread, page: Page | null, people: Person[], comments: Comment[], events: Event[], truncated: boolean, answeredBy?: Answerer[], collections?: KeptIn[] }} Shown
+ * @typedef {{ number: number, name: string }} KeptIn a collection a thread is kept in
+ * @typedef {{ number: number, name: string, description: string | null, rule: string | null, pinned: boolean, changedAt: string, createdAt: string, threads: number }} Collection
+ * @typedef {{ pinned: Collection[], collections: Collection[], next: number | null, count: number }} CollectionList
+ * @typedef {Thread & { place: number }} KeptThread
+ * @typedef {{ collection: Collection, threads: KeptThread[], next: number | null, count: number }} CollectionShown
+ * @typedef {{ words?: string, status?: 'open' | 'done' | null, after?: number | null }} CollectionQuery
+ * @typedef {{ name: string } | { description: string } | { rule: string | null } | { pinned: boolean } | { delete: true }} CollectionChange
+ * @typedef {{ add: number } | { remove: number } | { move: number, to: number }} KeptChange
  * @typedef {{ threads: Thread[], counts: Record<List, number>, next: number | null }} Listing
  * @typedef {{ action: 'act' | 'discuss' | 'unsort' | 'done' | 'reopen' | 'reply-opened' | 'publish' | 'unpublish' | 'post' | 'unpost' }
  *   | { action: 'drop', reason: string }
@@ -473,8 +488,72 @@ export async function edit(number, field, text) {
  * @returns {Promise<Found>}
  */
 export async function search(words) {
-  const found = /** @type {{ threads: Thread[], people?: Someone[] }} */ (await call(`/search?${new URLSearchParams({ q: words }).toString()}`, { method: 'GET' }));
-  return { threads: found.threads, people: found.people ?? [] };
+  const found = /** @type {{ threads: Thread[], people?: Someone[], collections?: Collection[] }} */ (
+    await call(`/search?${new URLSearchParams({ q: words }).toString()}`, { method: 'GET' })
+  );
+  return { threads: found.threads, people: found.people ?? [], collections: found.collections ?? [] };
+}
+
+/**
+ * The pinned collections and a page of the rest, the most recently changed first, after the collection `after`; with
+ * words, a page of those whose name or description hold them, and no pinned list.
+ * @param {string} words
+ * @param {number | null} after
+ * @returns {Promise<CollectionList>}
+ */
+export async function listCollections(words, after) {
+  const query = new URLSearchParams();
+  if (words.trim() !== '') query.set('q', words.trim());
+  if (after !== null) query.set('after', String(after));
+  const asked = query.toString();
+  return /** @type {CollectionList} */ (await call(`/collections${asked === '' ? '' : `?${asked}`}`, { method: 'GET' }));
+}
+
+/**
+ * One collection with a page of its threads in his order: the open or closed ones, those holding the words, after a place.
+ * @param {number} number
+ * @param {CollectionQuery} [asked]
+ * @returns {Promise<CollectionShown>}
+ */
+export async function showCollection(number, asked = {}) {
+  const query = new URLSearchParams();
+  if (asked.words !== undefined && asked.words.trim() !== '') query.set('q', asked.words.trim());
+  if (asked.status) query.set('status', asked.status);
+  if (asked.after !== undefined && asked.after !== null) query.set('after', String(asked.after));
+  const said = query.toString();
+  return /** @type {CollectionShown} */ (await call(`/collections/${number}${said === '' ? '' : `?${said}`}`, { method: 'GET' }));
+}
+
+/**
+ * A new collection, its name unique ignoring case.
+ * @param {string} name
+ * @param {string} [description]
+ * @returns {Promise<Collection>}
+ */
+export async function makeCollection(name, description) {
+  return /** @type {{ collection: Collection }} */ (await post('/collections', description === undefined ? { name } : { name, description })).collection;
+}
+
+/**
+ * Changes a collection: its name, description, rule or pin; or deletes it, answering null.
+ * @param {number} number
+ * @param {CollectionChange} change
+ * @returns {Promise<Collection | null>}
+ */
+export async function changeCollection(number, change) {
+  const answer = /** @type {{ collection?: Collection }} */ (await post(`/collections/${number}`, change));
+  return answer.collection ?? null;
+}
+
+/**
+ * Keeps a thread in a collection, takes it out, or moves it to a place (1 the top); answers the collection and the
+ * thread's place now (null once taken out).
+ * @param {number} number
+ * @param {KeptChange} change
+ * @returns {Promise<{ collection: Collection, place: number | null }>}
+ */
+export async function changeKept(number, change) {
+  return /** @type {{ collection: Collection, place: number | null }} */ (await post(`/collections/${number}/threads`, change));
 }
 
 /**
