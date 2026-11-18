@@ -53,7 +53,7 @@ describe("a collection's words", () => {
   });
 
   it("says where a thread is in the collection it was opened from", () => {
-    expect(walkLine(2, 6, "Every screen")).toBe("3 of 6 in Every screen");
+    expect(walkLine(2, 6)).toBe("3 of 6");
   });
 
   it("tells keeping and taking out apart, by the collection's name as it was", () => {
@@ -67,6 +67,7 @@ describe("a collection's words", () => {
   it("says deleting takes the collection and leaves its threads", () => {
     expect(deleteLine("Every screen", 6)).toBe("Delete Every screen for good? Its 6 threads stay as they are, only no longer grouped here. This can't be undone.");
     expect(deleteLine("Empty", 0)).toBe("Delete Empty for good? It holds no threads. This can't be undone.");
+    expect(deleteLine("Help", 1)).toBe("Delete Help for good? Its one thread stays as it is, only no longer grouped here. This can't be undone.");
     expect(nameProblem("name-taken")).toBe("Another collection has that name.");
   });
 });

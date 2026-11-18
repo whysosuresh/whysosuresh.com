@@ -1106,6 +1106,8 @@ class Threads {
     this.keptMenu = null;
     /** @type {number | null} */
     this.dragging = null;
+    /** The kept thread whose row has the focus, given back after a redraw; null once the focus is anywhere else. @type {number | null} */
+    this.keptFocus = null;
     /** The person whose page a thread was opened from. @type {number | null} */
     this.fromPerson = null;
     /** Everyone he deals with, as the people call answered. @type {Someone[]} */
@@ -1265,6 +1267,14 @@ class Threads {
     document.addEventListener('input', (event) => this.onInput(event));
     document.addEventListener('change', (event) => this.onChange(event));
     document.addEventListener('submit', (event) => this.onSubmit(event));
+    document.addEventListener('focusin', (event) => {
+      const target = event.target;
+      this.keptFocus = target instanceof HTMLElement && target.classList.contains('t-row-kept') ? Number(target.dataset.kept) : null;
+    });
+    // A click anywhere lets the row go; a click on a row gives it the focus again, and the focusin above says so.
+    document.addEventListener('mousedown', () => {
+      this.keptFocus = null;
+    });
     for (const type of ['dragstart', 'dragover', 'drop', 'dragend']) document.addEventListener(type, (event) => this.onDrag(/** @type {DragEvent} */ (event)));
     // His notes on a person, and their name, are saved when he leaves the box for anywhere outside its own form.
     document.addEventListener('focusout', (event) => {
@@ -1965,6 +1975,7 @@ class Threads {
     // A box being typed in keeps its focus and its cursor across a redraw (a page saying where its words moved).
     const typing = document.activeElement;
     const kept = typing instanceof HTMLTextAreaElement && typing.id !== '' && this.main.contains(typing) ? { id: typing.id, from: typing.selectionStart, to: typing.selectionEnd } : null;
+
     this.renderNav();
     this.renderTabbar();
     if (this.route.view === 'thread') {
@@ -2038,6 +2049,8 @@ class Threads {
       again.focus({ preventScroll: true });
       again.setSelectionRange(kept.from, kept.to);
     }
+    // So does a kept thread's row, which ⌥↑ and ⌥↓ move while it has the focus, whichever redraw took it away.
+    if (this.keptFocus !== null && this.route.view === 'collection' && (document.activeElement === null || document.activeElement === document.body)) this.focusKept(this.keptFocus);
     const selected = this.main.querySelector('.t-row[aria-selected="true"]');
     if (selected && this.route.view !== 'thread') selected.scrollIntoView({ block: 'nearest' });
   }
@@ -5528,13 +5541,19 @@ class Threads {
     if (this.route.view === 'collection' && this.route.number === number) this.drawKept();
   }
 
-  /** Draws a collection again, only its list when its page is up, so a box being typed in keeps its focus. */
+  /**
+   * Draws a collection again: while its search or add box is being typed in, only its list, the search's line and the
+   * side panel, so the box keeps its focus and its cursor; otherwise the whole page.
+   */
   drawKept() {
     const body = this.main.querySelector('[data-kept-body]');
     const head = this.main.querySelector('[data-kept-head]');
-    if (body instanceof HTMLElement && head instanceof HTMLElement && this.collection) {
+    const side = this.main.querySelector('.t-thread > .t-rail');
+    const typing = document.activeElement instanceof HTMLInputElement && (document.activeElement.id === 'kept-find' || document.activeElement.id === 'kept-add');
+    if (typing && body instanceof HTMLElement && head instanceof HTMLElement && side instanceof HTMLElement && this.collection) {
       body.replaceChildren(...this.keptBody(this.collection));
       head.replaceChildren(...this.keptHead(this.collection));
+      side.replaceChildren(this.collectionDetails(this.collection.collection));
       return;
     }
     this.keepScroll = true;
@@ -5642,8 +5661,8 @@ class Threads {
     const here = new Set((this.collection?.threads ?? []).map((thread) => thread.number));
     return this.addFound.slice(0, PICKS).map((thread, i) =>
       el('button', { type: 'button', class: 't-picker-item', 'data-act': 'kept-add', 'data-number': String(thread.number), 'aria-selected': String(i === 0) }, [
-        el('span', { class: 't-num' }, [`#${thread.number}`]),
-        el('span', {}, [titleOf(thread)]),
+        icon(here.has(thread.number) ? 'check' : 'plus'),
+        el('span', {}, [el('span', { class: 't-tn' }, [`#${thread.number}`]), ' ', titleOf(thread)]),
         el('small', {}, [here.has(thread.number) ? 'already here' : STATUS_NAMES[thread.status]]),
       ]),
     );
@@ -5725,7 +5744,7 @@ class Threads {
       el('div', { class: 't-walk' }, [
         icon('stack'),
         el('a', { href: collectionPath(walking), 'data-collection': String(walking.number) }, [walking.name]),
-        el('span', { class: 't-n' }, [walkLine(at, walking.threads.length, walking.name).replace(` in ${walking.name}`, '')]),
+        el('span', { class: 't-n' }, [walkLine(at, walking.threads.length)]),
       ]),
     ];
   }
@@ -5902,7 +5921,7 @@ class Threads {
     const was = keeping ? null : this.placeBefore(collection, number);
     const answer = await changeKept(collection, keeping ? { add: number } : { remove: number });
     const place = keeping ? answer.place : null;
-    this.afterKept(collection);
+    void this.afterKept(collection);
     this.say(keptToast(number, name, keeping), async () => {
       try {
         if (keeping) await changeKept(collection, { remove: number });
@@ -5913,7 +5932,7 @@ class Threads {
       } catch (error) {
         this.fail(error, "The change wasn't undone.");
       }
-      this.afterKept(collection);
+      void this.afterKept(collection);
     });
     return place;
   }
@@ -5931,16 +5950,17 @@ class Threads {
 
   /**
    * After a collection or its threads changed: the rail and the picker's recent list, the walk, the thread shown and
-   * the collection shown are read again.
+   * the collection shown are read again; answers once the collection shown is drawn again.
    * @param {number} collection
    */
-  afterKept(collection) {
+  async afterKept(collection) {
     if (this.walking?.number === collection) this.walking = null;
     void this.loadCollections();
-    if (this.route.view === 'collection' && this.route.number === collection) void this.loadCollection(collection, { keep: true });
+    const shown = this.route.view === 'collection' && this.route.number === collection ? this.loadCollection(collection, { keep: true }) : Promise.resolve();
     if (this.route.view === 'collections') void this.loadRoom();
     if (this.route.view === 'thread' && this.shown) void this.refreshShown(this.shown.thread.number);
     if (this.from === 'collection' && this.fromCollection === collection) void this.loadWalk(collection);
+    await shown;
   }
 
   /**
@@ -5970,7 +5990,7 @@ class Threads {
     } catch (error) {
       this.fail(error, "The thread wasn't moved.");
     }
-    this.afterKept(collection.number);
+    await this.afterKept(collection.number);
     if (focus) this.focusKept(number);
     this.say(`#${number} moved to place ${to}.`, async () => {
       try {
@@ -5978,7 +5998,7 @@ class Threads {
       } catch (error) {
         this.fail(error, "The move wasn't undone.");
       }
-      this.afterKept(collection.number);
+      void this.afterKept(collection.number);
     });
   }
 
@@ -6094,7 +6114,7 @@ class Threads {
       if (before && before.name !== draft.name) await changeCollection(draft.number, { name: draft.name });
       if (before && (before.description ?? '') !== draft.description) await changeCollection(draft.number, { description: draft.description });
       this.closeOverlay();
-      this.afterKept(draft.number);
+      void this.afterKept(draft.number);
     } catch (error) {
       draft.busy = false;
       if (error instanceof Failed && (error.message === 'name-taken' || error.message === 'collection')) {
@@ -6115,7 +6135,7 @@ class Threads {
       return;
     }
     this.say(known.pinned ? `${known.name} unpinned. It's still in Collections.` : `${known.name} pinned to the menu.`, null);
-    this.afterKept(number);
+    void this.afterKept(number);
   }
 
   /** Saves the rule being typed: a title prefix, or none when empty. */
@@ -6141,14 +6161,14 @@ class Threads {
       return;
     }
     this.ruleDraft = null;
-    this.afterKept(collection.number);
+    void this.afterKept(collection.number);
     this.say(rule === null ? 'The rule is off. Threads join when you add them.' : `New threads titled “${rule} …” will join.`, async () => {
       try {
         await changeCollection(collection.number, { rule: before });
       } catch (error) {
         this.fail(error, "The rule wasn't put back.");
       }
-      this.afterKept(collection.number);
+      void this.afterKept(collection.number);
     });
   }
 
@@ -6165,7 +6185,7 @@ class Threads {
         el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'collection-delete-confirm' }, ['Delete it']),
       ]),
     ]);
-    focusIn(this.dialog, '[data-act="close"]');
+    focusIn(this.dialog, '.t-sheet-foot [data-act="close"]');
   }
 
   /** Deletes the collection shown, for good, and goes back to the room. */
@@ -7153,6 +7173,8 @@ class Threads {
     this.tab = tabOf(thread.status);
     this.only = null;
     this.from = 'list';
+    // A collection's rule may have kept it, so the rail's counts are read again.
+    void this.loadCollections();
     this.openThread(thread.number);
     this.say(`Started #${thread.number}`, null);
   }

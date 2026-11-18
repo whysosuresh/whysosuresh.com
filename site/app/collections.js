@@ -94,13 +94,12 @@ export function movedTo(place, count, way, far) {
 }
 
 /**
- * The bar above a thread opened from a collection: "3 of 6 in Every screen".
+ * Where a thread opened from a collection is in it, beside the collection's name on the bar above it: "3 of 6".
  * @param {number} at its place in the walk, from 0
  * @param {number} count
- * @param {string} name
  */
-export function walkLine(at, count, name) {
-  return `${at + 1} of ${count} in ${name}`;
+export function walkLine(at, count) {
+  return `${at + 1} of ${count}`;
 }
 
 /**
@@ -161,7 +160,7 @@ export function keptToast(number, name, kept) {
  * @param {number} count
  */
 export function deleteLine(name, count) {
-  const threads = count === 0 ? 'It holds no threads.' : `Its ${threadsLine(count).toLowerCase()} stay as they are, only no longer grouped here.`;
+  const threads = count === 0 ? 'It holds no threads.' : count === 1 ? 'Its one thread stays as it is, only no longer grouped here.' : `Its ${threadsLine(count)} stay as they are, only no longer grouped here.`;
   return `Delete ${name} for good? ${threads} This can't be undone.`;
 }
 

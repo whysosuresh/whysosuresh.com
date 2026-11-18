@@ -891,7 +891,6 @@ textarea.t-field { resize: vertical; line-height: 1.5; }
   .t-invite { grid-template-columns: minmax(0, 1fr); }
   .t-row { grid-template-columns: 32px minmax(0, 1fr); padding: 9px 12px; }
   .t-row-meta { grid-column: 2; }
-  .t-pin, .t-row-kept .t-icon-button { opacity: 1; }
   .t-thread { padding: 14px var(--gutter-r) 40px var(--gutter-l); }
   .t-title { font-size: 20px; }
   .t-editor { padding: 14px var(--gutter-r) 32px var(--gutter-l); }
@@ -1180,6 +1179,10 @@ a.t-pick { color: var(--ink); text-decoration: none; }
 .t-box .t-i { width: 12px; height: 12px; }
 .t-walk { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 12.5px; }
 .t-walk a { color: var(--ink); font-weight: 600; }
+/* A phone has no hover, so a row's pin and ⋯ always show there. */
+@media (max-width: 719px) {
+  .t-pin, .t-row-kept .t-icon-button { opacity: 1; }
+}
 
 @media (max-width: 719px) {
   .t-ask-row { grid-template-columns: minmax(0, 1fr); }
