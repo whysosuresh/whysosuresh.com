@@ -1,11 +1,12 @@
 // @ts-check
 // hey.whysosuresh.com: Suresh's threads, one page for all of them (site/threads/index.html, which the Worker hands
 // over on the threads' host at every room's address and every thread's). Its root, /, is the door everyone signed in
-// enters by, and the side rail is drawn for rooms, side by side at the top level: its head is the site, which leads
-// to the home page's host (site/hosts.js), then Today (/), Threads
-// (/threads/) with the five spaces under it, People (/people), Meetings (/meetings), Asks (/asks) and Journal
-// (/journal). On a phone the bar holds Today, Threads, Find, New and More, with People, Meetings, Asks and Journal
-// under More. His journal is his alone: the list of days week by week (/journal), a day or a week's chapter
+// enters by, and the menu down the left is drawn for rooms, side by side at the top level (site/app/rail.js lays it
+// out): its head is the site, which leads to the home page's host (site/hosts.js), with New beside it, then Find, then
+// Today (/), Threads (/threads/) and Distribution (/distribution), then Meetings (/meetings), Asks (/asks), People
+// (/people) and Journal (/journal), then the five spaces and his pinned collections as sections that fold, and at its
+// foot his name, which opens the account menu (Your photo, Keyboard shortcuts). On a phone the bar holds Today,
+// Threads, Find, New and More, with every other room under More in the menu's order. His journal is his alone: the list of days week by week (/journal), a day or a week's chapter
 // (/journal/2026-11-06, /journal/2026-W44) drawn from the page text the sync writes, read by site/app/journal.js,
 // with Edit for the whole text, saved on the version it was opened at (a save the sync overtook keeps his words in
 // the box and says so); the storylines' trail (/journal/storylines) and one storyline (/journal/storylines/the-demo);
@@ -220,6 +221,7 @@ import {
   todayLine,
   waitingActs,
 } from './distribution.js';
+import { FOLDED_KEY, MEETINGS_PATH, MORE_ROOMS, PEOPLE_ROOM, RAIL_WORDS, THREADS_PATH, TODAY_PATH, memberRail, ownerRail, phoneNote, readFolded, toggled } from './rail.js';
 import { addressOf, collectionInvitation, collectionPublicLines, collectionSeatsLine, collectionSeesLines, feedLines, invitation, invitationProblem, isAddress, levelOf, linkShown, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
 import { prepare as prepareBotCheck, sendTo } from '../talk-send.js';
 import {
@@ -338,7 +340,7 @@ import {
  * @typedef {{ to: string, subject: string, body: string }} Draft
  * @typedef {{ title: string, summary: string, body: string }} Editing
  * @typedef {{ title: string, space: string, status: 'received' | 'act' | 'discuss', body: string }} NewDraft
- * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share' | 'discussion' | 'meeting' | 'more' | 'photo' | 'keep' | 'kept-menu' | 'collection-edit' | 'collection-delete' | 'collection-share'} Overlay
+ * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share' | 'discussion' | 'meeting' | 'more' | 'photo' | 'account' | 'keep' | 'kept-menu' | 'collection-edit' | 'collection-delete' | 'collection-share'} Overlay
  * @typedef {{ number: number, people: Person[], count: number, email: string, name: string, problem: string, invited: { name: string, email: string } | null, busy: boolean }} CollectionSharing
  * @typedef {{ number: number, people: Person[], count: number, email: string, name: string, problem: string,
  *   invited: { name: string, email: string } | null, busy: boolean }} Sharing
@@ -423,15 +425,15 @@ const SHARED_PATH = /^\/threads\/([0-9a-f]{32})$/;
 /** A public collection's link, and one of its threads under it. */
 const PUBLIC_COLLECTION_PATH = /^\/collections\/([0-9a-f]{32})(?:\/([1-9]\d{0,8}))?$/;
 /** The door everyone signed in enters by: Today for him, their threads for a person he invited. */
-const ME = '/';
+const ME = TODAY_PATH;
 /** The home page, on its own host: where the site's name leads from every bar. */
 const HOME = `${homeOrigin(location.origin)}/`;
 /** The Threads room, its first tab and every space. */
-const THREADS = '/threads/';
+const THREADS = THREADS_PATH;
 /** The Meetings room: his meetings, or an invited person's own. */
-const MEETINGS = '/meetings';
+const MEETINGS = MEETINGS_PATH;
 /** The People room. */
-const PEOPLE = '/people';
+const PEOPLE = PEOPLE_ROOM;
 /** The Asks room: his links that ask a few questions, each answer a thread of its own. */
 const ASKS = ASKS_PATH;
 /** A journal entry's address: a day or a week by its key's shape (an impossible day says "Nothing here" itself). */
@@ -1024,6 +1026,30 @@ function avatar(who, name, photo = null) {
   return el('span', { class: 't-av', 'aria-hidden': 'true' }, [(name.trim().charAt(0) || '?').toUpperCase()]);
 }
 
+/**
+ * One row of the menu down the left, as site/app/rail.js lays it out: a room's icon, a space's square, a collection's
+ * stack or an open thread's mark first; then its name, cut short with the whole name on hover; then a grey count, or
+ * the pill that says someone waits. Its data attribute is the one the page's clicks already read for where it goes.
+ * @param {import('./rail.js').Row} row
+ */
+function navRow(row) {
+  const goes =
+    row.kind === 'room' ? { 'data-go': row.id } : row.kind === 'space' ? { 'data-space': row.id } : row.kind === 'collection' ? { 'data-collection': String(row.id) } : { 'data-thread': String(row.id) };
+  const lead = row.mark
+    ? el('span', { class: 't-nav-mark', 'data-status': row.mark.status, title: row.mark.words }, [el('span', { class: 'visually-hidden' }, [`${row.mark.words}: `])])
+    : row.kind === 'space'
+      ? el('span', { class: 't-nav-glyph', 'aria-hidden': 'true' })
+      : row.icon
+        ? icon(row.icon)
+        : el('span', { class: 't-nav-pad' });
+  const tail = row.badge
+    ? [el('span', { class: 't-nav-badge', title: row.badge.words }, [el('span', { 'aria-hidden': 'true' }, [String(row.badge.count)]), el('span', { class: 'visually-hidden' }, [row.badge.words])])]
+    : row.count !== null
+      ? [el('span', { class: 't-nav-count' }, [String(row.count)])]
+      : [];
+  return el('a', { class: 't-nav-item', href: row.href, title: row.label, ...goes, ...(row.current ? { 'aria-current': 'page' } : {}) }, [lead, el('span', { class: 't-nav-text' }, [row.label]), ...tail]);
+}
+
 /** Puts the focus in the element `selector` finds under `root`, when there is one. @param {ParentNode} root @param {string} selector */
 function focusIn(root, selector) {
   const found = root.querySelector(selector);
@@ -1228,6 +1254,12 @@ class Threads {
     this.ownerPhoto = null;
     /** @type {string | null} */
     this.myPhoto = null;
+    /** The name he gave an invited reader, which their menu's foot shows; null for him, or when he gave none. @type {string | null} */
+    this.myName = null;
+    /** The menu's sections this browser folded (site/app/rail.js), kept in it across visits. @type {string[]} */
+    this.foldedSections = keptFolded();
+    /** Who the menu's foot names, as the menu was last drawn. @type {import('./rail.js').Foot | null} */
+    this.foot = null;
     /** His photo sheet: a save on its way, and why the last one wasn't kept. */
     this.photoBusy = false;
     /** A run drawing preview cards, and whether another was asked for while it ran. */
@@ -1435,6 +1467,7 @@ class Threads {
       this.me = who.email ?? '';
       this.ownerPhoto = who.ownerPhoto ?? null;
       this.myPhoto = who.photo ?? null;
+      this.myName = who.name ?? null;
       if (this.caller === 'member' && isHis(route)) this.route = { view: 'today' };
       const person = this.caller === 'owner' && route.view === 'person' ? this.loadPerson(route.number) : Promise.resolve();
       const collection = this.route.view === 'collection' ? this.loadCollection(this.route.number) : Promise.resolve();
@@ -1654,37 +1687,38 @@ class Threads {
 
   /**
    * The parts of the page that are the owner's alone, hidden from a person he invited: New, the list's tab and the
-   * keys' owner sheet; the sidebar's foot names who is signed in.
+   * phone's More; the menu's foot names who is signed in, and opens the account menu for either.
    */
   applyCaller() {
-    if (!this.member) {
-      this.drawFoot();
-      return;
+    if (this.member) {
+      for (const owners of document.querySelectorAll('.t-side-new, .t-tabbar [data-go="list"], .t-tabbar [data-act="more"], .t-tabbar [data-act="new"]')) {
+        if (owners instanceof HTMLElement) owners.hidden = true;
+      }
+      for (const theirs of document.querySelectorAll('.t-tabbar [data-member]')) {
+        if (theirs instanceof HTMLElement) theirs.hidden = false;
+      }
+      const today = this.tabbar.querySelector('[data-go="today"]');
+      if (today) today.replaceChildren(icon('people'), 'Yours');
     }
-    for (const owners of document.querySelectorAll('.t-side-new, .t-tabbar [data-go="list"], .t-tabbar [data-act="more"], .t-tabbar [data-act="new"]')) {
-      if (owners instanceof HTMLElement) owners.hidden = true;
-    }
-    for (const theirs of document.querySelectorAll('.t-tabbar [data-member]')) {
-      if (theirs instanceof HTMLElement) theirs.hidden = false;
-    }
-    const today = this.tabbar.querySelector('[data-go="today"]');
-    if (today) today.replaceChildren(icon('people'), 'Yours');
-    const who = document.querySelector('.t-side-who');
-    if (who) who.replaceChildren(this.me, el('small', {}, ['Signed in']));
-    // Their foot names them; only his opens a photo sheet.
-    const mine = document.querySelector('.t-side-me');
-    if (mine) mine.replaceWith(el('span', { class: 't-side-me' }, [...mine.childNodes]));
-    this.drawFoot();
+    this.renderNav();
   }
 
-  /** The sidebar's foot: the photo, or the initial, of whoever is signed in. */
+  /** The menu's foot: the photo, or the initial, of whoever is signed in, their name and their role. */
   drawFoot() {
-    document.querySelector('.t-side-me .t-av')?.replaceWith(this.ownFace());
+    const me = document.querySelector('.t-side-me');
+    if (!(me instanceof HTMLElement)) return;
+    me.querySelector('.t-av')?.replaceWith(this.ownFace());
+    if (this.foot === null) return;
+    const who = me.querySelector('[data-who]');
+    const role = me.querySelector('[data-role]');
+    if (who) who.textContent = this.foot.name;
+    if (role) role.textContent = this.foot.role;
+    me.title = this.foot.name;
   }
 
-  /** The mark of whoever is signed in, beside what they are writing. */
+  /** The mark of whoever is signed in, beside what they are writing: an invited reader's initial from their name when he gave one. */
   ownFace() {
-    return this.member ? avatar('member', this.me, this.myPhoto) : avatar('owner', '', this.ownerPhoto);
+    return this.member ? avatar('member', this.myName?.trim() || this.me, this.myPhoto) : avatar('owner', '', this.ownerPhoto);
   }
 
   /** @param {number} number */
@@ -2224,111 +2258,114 @@ class Threads {
     if (this.sel === null || !list.includes(this.sel)) this.sel = list[0] ?? null;
   }
 
+  /**
+   * The menu down the left, as site/app/rail.js lays it out for whoever is signed in: its groups of rooms, then its
+   * sections, each a button that folds it, then the foot.
+   */
   renderNav() {
-    if (this.member) {
-      const item = el('a', { class: 't-nav-item', href: ME, 'data-go': 'today' }, [icon('people'), 'Yours', el('span', { class: 't-nav-count' }, [String(this.threads.size)])]);
-      if (this.route.view === 'today') item.setAttribute('aria-current', 'page');
-      const theirs = this.mine().map((thread) => {
-        const link = el('a', { class: 't-nav-item t-nav-sub', href: threadPath(thread), 'data-thread': String(thread.number) }, [
-          el('span', { class: 't-nav-pad' }),
-          el('span', { class: 't-nav-text' }, [`#${thread.number} ${titleOf(thread)}`]),
-        ]);
-        if (this.route.view === 'thread' && this.route.number === thread.number) link.setAttribute('aria-current', 'page');
-        return link;
-      });
-      const { coming } = this.meetings();
-      const meetings = el('a', { class: 't-nav-item', href: MEETINGS, 'data-go': 'meetings' }, [icon('cal'), 'Your meetings', el('span', { class: 't-nav-count' }, [String(coming.length)])]);
-      if (this.route.view === 'meetings') meetings.setAttribute('aria-current', 'page');
-      const kept = this.sharedCollections.map((one) => {
-        const link = el('a', { class: 't-nav-item t-nav-sub', href: collectionPath(one), 'data-collection': String(one.number) }, [
-          el('span', { class: 't-nav-pad' }),
-          el('span', { class: 't-nav-text' }, [one.name]),
-          el('span', { class: 't-nav-count' }, [String(one.threads)]),
-        ]);
-        if (this.route.view === 'collection' && this.route.number === one.number) link.setAttribute('aria-current', 'page');
-        return link;
-      });
-      this.nav.replaceChildren(el('div', { class: 't-nav-label' }, ['Shared with you, by Suresh']), item, ...kept, ...theirs, meetings);
-      return;
+    const rail = this.member ? memberRail(this.memberRailInput()) : ownerRail(this.ownerRailInput());
+    /** @type {HTMLElement[]} */
+    const parts = rail.groups.map((rows) => el('div', { class: 't-nav-group' }, rows.map(navRow)));
+    for (const section of rail.sections) {
+      parts.push(
+        el('button', { type: 'button', class: 't-nav-sec', 'data-act': 'section', 'data-section': section.id, 'aria-expanded': String(!section.folded), 'aria-controls': `rail-${section.id}` }, [
+          section.label,
+          icon('chev'),
+        ]),
+        el('div', { class: 't-nav-group', id: `rail-${section.id}` }, section.rows.map(navRow)),
+      );
     }
-    const counts = new Map();
-    for (const thread of this.threads.values()) if (isOpen(thread) && thread.space !== null) counts.set(thread.space, (counts.get(thread.space) ?? 0) + 1);
-    const view = this.route.view;
+    this.nav.replaceChildren(...parts);
+    this.foot = rail.foot;
+    this.drawFoot();
+  }
+
+  /** Where the reader is, as the menu reads it: the journal's every view is one. @returns {import('./rail.js').Here} */
+  railHere() {
+    const route = this.route;
+    return {
+      view: this.inJournal() ? 'journal' : route.view,
+      number: 'number' in route && typeof route.number === 'number' ? route.number : null,
+      space: route.view === 'list' ? this.space : null,
+    };
+  }
+
+  /** What his menu counts. @returns {import('./rail.js').OwnerInput} */
+  ownerRailInput() {
+    /** @type {Record<string, number>} */
+    const spaces = {};
+    for (const thread of this.threads.values()) if (isOpen(thread) && thread.space !== null) spaces[thread.space] = (spaces[thread.space] ?? 0) + 1;
     const waitingRooms = this.distributionWaiting();
-    const today = this.folded().length + this.fresh().length + this.sat().length + waitingRooms.length;
-    const todayItem = el('a', { class: 't-nav-item', href: ME, 'data-go': 'today' }, [icon('sun'), 'Today', el('span', { class: 't-nav-count' }, [String(today)])]);
-    const allItem = el('a', { class: 't-nav-item', href: THREADS, 'data-go': 'list' }, [icon('list'), 'Threads']);
-    const peopleItem = el('a', { class: 't-nav-item', href: PEOPLE, 'data-go': 'people' }, [
-      icon('person'),
-      'People',
-      el('span', { class: 't-nav-count' }, [String(folded(this.people).live.length)]),
-    ]);
-    if (view === 'people' || view === 'person') peopleItem.setAttribute('aria-current', 'page');
-    const meetingsItem = el('a', { class: 't-nav-item', href: MEETINGS, 'data-go': 'meetings' }, [icon('cal'), 'Meetings', el('span', { class: 't-nav-count' }, [String(this.meetings().coming.length)])]);
-    if (view === 'meetings') meetingsItem.setAttribute('aria-current', 'page');
-    const open = this.asks.filter((ask) => ask.state !== 'closed').length;
-    const asksItem = el('a', { class: 't-nav-item', href: ASKS, 'data-go': 'asks' }, [icon('ask'), 'Asks', el('span', { class: 't-nav-count' }, [String(open)])]);
-    if (view === 'asks') asksItem.setAttribute('aria-current', 'page');
-    const collectionsItem = el('a', { class: 't-nav-item', href: COLLECTIONS_PATH, 'data-go': 'collections' }, [icon('stack'), 'Collections', el('span', { class: 't-nav-count' }, [String(this.collectionsCount)])]);
-    if (view === 'collections') collectionsItem.setAttribute('aria-current', 'page');
-    // Only the pinned ones sit under it; every other is a search away in the room, so the menu stays short at hundreds.
-    const pinned = this.pins.map((one) => {
-      const item = el('a', { class: 't-nav-item t-nav-sub', href: collectionPath(one), 'data-collection': String(one.number) }, [
-        el('span', { class: 't-nav-pad' }),
-        el('span', { class: 't-nav-text' }, [one.name]),
-        el('span', { class: 't-nav-count' }, [String(one.threads)]),
-      ]);
-      if (view === 'collection' && this.route.view === 'collection' && this.route.number === one.number) item.setAttribute('aria-current', 'page');
-      return item;
-    });
-    const journalItem = el('a', { class: 't-nav-item', href: JOURNAL_PATH, 'data-go': 'journal' }, [icon('book'), 'Journal']);
-    if (this.inJournal()) journalItem.setAttribute('aria-current', 'page');
-    const waitingPeople = waitingRooms.reduce((sum, room) => sum + room.acts.length, 0);
-    const distributionItem = el('a', { class: 't-nav-item', href: DISTRIBUTION_PATH, 'data-go': 'distribution' }, [
-      icon('trend'),
-      'Distribution',
-      ...(waitingPeople > 0 ? [el('span', { class: 't-nav-count', title: 'Waiting on you' }, [String(waitingPeople)])] : []),
-    ]);
-    if (view === 'distribution') distributionItem.setAttribute('aria-current', 'page');
-    if (view === 'today') todayItem.setAttribute('aria-current', 'page');
-    if (view === 'list' && this.space === null) allItem.setAttribute('aria-current', 'page');
-    const spaces = SPACES.map((space) => {
-      const item = el('a', { class: 't-nav-item t-nav-sub', href: listPath(this.tab, this.only, space.slug), 'data-space': space.slug }, [
-        el('span', { class: 't-nav-pad' }),
-        space.label,
-        el('span', { class: 't-nav-count' }, [String(counts.get(space.slug) ?? 0)]),
-      ]);
-      if (view === 'list' && this.space === space.slug) item.setAttribute('aria-current', 'page');
-      return item;
-    });
-    // A space is a filter on the threads, so the five sit under Threads rather than beside the rooms.
-    this.nav.replaceChildren(todayItem, allItem, ...spaces, collectionsItem, ...pinned, peopleItem, meetingsItem, asksItem, journalItem, distributionItem);
+    return {
+      here: this.railHere(),
+      tab: this.tab,
+      only: this.only,
+      today: this.folded().length + this.fresh().length + this.sat().length + waitingRooms.length,
+      waiting: waitingRooms.reduce((sum, room) => sum + room.acts.length, 0),
+      meetings: this.meetings().coming.length,
+      asks: this.asks.filter((ask) => ask.state !== 'closed').length,
+      people: folded(this.people).live.length,
+      collections: this.collectionsCount,
+      spaces,
+      // Only the pinned ones sit in the menu; every other is a search away in the room, so the menu stays short at hundreds.
+      pinned: this.pins.map((one) => ({ number: one.number, name: one.name, threads: one.threads, href: collectionPath(one) })),
+      folded: this.foldedSections,
+    };
+  }
+
+  /** What an invited reader's menu shows. @returns {import('./rail.js').MemberInput} */
+  memberRailInput() {
+    return {
+      here: this.railHere(),
+      name: this.myName,
+      email: this.me,
+      shared: this.threads.size,
+      meetings: this.meetings().coming.length,
+      collections: this.sharedCollections.map((one) => ({ number: one.number, name: one.name, threads: one.threads, href: collectionPath(one) })),
+      threads: this.mine().map((thread) => ({ number: thread.number, status: thread.status, title: titleOf(thread), href: threadPath(thread) })),
+      folded: this.foldedSections,
+    };
+  }
+
+  /** Folds a section of the menu, or opens it again, and keeps that in this browser. @param {string} id */
+  foldSection(id) {
+    this.foldedSections = toggled(this.foldedSections, id);
+    keepFolded(this.foldedSections);
+    this.renderNav();
+    const button = this.nav.querySelector(`[data-section="${id}"]`);
+    if (button instanceof HTMLElement) button.focus();
+  }
+
+  /** The account menu above the menu's foot: who is signed in, then Your photo (his alone) and Keyboard shortcuts. */
+  openAccount() {
+    const foot = this.foot;
+    if (foot === null) return;
+    const rows = [
+      ...(this.member ? [] : [el('button', { type: 'button', class: 't-menu-row', 'data-act': 'photo' }, [icon('photo'), RAIL_WORDS.photo])]),
+      el('button', { type: 'button', class: 't-menu-row', 'data-act': 'keys' }, [icon('keys'), RAIL_WORDS.keys, kbd('?')]),
+    ];
+    this.openOverlay('account', RAIL_WORDS.account, 'menu', [el('div', { class: 't-menu-head' }, [el('b', {}, [foot.name]), el('small', {}, [foot.detail])]), el('div', { class: 't-menu-list' }, rows)]);
+    rows[0]?.focus();
   }
 
   renderTabbar() {
     const view = this.route.view === 'person' ? 'people' : this.route.view === 'collection' ? 'collections' : this.inJournal() ? 'journal' : this.route.view;
     for (const button of this.tabbar.querySelectorAll('[data-go], [data-act="more"]')) {
       if (!(button instanceof HTMLElement)) continue;
-      // People, Meetings, Asks and Journal sit under More on his bar, so More is where he is when he is in any of them.
-      const current =
-        button.dataset.act === 'more' ? view === 'people' || view === 'meetings' || view === 'asks' || view === 'journal' || view === 'collections' || view === 'distribution' : button.dataset.go === view;
+      // Every room but Today and Threads sits under More on his bar, so More is where he is when he is in any of them.
+      const current = button.dataset.act === 'more' ? MORE_ROOMS.some((room) => room.go === view) : button.dataset.go === view;
       if (current) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     }
   }
 
   /**
-   * The rooms that don't fit on his phone's bar, in a sheet: Collections, People, Meetings, Asks, Journal and Distribution; and his photo, whose
-   * sheet the sidebar's foot opens where there is a sidebar.
+   * The rooms that don't fit on his phone's bar, in a sheet, in the menu's order (`MORE_ROOMS`); and his photo, whose
+   * sheet the menu's account menu opens where there is a menu.
    */
   openMore() {
     const picks = [
-      el('a', { class: 't-pick', href: COLLECTIONS_PATH, 'data-go': 'collections' }, [icon('stack'), 'Collections']),
-      el('a', { class: 't-pick', href: PEOPLE, 'data-go': 'people' }, [icon('person'), 'People']),
-      el('a', { class: 't-pick', href: MEETINGS, 'data-go': 'meetings' }, [icon('cal'), 'Meetings']),
-      el('a', { class: 't-pick', href: ASKS, 'data-go': 'asks' }, [icon('ask'), 'Asks']),
-      el('a', { class: 't-pick', href: JOURNAL_PATH, 'data-go': 'journal' }, [icon('book'), 'Journal']),
-      el('a', { class: 't-pick', href: DISTRIBUTION_PATH, 'data-go': 'distribution' }, [icon('trend'), 'Distribution']),
+      ...MORE_ROOMS.map((room) => el('a', { class: 't-pick', href: room.href, 'data-go': room.go }, [icon(room.icon), room.label])),
       el('button', { type: 'button', class: 't-pick t-pick-photo', 'data-act': 'photo' }, [avatar('owner', '', this.ownerPhoto), PHOTO_SHEET.title]),
     ];
     this.openOverlay('more', 'More rooms', 'narrow', [this.sheetHead('More'), el('div', { class: 't-sheet-body' }, [el('div', { class: 't-pick-list' }, picks)])]);
@@ -5427,7 +5464,7 @@ class Threads {
   /**
    * @param {Overlay} overlay
    * @param {string} label
-   * @param {'narrow' | 'wide' | 'find' | 'form' | 'drawer'} kind
+   * @param {'narrow' | 'wide' | 'find' | 'form' | 'drawer' | 'menu'} kind
    * @param {(Node | string)[]} body
    */
   openOverlay(overlay, label, kind, body) {
@@ -5590,11 +5627,7 @@ class Threads {
       this.sheetHead('Keys'),
       el('div', { class: 't-sheet-body' }, [
         el('div', { class: 't-keys' }, groups),
-        el('p', { class: 't-note' }, [
-          this.member
-            ? 'Phones have no keys: the bar along the bottom holds your threads, your meetings and Find.'
-            : 'Phones have no keys: every move is a button on the thread, and the bar along the bottom holds Today, Threads, Find, New and More (People, Meetings).',
-        ]),
+        el('p', { class: 't-note' }, [phoneNote(this.member)]),
       ]),
     ]);
   }
@@ -8251,6 +8284,12 @@ class Threads {
       case 'more':
         this.openMore();
         break;
+      case 'account':
+        this.openAccount();
+        break;
+      case 'section':
+        this.foldSection(button.dataset.section ?? '');
+        break;
       case 'photo':
         this.photoProblem = '';
         this.openPhoto();
@@ -9038,6 +9077,24 @@ function signedInBefore() {
     return localStorage.getItem(SIGNED_IN_KEY) === '1';
   } catch {
     return false;
+  }
+}
+
+/** The menu's sections this browser folded; storage may be off, which reads as none. */
+function keptFolded() {
+  try {
+    return readFolded(localStorage.getItem(FOLDED_KEY));
+  } catch {
+    return [];
+  }
+}
+
+/** Keeps the menu's folded sections in this browser. @param {readonly string[]} folded */
+function keepFolded(folded) {
+  try {
+    localStorage.setItem(FOLDED_KEY, JSON.stringify(folded));
+  } catch {
+    // Storage may be off; the sections then open again on the next visit.
   }
 }
 

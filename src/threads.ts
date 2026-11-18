@@ -134,7 +134,7 @@ import { handleDistribution } from "./distribution.ts";
 import { collectionsFor, collectionsOf, searchCollections } from "./collections-store.ts";
 import { addCard, listCards } from "./cards.ts";
 import { handlePhoto } from "./photos.ts";
-import { ownerPhotoId, personPhotoId } from "./photos-store.ts";
+import { ownerPhotoId, personFace } from "./photos-store.ts";
 import { SLUG_SHAPE } from "./asks.ts";
 import { TOPICS } from "../site/talk-topics.js";
 import { sameOrigin } from "./request.ts";
@@ -439,12 +439,14 @@ function eventView(row: EventRow, reader: Reader): { readonly [key: string]: Jso
 
 /**
  * Who is calling, for the threads page: the caller, their address (none for the sync), his photo (`ownerPhoto`, which
- * his own and the sync's words show), and to an invited person their own photo.
+ * his own and the sync's words show), and to an invited person the name he gave them (null when he gave none) and
+ * their own photo, so the foot of their menu names them as everyone else on a thread reads them.
  */
 async function me(caller: Caller, env: Bindings): Promise<Response> {
   const ownerPhoto = await ownerPhotoId(env.DB);
   if (caller.caller !== "member") return json(200, { caller: caller.caller, email: caller.caller === "sync" ? null : caller.email, ownerPhoto });
-  return json(200, { caller: caller.caller, email: caller.email, ownerPhoto, photo: await personPhotoId(env.DB, caller.email) });
+  const face = await personFace(env.DB, caller.email);
+  return json(200, { caller: caller.caller, email: caller.email, name: face.name, ownerPhoto, photo: face.photo });
 }
 
 /** An invited person's threads: every one they are in, most recently active first. */

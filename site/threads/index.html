@@ -35,11 +35,10 @@
 <body class="threads">
   <div class="t-app" data-app hidden>
     <nav class="t-side" aria-label="whysosuresh.com">
-      <div class="t-side-head"><a class="t-brand" href="/" data-home>whysosuresh.com</a></div>
-      <button type="button" class="t-side-find" data-act="find"><span data-icon="search"></span>Find anything<kbd>⌘K</kbd></button>
+      <div class="t-side-head"><a class="t-brand" href="/" data-home>whysosuresh.com</a><button type="button" class="t-side-new" data-act="new" aria-label="New thread" title="New thread (N)"><span data-icon="compose"></span></button></div>
+      <button type="button" class="t-side-find" data-act="find"><span data-icon="search"></span><span class="t-side-find-text">Find anything</span><kbd>⌘K</kbd></button>
       <div class="t-nav" data-nav></div>
-      <button type="button" class="t-side-new" data-act="new"><span data-icon="plus"></span>New thread<kbd>N</kbd></button>
-      <div class="t-side-foot"><button type="button" class="t-side-me" data-act="photo" aria-haspopup="dialog" title="Your photo"><span class="t-av t-av-me">S</span><span class="t-side-who">Suresh<small>Signed in</small></span></button><button type="button" class="t-icon-button" data-act="keys" aria-label="Keys"><span data-icon="keys"></span></button></div>
+      <div class="t-side-foot"><button type="button" class="t-side-me" data-act="account" aria-haspopup="dialog"><span class="t-av t-av-me">S</span><span class="t-side-who"><b data-who>Suresh</b><small data-role>Owner</small></span><span data-icon="updown"></span></button></div>
     </nav>
     <div class="t-main" data-main tabindex="-1"></div>
     <nav class="t-tabbar" aria-label="Sections" data-tabbar>
@@ -105,6 +104,11 @@
     <svg class="t-i" data-name="space" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11Z"/></svg>
     <svg class="t-i" data-name="globe" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M1.5 8h13M8 1.5c1.8 1.9 2.7 4 2.7 6.5S9.8 12.6 8 14.5C6.2 12.6 5.3 10.5 5.3 8S6.2 3.4 8 1.5Z"/></svg>
     <svg class="t-i" data-name="person" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="5.5" r="3"/><path d="M2.5 14.5a5.5 5.5 0 0 1 11 0"/></svg>
+    <svg class="t-i" data-name="compose" viewBox="0 0 16 16" aria-hidden="true"><path d="M7.5 2.5H4A1.5 1.5 0 0 0 2.5 4v8A1.5 1.5 0 0 0 4 13.5h8a1.5 1.5 0 0 0 1.5-1.5V8.5"/><path d="M11.8 2.2a1.4 1.4 0 0 1 2 2L8.5 9.5 6 10l.5-2.5Z"/></svg>
+    <svg class="t-i" data-name="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="m5 6.5 3 3 3-3"/></svg>
+    <svg class="t-i" data-name="updown" viewBox="0 0 16 16" aria-hidden="true"><path d="m5 6 3-3 3 3M5 10l3 3 3-3"/></svg>
+    <svg class="t-i" data-name="inbox" viewBox="0 0 16 16" aria-hidden="true"><path d="m2 9 1.8-5.5h8.4L14 9v4H2Z"/><path d="M2 9h3.5l1 1.5h3L10.5 9H14"/></svg>
+    <svg class="t-i" data-name="photo" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3.5" width="12" height="9.5" rx="2"/><circle cx="8" cy="8.3" r="2.3"/></svg>
     <svg class="t-i" data-name="people" viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="5.5" r="2.5"/><path d="M1.5 13.5a4.5 4.5 0 0 1 9 0"/><circle cx="11.5" cy="6" r="2"/><path d="M11.2 9.6a3.6 3.6 0 0 1 3.3 3.9"/></svg>
   </template>
 </body>

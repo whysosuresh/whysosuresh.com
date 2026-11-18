@@ -373,7 +373,7 @@ describe("the wire", () => {
     const mine = (await answer<{ photo: string }>(await setPhoto(JPEG))).photo;
     const hers = await givePhoto(MEERA);
     expect(await me()).toEqual({ caller: "owner", email: "owner@example.com", ownerPhoto: mine });
-    expect(await me({ email: MEERA })).toEqual({ caller: "member", email: MEERA, ownerPhoto: mine, photo: hers });
+    expect(await me({ email: MEERA })).toEqual({ caller: "member", email: MEERA, name: "Meera", ownerPhoto: mine, photo: hers });
     expect((await me("sync")).ownerPhoto).toBe(mine);
   });
 

@@ -45,7 +45,8 @@
 // ("Design page:") keeps the six design pages seeded after it; "Every decision", pinned, holding 180 made-up settled
 // calls (two thirds of them done), enough for its search, its filter and its pages; "Talk material" with a few of the
 // seed's threads; and 41 more holding a handful of the decisions each, so the room pages and searches. Every screen is
-// shared with the guest, so `--member` shows it on their door beside the thread shared with them on its own. Talk
+// shared with the guest, so `--member` shows it on their door beside the threads shared with them on their own, three
+// of which (to do, new and dropped) are there so their menu shows every open thread's mark and leaves a dropped one out. Talk
 // material is public, its link printed at start, and holds a told thread and an ask's beside his own, which strangers
 // never read, so `--signed-out` shows what its link opens. Distribution's room as a few days of the sync's runs leave
 // it, for both products: platforms in every state with paces, acts of ours, made-up people who wrote to us (one still
@@ -154,6 +155,17 @@ async function seed(): Promise<void> {
   await asPerson(owner, `/${who}/comments`, { body: "Meera, would you own pricing?" });
   await new Promise((resolve) => setTimeout(resolve, 5));
   await asPerson(harness.access.memberClaims(guest), `/${who}/comments`, { body: "Happy to own pricing. I'll draft the tiers by Thursday." });
+  // Three more shared with the guest alone, one to do, one new and one dropped, so their menu shows a mark for every
+  // open status beside "Who owns what" (to discuss) and leaves the dropped one out.
+  for (const [ref, title, status] of [
+    ["chat:seed-guest-act", "The pricing tiers, drafted", "act"],
+    ["chat:seed-guest-new", "A name for the small-teams plan", "received"],
+    ["chat:seed-guest-dropped", "A second pricing call next week", "act"],
+  ] as const) {
+    const shared = await add(ref, { title, status, space: "stigmer", body: "Made up for the local look." });
+    await asPerson(owner, `/${shared}/people`, { add: { email: guest, name: "Meera" } });
+    if (ref === "chat:seed-guest-dropped") await asSync(`/${shared}`, { action: "drop", reason: "Said twice" });
+  }
 
   const database = await harness.db();
   /** A public thread's link key, the address strangers send its notes and answers to. */

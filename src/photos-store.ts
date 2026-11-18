@@ -26,9 +26,13 @@ export async function ownerPhotoId(db: D1Database): Promise<string | null> {
   return (await db.prepare(`SELECT ${OWNER_PHOTO} AS id`).first<{ id: string | null }>())?.id ?? null;
 }
 
-/** The photo of the person with this address, or null: an invited person's own, for who is calling. */
-export async function personPhotoId(db: D1Database, email: string): Promise<string | null> {
-  return (await db.prepare("SELECT photo_id FROM people WHERE email = ?1").bind(email).first<{ photo_id: string | null }>())?.photo_id ?? null;
+/**
+ * How the person with this address is shown to themselves, for who is calling: the name he gave them and their photo,
+ * each null when there is none.
+ */
+export async function personFace(db: D1Database, email: string): Promise<{ name: string | null; photo: string | null }> {
+  const row = await db.prepare("SELECT name, photo_id FROM people WHERE email = ?1").bind(email).first<{ name: string | null; photo_id: string | null }>();
+  return { name: row?.name ?? null, photo: row?.photo_id ?? null };
 }
 
 /** A photo shown now, by its id; null when there is none. */
