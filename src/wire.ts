@@ -11,6 +11,11 @@ import type { Attendee, Meeting, Move, NewThread } from "./store.ts";
 
 /** A move is one small JSON object; anything larger is refused before it is read. */
 export const MAX_CHANGE_BYTES = 1024;
+/**
+ * The largest distribution act (src/distribution.ts): two addresses of at most 2,048 characters each (a LinkedIn
+ * post's runs past 200), its one-line words and the rest, which a move's 1 KiB can't hold.
+ */
+export const MAX_ACT_BYTES = 4 * 1024;
 /** The longest body an add or a comment carries, in UTF-16 code units of the trimmed text: a moved issue with its comments. */
 export const MAX_BODY = 32_000;
 /**
@@ -265,7 +270,7 @@ export const MAX_WHERE = 200;
  * A day as `YYYY-MM-DD` when it is one on the calendar, in the years a meeting may be in; null otherwise. Date
  * itself would take 30 February as 2 March without a word, so the day must come back from Date unchanged.
  */
-function calendarDay(value: string): string | null {
+export function calendarDay(value: string): string | null {
   const day = DAY_SHAPE.exec(value);
   if (day === null) return null;
   const year = Number(day[1]);
@@ -282,6 +287,15 @@ function calendarDay(value: string): string | null {
 function meetingWhen(value: unknown): string | null {
   if (typeof value !== "string") return null;
   if (DAY_SHAPE.test(value)) return calendarDay(value);
+  return momentOf(value);
+}
+
+/**
+ * A moment with its zone, as its instant in UTC (`YYYY-MM-DDTHH:MM:SS.sssZ`), in the years a meeting may be in; null
+ * for anything else, a day alone included: a meeting's time, and when a distribution act happened.
+ */
+export function momentOf(value: unknown): string | null {
+  if (typeof value !== "string") return null;
   const moment = INSTANT_SHAPE.exec(value);
   if (moment === null) return null;
   const [, day = "", hours = "", minutes = "", seconds = "0", offsetHours = "0", offsetMinutes = "0"] = moment;

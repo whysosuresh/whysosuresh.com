@@ -404,8 +404,11 @@ export interface NewThread {
 /** The number the next person gets: one more than the largest, given inside their INSERT, as a thread's is. */
 export const NEXT_PERSON = "(SELECT COALESCE(MAX(number), 0) + 1 FROM people)";
 
-/** Who a new thread is from, as the store finds them: by a typed address, by the sync's number, by a told name, or no one. */
-type Sender =
+/**
+ * Who a write names, as the store finds them: by a typed address, by the sync's number, by a told name, or no one. A
+ * new thread's sender, and the person a distribution act was with (src/distribution-store.ts), are found this way.
+ */
+export type Sender =
   | { readonly by: "email"; readonly email: string; readonly name: string | null }
   | { readonly by: "number"; readonly number: number }
   | { readonly by: "name"; readonly name: string }
@@ -428,7 +431,7 @@ function sameName(column: string, name: string, p: Params): string {
  * nothing is made), run first, and the SQL expression for their id, bound into the write itself. `when` is a
  * condition the write needs, so nobody is made for a write that isn't kept.
  */
-function personOf(db: D1Database, sender: Sender, now: string, when: (p: Params) => string, into: Params): { make: D1PreparedStatement | null; id: string } {
+export function personOf(db: D1Database, sender: Sender, now: string, when: (p: Params) => string, into: Params): { make: D1PreparedStatement | null; id: string } {
   if (sender === null) return { make: null, id: "NULL" };
   if (sender.by === "number") return { make: null, id: `(SELECT id FROM people WHERE number = ${into.add(sender.number)})` };
   const id = crypto.randomUUID();
@@ -1732,11 +1735,14 @@ export interface PeopleRow {
   met: number;
   /** The collections shared with them now (migrations/0024_collection_members.sql). */
   collections: number;
-  /** The latest of when they appeared, their threads and notes, their invitations, and their meetings that have begun. */
+  /** The distribution acts that name them, voided ones left out (migrations/0026_distribution.sql). */
+  acted: number;
+  /** The latest of when they appeared, their threads and notes, their invitations, their meetings that have begun, and their acts. */
   last_contact: string;
   /**
    * 1 while anything of theirs is live: a thread from them that isn't dropped, an invitation that stands or one to a
-   * thread that isn't dropped, a comment or note of theirs that isn't dropped on such a thread, or a meeting on one.
+   * thread that isn't dropped, a comment or note of theirs that isn't dropped on such a thread, a meeting on one, or
+   * a distribution act that isn't voided.
    * A person with none was only ever in threads he dropped, which the page folds away.
    */
   live: number;
@@ -1757,11 +1763,13 @@ const PEOPLE_COLUMNS = `people.id, people.number, people.email, people.name, peo
   (SELECT COUNT(*) FROM comments WHERE comments.person_id = people.id AND comments.author = 'visitor') AS noted,
   (SELECT COUNT(*) FROM attendees WHERE attendees.person_id = people.id) AS met,
   (SELECT COUNT(*) FROM collection_members WHERE collection_members.person_id = people.id AND collection_members.removed_at IS NULL) AS collections,
+  (SELECT COUNT(*) FROM distribution_acts WHERE distribution_acts.person_id = people.id AND distribution_acts.voided_at IS NULL) AS acted,
   MAX(people.created_at,
     COALESCE((SELECT MAX(created_at) FROM threads WHERE threads.person_id = people.id), ''),
     COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.person_id = people.id), ''),
     COALESCE((SELECT MAX(added_at) FROM members WHERE members.person_id = people.id), ''),
     COALESCE((SELECT MAX(added_at) FROM collection_members WHERE collection_members.person_id = people.id), ''),
+    COALESCE((SELECT MAX(at) FROM distribution_acts WHERE distribution_acts.person_id = people.id AND distribution_acts.voided_at IS NULL), ''),
     COALESCE((SELECT MAX(threads.meeting_when) FROM attendees JOIN threads ON threads.id = attendees.thread_id
               WHERE attendees.person_id = people.id AND threads.meeting_when <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), '')) AS last_contact,
   (EXISTS (SELECT 1 FROM threads WHERE threads.person_id = people.id AND threads.status <> 'dropped')
@@ -1771,7 +1779,8 @@ const PEOPLE_COLUMNS = `people.id, people.number, people.email, people.name, peo
     OR EXISTS (SELECT 1 FROM comments JOIN threads ON threads.id = comments.thread_id
                WHERE comments.person_id = people.id AND comments.state <> 'dropped' AND threads.status <> 'dropped')
     OR EXISTS (SELECT 1 FROM attendees JOIN threads ON threads.id = attendees.thread_id
-               WHERE attendees.person_id = people.id AND threads.status <> 'dropped')) AS live`;
+               WHERE attendees.person_id = people.id AND threads.status <> 'dropped')
+    OR EXISTS (SELECT 1 FROM distribution_acts WHERE distribution_acts.person_id = people.id AND distribution_acts.voided_at IS NULL)) AS live`;
 
 /** The people order: whoever was last in touch first. */
 const PEOPLE_ORDER = "ORDER BY last_contact DESC, people.number DESC";

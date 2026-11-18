@@ -16,6 +16,8 @@
 // back to one, byte for byte. His collections (src/collections.ts), the named sets he keeps threads in, are listed,
 // read, made and changed by number: a thread kept, taken out or moved to a place, a rule set or cleared, a collection
 // pinned or renamed; sharing one and making it public have no verb, because they are his own acts, from his page.
+// Distribution (src/distribution.ts) is read as a product's room, and written as a distribution run ends: its acts from
+// stdin, one JSON object a line and one call each, a wrong act voided by its id, a platform's state, and a week's numbers.
 // This module is the logic, with fetch, the environment and
 // the streams handed in, so the tests drive it with a played fetch; tools/inbox/inbox.ts is the entry point
 // that hands it the real ones.
@@ -47,6 +49,16 @@ const ASKS = "/threads/api/asks";
 const COLLECTIONS = "/threads/api/collections";
 /** Where the journal's calls live. */
 const JOURNAL = "/threads/api/journal";
+/** Where distribution's calls live. */
+const DISTRIBUTION = "/threads/api/distribution";
+/** The products with a distribution, as the Worker names them. */
+const PRODUCTS = ["stigmer", "capsjump"];
+/** An act's id, as its write answered it. */
+const ACT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** An ISO week, as a reading names it: 2026-W47; the Worker refuses one that isn't real. */
+const WEEK_SHAPE = /^\d{4}-W\d{2}$/;
+/** A reading's value as typed: a whole number from 0. */
+const VALUE_SHAPE = /^(?:0|[1-9]\d{0,11})$/;
 /** A journal entry's key: a day (2026-11-06) or an ISO week (2026-W44); the Worker refuses one that isn't real. */
 const KEY_SHAPE = /^\d{4}-(?:\d{2}-\d{2}|W\d{2})$/;
 const DAY_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
@@ -129,6 +141,23 @@ export const USAGE = `Usage: inbox <verb> [arguments]
   journal photo-read <id> <file>  the photo's bytes written to the file, as uploaded
   journal answers <day>           the answers typed to the day's question, oldest first; the newest is the answer
   journal storylines              every storyline's trail across the days, one JSON line each
+  distribution [--product <stigmer|capsjump>] [--since <day>]
+                                  the product's room as one JSON line (stigmer when not named): its platforms, its
+                                  acts since the day (35 days back when not named, 90 at most), newest first, its
+                                  readings of the last 12 weeks, the open threads of the Distribution collection
+                                  in its space, and the newest Engage log thread
+  acts                            acts from stdin, one JSON object per line ({"ref", "at", "product", "platform",
+                                  "kind", "line"}, and "audience", "url", "conversation", "person" when known; a
+                                  person is a number or {"name"}); one call and one result line each; an act
+                                  whose ref is already there is answered as it stands, with status 200
+  act <id> --void                 the act voided: it stays in the log, and no read or count shows it
+  platform <stigmer|capsjump> <platform> --state <active|warming|hold|later> [--note <text>] [--until <day>]
+                                  [--pace <n>]
+                                  where the platform stands now, replacing what it was (a flag left out clears
+                                  it); the change is written as an event act too
+  readings <stigmer|capsjump> <week> --<metric> <value>...
+                                  the week's numbers (2026-W47), one flag each (--outside-stars 4 is the metric
+                                  outside_stars); a second reading that week replaces the first
 
 The service token's secret is read from ${SECRET_VARIABLE}; the client id from wrangler.jsonc.
 Exit status: 0 when every request was answered as asked, 1 on any refusal, 2 on a usage error.
@@ -138,7 +167,7 @@ Exit status: 0 when every request was answered as asked, 1 on any refusal, 2 on 
 export interface Io {
   readonly fetch: (url: string, init: RequestInit) => Promise<Response>;
   readonly env: Readonly<Record<string, string | undefined>>;
-  /** The whole of stdin, read only by `add`, `comment` and `edit`. */
+  /** The whole of stdin, read only by `add`, `acts`, `comment`, `edit` and `journal write`. */
   readonly stdin: () => Promise<string>;
   /** A file's bytes, read only by `page` and `journal photo`; throws when it can't be read. */
   readonly readFile: (path: string) => Uint8Array;
@@ -660,6 +689,103 @@ async function photoRead(io: Io, secret: string, id: string, file: string): Prom
   io.out(JSON.stringify({ id, type, bytes: bytes.byteLength }));
   return 0;
 }
+/** The flag after `--product` or `--since`, one each at most. */
+function distributionQuery(args: readonly string[]): URLSearchParams {
+  const query = new URLSearchParams({ product: "stigmer" });
+  const seen = new Set<string>();
+  for (let i = 0; i < args.length; i += 2) {
+    const flag = args[i] ?? "";
+    const value = args[i + 1];
+    if ((flag !== "--product" && flag !== "--since") || value === undefined || seen.has(flag)) throw new Usage("distribution takes --product <stigmer|capsjump> and --since <day>, each at most once");
+    if (flag === "--product" && !PRODUCTS.includes(value)) throw new Usage(`distribution: --product is one of ${PRODUCTS.join(", ")}`);
+    if (flag === "--since" && !DAY_SHAPE.test(value)) throw new Usage("distribution: --since takes a day, such as 2026-11-12");
+    seen.add(flag);
+    query.set(flag.slice(2), value);
+  }
+  return query;
+}
+
+/** A product's room, as one line. */
+async function distribution(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const query = distributionQuery(args);
+  return report(io, "distribution", await call(io, secret, `${DISTRIBUTION}?${query.toString()}`, { method: "GET" }), null);
+}
+
+/** Acts from stdin, one JSON object a line, one call each; one result line each, as `add` answers threads. */
+async function acts(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  if (args.length > 0) throw new Usage("acts takes its acts on stdin, one JSON object per line");
+  const lines = (await io.stdin()).split("\n");
+  let failed = false;
+  let any = false;
+  for (const [index, text] of lines.entries()) {
+    if (text.trim() === "") continue;
+    any = true;
+    const line = index + 1;
+    try {
+      JSON.parse(text);
+    } catch {
+      io.out(JSON.stringify({ line, status: 0, reason: "not-json" }));
+      failed = true;
+      continue;
+    }
+    const answer = await call(io, secret, `${DISTRIBUTION}/acts`, { method: "POST", body: text });
+    if (answer.status === 200 || answer.status === 201) {
+      io.out(JSON.stringify({ line, status: answer.status, act: answer.body.act ?? null }));
+    } else {
+      io.out(JSON.stringify({ line, status: answer.status, reason: reasonOf(answer) }));
+      failed = true;
+    }
+  }
+  if (!any) throw new Usage("acts read no acts on stdin");
+  return failed ? 1 : 0;
+}
+
+/** A wrong act voided by its id. */
+async function act(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const [id, flag, ...rest] = args;
+  if (id === undefined || !ACT_ID.test(id) || flag !== "--void" || rest.length > 0) throw new Usage("act takes an act's id and --void");
+  return report(io, "act", await call(io, secret, `${DISTRIBUTION}/acts/${id}/void`, { method: "POST" }), "act");
+}
+
+/** The flags `platform` takes, each with a value, and the key each fills. */
+const PLATFORM_FLAGS: Record<string, string> = { "--state": "state", "--note": "note", "--until": "until", "--pace": "pace" };
+
+/** Where a product's platform stands, every field sent: a flag left out sends null, which clears it. */
+async function platform(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const [product, slug, ...rest] = args;
+  if (product === undefined || !PRODUCTS.includes(product) || slug === undefined || slug.startsWith("--")) {
+    throw new Usage(`platform takes a product (${PRODUCTS.join(", ")}), a platform and --state <state>`);
+  }
+  const change: Record<string, string | number | null> = { state: null, note: null, until: null, pace: null };
+  for (let i = 0; i < rest.length; i += 2) {
+    const key = PLATFORM_FLAGS[rest[i] ?? ""];
+    const value = rest[i + 1];
+    if (key === undefined || value === undefined) throw new Usage(`platform: unknown flag or missing value at ${rest[i] ?? ""}`);
+    if (key === "pace") {
+      if (!NUMBER_SHAPE.test(value)) throw new Usage("platform: --pace takes a whole number of acts a week, 1 to 14");
+      change.pace = Number(value);
+    } else change[key] = value;
+  }
+  if (change.state === null) throw new Usage("platform takes --state <active|warming|hold|later>");
+  return report(io, "platform", await call(io, secret, `${DISTRIBUTION}/platforms/${product}/${slug}`, { method: "POST", body: JSON.stringify(change) }), "platform");
+}
+
+/** A week's numbers, one flag a metric. */
+async function readings(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const [product, week, ...rest] = args;
+  if (product === undefined || !PRODUCTS.includes(product) || week === undefined || !WEEK_SHAPE.test(week) || rest.length === 0 || rest.length % 2 !== 0) {
+    throw new Usage(`readings takes a product (${PRODUCTS.join(", ")}), a week such as 2026-W47, and --<metric> <value> at least once`);
+  }
+  const values: Record<string, number> = {};
+  for (let i = 0; i < rest.length; i += 2) {
+    const flag = rest[i] ?? "";
+    const value = rest[i + 1] ?? "";
+    if (!/^--[a-z][a-z0-9-]*$/.test(flag) || !VALUE_SHAPE.test(value)) throw new Usage(`readings: --<metric> takes a whole number, at ${flag}`);
+    values[flag.slice(2).replaceAll("-", "_")] = Number(value);
+  }
+  return report(io, "readings", await call(io, secret, `${DISTRIBUTION}/readings/${product}/${week}`, { method: "POST", body: JSON.stringify(values) }), null);
+}
+
 /** Runs one command line; answers the exit status. */
 export async function run(argv: readonly string[], io: Io): Promise<number> {
   const [verb, ...args] = argv;
@@ -690,6 +816,11 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     if (verb === "collections") return await collections(io, secret, args);
     if (verb === "collection") return await collection(io, secret, args);
     if (verb === "journal") return await journal(io, secret, args);
+    if (verb === "distribution") return await distribution(io, secret, args);
+    if (verb === "acts") return await acts(io, secret, args);
+    if (verb === "act") return await act(io, secret, args);
+    if (verb === "platform") return await platform(io, secret, args);
+    if (verb === "readings") return await readings(io, secret, args);
     throw new Usage(`unknown verb: ${verb}`);
   } catch (error) {
     if (error instanceof Usage) {

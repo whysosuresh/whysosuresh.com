@@ -32,7 +32,9 @@
 // there are none yet; a name is kept once ignoring case, a thread once per collection, each row names a collection
 // and a thread that are there, and a deleted collection's number is never given again. For 0024, collections shared
 // with people: nobody is invited to one yet, and an invitation names a collection and a person that are there, once.
-// For 0025, public collections: every collection starts private with no key, and a key is kept once.
+// For 0025, public collections: every collection starts private with no key, and a key is kept once. For 0026,
+// distribution: it starts empty; an act's origin is kept once, its person is one that is there, and a product, a kind,
+// an audience, a state, a pace or a reading outside its set is refused; a platform and a week's metric are one row each.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -760,5 +762,39 @@ describe("0025, public collections", () => {
     ]);
     await database.prepare("UPDATE collections SET share_key = ?1 WHERE number = 1").bind("c".repeat(32)).run();
     await expect(database.prepare("UPDATE collections SET share_key = ?1 WHERE number = 2").bind("c".repeat(32)).run()).rejects.toThrow(/UNIQUE/);
+  });
+});
+
+describe("0026, distribution", () => {
+  it("starts empty, keeps an act's origin once and its person one that is there, refuses what is outside each set, and keeps one row a platform and a week's metric", async () => {
+    harness = await startHarness({ through: "0025" });
+    const database = await harness.db();
+    await database.prepare("INSERT INTO people (id, number, email, name, created_at) VALUES ('p1', 1, NULL, 'Someone', '2026-11-18T00:00:00.000Z')").run();
+    await harness.migrate();
+    for (const table of ["distribution_acts", "distribution_platforms", "distribution_readings"]) {
+      expect(await database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>()).toEqual({ n: 0 });
+    }
+    const act = (id: string, ref: string, fields: { product?: string; kind?: string; audience?: string | null; person?: string | null } = {}): Promise<unknown> =>
+      database
+        .prepare("INSERT INTO distribution_acts (id, ref, at, product, platform, kind, audience, person_id, line, created_at) VALUES (?1, ?2, '2026-11-18T01:00:00.000Z', ?3, 'bluesky', ?4, ?5, ?6, 'Replied.', '2026-11-18T01:00:00.000Z')")
+        .bind(id, ref, fields.product ?? "stigmer", fields.kind ?? "reply", fields.audience ?? null, fields.person ?? null)
+        .run();
+    await act("a1", "engage:1", { person: "p1", audience: "peer" });
+    await expect(act("a2", "engage:1")).rejects.toThrow(/UNIQUE/);
+    await expect(act("a3", "engage:3", { person: "nobody" })).rejects.toThrow(/FOREIGN KEY/);
+    await expect(act("a4", "engage:4", { product: "feed-said-so" })).rejects.toThrow(/CHECK/);
+    await expect(act("a5", "engage:5", { kind: "like" })).rejects.toThrow(/CHECK/);
+    await expect(act("a6", "engage:6", { audience: "friend" })).rejects.toThrow(/CHECK/);
+    const platform = (state: string, pace: number | null): Promise<unknown> =>
+      database.prepare("INSERT INTO distribution_platforms (product, platform, state, pace_per_week, changed_at) VALUES ('stigmer', 'reddit', ?1, ?2, '2026-11-18T01:00:00.000Z')").bind(state, pace).run();
+    await expect(platform("banned", null)).rejects.toThrow(/CHECK/);
+    await expect(platform("active", 15)).rejects.toThrow(/CHECK/);
+    await platform("hold", null);
+    await expect(platform("active", 3)).rejects.toThrow(/UNIQUE|PRIMARY KEY/);
+    const reading = (value: number): Promise<unknown> =>
+      database.prepare("INSERT INTO distribution_readings (product, metric, week, value, read_at) VALUES ('stigmer', 'outside_stars', '2026-W47', ?1, '2026-11-18T01:00:00.000Z')").bind(value).run();
+    await expect(reading(-1)).rejects.toThrow(/CHECK/);
+    await reading(4);
+    await expect(reading(5)).rejects.toThrow(/UNIQUE|PRIMARY KEY/);
   });
 });
