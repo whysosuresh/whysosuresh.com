@@ -28,7 +28,9 @@
 // own 32-character key and keeps its number open for strangers, while a private one, one taken back, a site note made
 // public by hand and an ask get neither, and no two threads share a key; the old public thread then opens by both. For
 // 0022, preview cards: no thread has one yet, so every public thread's preview shows the site's card; a card names a
-// thread that is there, a thread has at most one, and a card's id and object are each kept once.
+// thread that is there, a thread has at most one, and a card's id and object are each kept once. For 0023, collections:
+// there are none yet; a name is kept once ignoring case, a thread once per collection, each row names a collection
+// and a thread that are there, and a deleted collection's number is never given again.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -695,5 +697,29 @@ describe("0022, preview cards", () => {
     await database.prepare("INSERT INTO threads (id, number, created_at, source, body, status) VALUES ('t2', 2, '2026-11-01T00:00:00.000Z', 'self', 'x', 'act')").run();
     await expect(card("t2", "a", "cards/c.png")).rejects.toThrow(/UNIQUE/);
     await expect(card("t2", "c", "cards/a.png")).rejects.toThrow(/UNIQUE/);
+  });
+});
+
+describe("0023, collections", () => {
+  it("starts with none, keeps a name once ignoring case, a thread once per collection, and never a number twice", async () => {
+    harness = await startHarness({ through: "0022" });
+    const database = await harness.db();
+    await database.prepare("INSERT INTO threads (id, number, created_at, source, body, status) VALUES ('t1', 1, '2026-11-01T00:00:00.000Z', 'self', 'x', 'act')").run();
+    await harness.migrate();
+    expect(await database.prepare("SELECT COUNT(*) AS n FROM collections").first<{ n: number }>()).toEqual({ n: 0 });
+    const make = (name: string): Promise<{ number: number } | null> =>
+      database.prepare("INSERT INTO collections (name, changed_at, created_at) VALUES (?1, '2026-11-02T00:00:00.000Z', '2026-11-02T00:00:00.000Z') RETURNING number").bind(name).first<{ number: number }>();
+    expect(await make("Every screen")).toEqual({ number: 1 });
+    await expect(make("every SCREEN")).rejects.toThrow(/UNIQUE/);
+    expect(await make("Story deck")).toEqual({ number: 2 });
+    const keep = (collection: number, thread: string): Promise<unknown> =>
+      database.prepare("INSERT INTO collection_threads (collection_number, thread_id, position, added_at) VALUES (?1, ?2, 0, '2026-11-03T00:00:00.000Z')").bind(collection, thread).run();
+    await expect(keep(9, "t1")).rejects.toThrow(/FOREIGN KEY/);
+    await expect(keep(1, "none-such")).rejects.toThrow(/FOREIGN KEY/);
+    await keep(1, "t1");
+    await expect(keep(1, "t1")).rejects.toThrow(/UNIQUE/);
+    await keep(2, "t1");
+    await database.batch([database.prepare("DELETE FROM collection_threads WHERE collection_number = 2"), database.prepare("DELETE FROM collections WHERE number = 2")]);
+    expect(await make("Third")).toEqual({ number: 3 });
   });
 });

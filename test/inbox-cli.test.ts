@@ -7,7 +7,9 @@
 // the first refusal; every ask listed, a draft made from a thread under a slug, and an ask closed, with no verb that
 // opens one; the journal read, written on the version it was built on (a stale save printing the newest version and
 // exiting non-zero), a photo uploaded by its file's type and read back to a file byte for byte, a day's answers and the
-// storylines; the Worker's refusals and the edge's passed through with a
+// storylines; collections listed through every page or found by words, one read with every thread through its pages,
+// made, and changed one call per flag (keep, take out, move to a place, a rule set or cleared, pinned, renamed,
+// described), stopping at the first refusal, with no verb that shares one or makes it public; the Worker's refusals and the edge's passed through with a
 // non-zero exit; usage errors; and the secret in no line it prints. One run of the real entry point as a child
 // process proves Node runs the TypeScript as it is.
 
@@ -531,6 +533,112 @@ describe("asks", () => {
       expect(sent).toEqual([]);
     }
     expect(USAGE).not.toMatch(/--open/);
+  });
+});
+
+const COLLECTIONS = `${ORIGIN}/threads/api/collections`;
+const SET = { number: 3, name: "Every screen", description: null, rule: null, pinned: false, threads: 2 };
+
+describe("collections", () => {
+  it("prints the pinned ones, then every page of the rest, one line each", async () => {
+    const pinned = { ...SET, number: 1, pinned: true };
+    const { io, sent, out } = client([
+      { status: 200, body: { pinned: [pinned], collections: [SET], next: 3, count: 2 } },
+      { status: 200, body: { pinned: [pinned], collections: [{ ...SET, number: 2 }], next: null, count: 2 } },
+    ]);
+    expect(await run(["collections"], io)).toBe(0);
+    expect(sent.map((one) => [one.method, one.url])).toEqual([
+      ["GET", COLLECTIONS],
+      ["GET", `${COLLECTIONS}?after=3`],
+    ]);
+    expect(out.map((line) => (JSON.parse(line) as { number: number }).number)).toEqual([1, 3, 2]);
+  });
+
+  it("finds by words", async () => {
+    const { io, sent, out } = client([{ status: 200, body: { pinned: [], collections: [SET], next: null, count: 1 } }]);
+    expect(await run(["collections", "--find", "every screen"], io)).toBe(0);
+    expect(sent.map((one) => one.url)).toEqual([`${COLLECTIONS}?q=every+screen`]);
+    expect(out).toHaveLength(1);
+  });
+
+  it.each([[["collections", "--find"]], [["collections", "--find", " "]], [["collections", "all"]]])("is a usage error for %j, sending nothing", async (argv) => {
+    const { io, sent } = client([]);
+    expect(await run(argv, io)).toBe(2);
+    expect(sent).toEqual([]);
+  });
+});
+
+describe("collection", () => {
+  it("reads one with every thread in it, following its pages", async () => {
+    const { io, sent, out } = client([
+      { status: 200, body: { collection: SET, threads: [{ ...THREAD, place: 1 }], next: 1, count: 2 } },
+      { status: 200, body: { collection: SET, threads: [{ ...THREAD, number: 43, place: 2 }], next: null, count: 2 } },
+    ]);
+    expect(await run(["collection", "3"], io)).toBe(0);
+    expect(sent.map((one) => one.url)).toEqual([`${COLLECTIONS}/3`, `${COLLECTIONS}/3?after=1`]);
+    const printed = JSON.parse(out[0] ?? "null") as { collection: unknown; threads: { number: number }[] };
+    expect([printed.collection, printed.threads.map((t) => t.number)]).toEqual([SET, [42, 43]]);
+  });
+
+  it("makes one, with a description", async () => {
+    const { io, sent, out } = client([{ status: 201, body: { collection: SET } }]);
+    expect(await run(["collection", "new", "Every screen", "--description", "Design pages."], io)).toBe(0);
+    expect(sent.map((one) => [one.method, one.url, one.body && JSON.parse(one.body)])).toEqual([["POST", COLLECTIONS, { name: "Every screen", description: "Design pages." }]]);
+    expect(out.map((line) => JSON.parse(line))).toEqual([SET]);
+  });
+
+  it("sends one change per flag in the order given, and prints the collection after the last", async () => {
+    const after = { ...SET, rule: "Design page:", pinned: true };
+    const replies: Reply[] = Array.from({ length: 8 }, () => ({ status: 200, body: { collection: SET, place: 1 } }));
+    replies.push({ status: 200, body: { collection: after } });
+    const { io, sent, out } = client(replies);
+    const argv = ["collection", "3", "--add", "52", "--add", "53", "--move", "53", "--to", "1", "--remove", "52", "--rule", "Design page:", "--no-rule", "--name", "Screens", "--description", "", "--pin"];
+    expect(await run(argv, io)).toBe(0);
+    expect(sent.map((one) => [one.url, one.body && JSON.parse(one.body)])).toEqual([
+      [`${COLLECTIONS}/3/threads`, { add: 52 }],
+      [`${COLLECTIONS}/3/threads`, { add: 53 }],
+      [`${COLLECTIONS}/3/threads`, { move: 53, to: 1 }],
+      [`${COLLECTIONS}/3/threads`, { remove: 52 }],
+      [`${COLLECTIONS}/3`, { rule: "Design page:" }],
+      [`${COLLECTIONS}/3`, { rule: null }],
+      [`${COLLECTIONS}/3`, { name: "Screens" }],
+      [`${COLLECTIONS}/3`, { description: "" }],
+      [`${COLLECTIONS}/3`, { pinned: true }],
+    ]);
+    expect(out.map((line) => JSON.parse(line))).toEqual([after]);
+  });
+
+  it("stops at the first refusal, saying which, and that the changes before it were kept", async () => {
+    const { io, sent, out, err } = client([{ status: 200, body: { collection: SET, place: 1 } }, { status: 409, body: { reason: "not-kept" } }]);
+    expect(await run(["collection", "3", "--add", "52", "--remove", "7", "--unpin"], io)).toBe(1);
+    expect(sent).toHaveLength(2);
+    expect(out).toEqual([]);
+    expect(err).toEqual(["inbox: collection refused at change 2 of 3 (409 not-kept); the changes before it were kept"]);
+  });
+
+  it("passes a refusal of a read or a make through", async () => {
+    const { io, err } = client([{ status: 404, body: { reason: "no-collection" } }, { status: 409, body: { reason: "name-taken" } }]);
+    expect(await run(["collection", "9"], io)).toBe(1);
+    expect(await run(["collection", "new", "Taken"], io)).toBe(1);
+    expect(err).toEqual(["inbox: collection refused (404 no-collection)", "inbox: collection new refused (409 name-taken)"]);
+  });
+
+  it.each([
+    [["collection"]],
+    [["collection", "x"]],
+    [["collection", "new"]],
+    [["collection", "new", "--pin"]],
+    [["collection", "new", "A", "--rule", "B"]],
+    [["collection", "3", "--add"]],
+    [["collection", "3", "--add", "x"]],
+    [["collection", "3", "--move", "4"]],
+    [["collection", "3", "--move", "4", "--to", "0"]],
+    [["collection", "3", "--share", "a@example.com"]],
+    [["collection", "3", "--publish"]],
+  ])("is a usage error for %j, sending nothing", async (argv) => {
+    const { io, sent } = client([]);
+    expect(await run(argv, io)).toBe(2);
+    expect(sent).toEqual([]);
   });
 });
 

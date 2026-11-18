@@ -36,6 +36,7 @@
 //   GET  /threads/api/now, POST /threads/api/now  {"text"}                    owner: the home page's Now line (src/home.ts)
 //   POST /threads/api/photo (a JPEG or PNG), DELETE /threads/api/photo       owner: his photo (src/photos.ts)
 //   GET  /threads/api/cards                                                   owner: every public thread's card stamp (src/cards.ts)
+//   GET  /threads/api/collections[/<n>], POST /threads/api/collections[/<n>[/threads]]   owner and sync; never invited people (src/collections.ts)
 //   POST /threads/api/threads/<n>/card?stamp=<hex>   a PNG                    owner: a public thread's preview card (src/cards.ts)
 //
 // An invited person reads only the threads they are in: every read takes the caller as its reader, and the
@@ -88,6 +89,10 @@
 // people call refuses them. The sync's add may name a told thread's teller by number (`person`); a number nobody
 // has is refused 404 `no-person`, and nothing is written.
 //
+// The threads worth keeping sit in his collections (src/collections.ts holds their calls). To the owner and the sync,
+// a thread's own call names the collections it is in (`collections`, by number and name), and a search answers the
+// collections whose name or description holds the words (`collections`); an invited person's answers gain neither.
+//
 // Any thread may be one meeting, and every thread says so (`meeting`, null while it isn't one): its when, a day
 // (`2026-11-09`, its time not set) or an instant in UTC that each reader shows in their own zone, its length and
 // where, and the people who will be in the room (`attendees`), in one order for every reader, by name. The owner
@@ -123,6 +128,8 @@ import { servePage, withSkeleton } from "./page.ts";
 import { handleNow } from "./home.ts";
 import { handleJournal } from "./journal.ts";
 import { handlePeople, personView } from "./people.ts";
+import { collectionView, handleCollections } from "./collections.ts";
+import { collectionsOf, searchCollections } from "./collections-store.ts";
 import { addCard, listCards } from "./cards.ts";
 import { handlePhoto } from "./photos.ts";
 import { ownerPhotoId, personPhotoId } from "./photos-store.ts";
@@ -471,11 +478,14 @@ async function show(number: number, env: Bindings, caller: Caller): Promise<Resp
   const row = await find(env.DB, { number }, caller);
   if (row === null) return refuse(404, "no-thread");
   const answering = row.ask_slug !== null && caller.caller !== "member";
-  const [{ comments, events }, pages, people, answered] = await Promise.all([
+  const owners = caller.caller !== "member";
+  const [{ comments, events }, pages, people, answered, kept] = await Promise.all([
     history(env.DB, row.id, HISTORY + 1, caller),
     pagesOf(env.DB, row.id),
     peopleOf(env.DB, row.id),
     answering ? answeredBy(env.DB, row.id) : Promise.resolve([]),
+    // The collections it is kept in are his and the sync's; an invited person never learns their names.
+    owners ? collectionsOf(env.DB, row.id) : Promise.resolve([]),
   ]);
   return json(200, {
     thread: thread(row, caller),
@@ -486,6 +496,7 @@ async function show(number: number, env: Bindings, caller: Caller): Promise<Resp
     truncated: comments.length > HISTORY || events.length > HISTORY,
     // Who answered an ask, for the owner and the sync: each response thread by its number.
     ...(answering ? { answeredBy: answered.map((one) => ({ number: one.number, name: one.name, at: one.at, waiting: one.waiting === 1 })) } : {}),
+    ...(owners ? { collections: kept.map((one) => ({ number: one.number, name: one.name })) } : {}),
   });
 }
 
@@ -584,9 +595,10 @@ async function lookUp(url: URL, env: Bindings, caller: Caller): Promise<Response
   const trimmed = line(words, MAX_SEARCH);
   if (trimmed === null) return refuse(400, "query");
   const threads = (await search(env.DB, trimmed, caller)).map((row) => thread(row, caller));
-  // People are the owner's and the sync's alone; an invited person's answer is threads only, as it always was.
+  // People and collections are the owner's and the sync's alone; an invited person's answer is threads only, as it always was.
   if (caller.caller === "member") return json(200, { threads });
-  return json(200, { threads, people: (await searchPeople(env.DB, trimmed)).map(personView) });
+  const [people, collections] = await Promise.all([searchPeople(env.DB, trimmed), searchCollections(env.DB, trimmed)]);
+  return json(200, { threads, people: people.map(personView), collections: collections.map(collectionView) });
 }
 
 /**
@@ -822,6 +834,9 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
   }
   if (url.pathname === "/threads/api/journal" || url.pathname.startsWith("/threads/api/journal/")) {
     return handleJournal(request, url, env, who);
+  }
+  if (url.pathname === "/threads/api/collections" || url.pathname.startsWith("/threads/api/collections/")) {
+    return handleCollections(request, url, env, who, (row) => thread(row, who));
   }
   if (url.pathname === "/threads/api/now") return handleNow(request, env, who);
   if (url.pathname === "/threads/api/photo") return handlePhoto(request, env, who);

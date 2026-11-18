@@ -13,7 +13,10 @@
 // putting it before strangers is Suresh's own act, from his page. His journal (src/journal.ts) is read and written
 // under `journal`: an entry's page text comes on stdin and is saved on the version it was built on, so a save built on
 // an older text is refused as stale and the sync reads, rebuilds and writes again; a photo goes up from a file and comes
-// back to one, byte for byte. This module is the logic, with fetch, the environment and
+// back to one, byte for byte. His collections (src/collections.ts), the named sets he keeps threads in, are listed,
+// read, made and changed by number: a thread kept, taken out or moved to a place, a rule set or cleared, a collection
+// pinned or renamed; sharing one and making it public have no verb, because they are his own acts, from his page.
+// This module is the logic, with fetch, the environment and
 // the streams handed in, so the tests drive it with a played fetch; tools/inbox/inbox.ts is the entry point
 // that hands it the real ones.
 
@@ -40,6 +43,8 @@ const THREADS = "/threads/api/threads";
 const PEOPLE = "/threads/api/people";
 /** Where the asks' list lives. */
 const ASKS = "/threads/api/asks";
+/** Where the collections' calls live. */
+const COLLECTIONS = "/threads/api/collections";
 /** Where the journal's calls live. */
 const JOURNAL = "/threads/api/journal";
 /** A journal entry's key: a day (2026-11-06) or an ISO week (2026-W44); the Worker refuses one that isn't real. */
@@ -97,6 +102,20 @@ export const USAGE = `Usage: inbox <verb> [arguments]
   ask <number> --slug <slug>      the thread (his own, its page the questions) made an ask, a draft at
                                   hey.whysosuresh.com/ask/<slug>; he opens it himself, in Asks
   ask <number> --close            the ask closed: it takes no more answers
+  collections [--find <words>]    every collection, pinned ones first, then the most recently changed, one JSON
+                                  line each: its number, name, description, rule, pinned and how many threads;
+                                  --find only those whose name or description holds the words
+  collection <number>             the collection with every thread in it, in his order, as one JSON line
+  collection new <name> [--description <text>]
+                                  a new collection; a name is unique, ignoring case
+  collection <number> (--add <thread> | --remove <thread> | --move <thread> --to <place> | --rule <prefix>
+                      | --no-rule | --pin | --unpin | --name <text> | --description <text>)...
+                                  the collection changed, one call each in the order given: --add keeps a
+                                  thread at its end, --remove takes one out, --move puts one at a place (1 is
+                                  the top), --rule keeps every new thread whose title begins with the prefix,
+                                  --no-rule stops that; prints the collection after the last, and stops at the
+                                  first refusal, keeping the changes before it. Sharing a collection and making
+                                  it public are Suresh's own, from his page
   journal list                    every journal entry's newest version, newest first, one JSON line each: its key,
                                   kind, version, title, one line, stories, photos and question
   journal read <key> [--version <n>]
@@ -426,6 +445,106 @@ async function ask(io: Io, secret: string, args: readonly string[]): Promise<num
   return report(io, "ask", await call(io, secret, `${THREADS}/${number}/ask`, { method: "POST", body: JSON.stringify(change) }), "thread");
 }
 
+/** Every collection, one line each: the pinned ones, then every page of the rest; with --find, those holding the words. */
+async function collections(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  let words: string | null = null;
+  if (args.length > 0) {
+    if (args.length !== 2 || args[0] !== "--find" || args[1] === undefined || args[1].trim() === "") throw new Usage("collections takes --find <words> at most");
+    words = args[1];
+  }
+  let after: string | null = null;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const query = new URLSearchParams();
+    if (words !== null) query.set("q", words);
+    if (after !== null) query.set("after", after);
+    const answer = await call(io, secret, `${COLLECTIONS}${query.size === 0 ? "" : `?${query.toString()}`}`, { method: "GET" });
+    if (answer.status !== 200) {
+      io.err(`inbox: collections refused (${answer.status} ${reasonOf(answer)})`);
+      return 1;
+    }
+    if (page === 0) for (const one of Array.isArray(answer.body.pinned) ? (answer.body.pinned as unknown[]) : []) io.out(JSON.stringify(one));
+    for (const one of Array.isArray(answer.body.collections) ? (answer.body.collections as unknown[]) : []) io.out(JSON.stringify(one));
+    after = typeof answer.body.next === "number" && NUMBER_SHAPE.test(String(answer.body.next)) ? String(answer.body.next) : null;
+    if (after === null) return 0;
+  }
+  io.err(`inbox: collections stopped after ${MAX_PAGES} pages`);
+  return 1;
+}
+
+/** One collection with every thread in it, in his order, following its pages. */
+async function readCollection(io: Io, secret: string, number: string): Promise<number> {
+  const threads: unknown[] = [];
+  let collection: unknown = null;
+  let after: string | null = null;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const answer = await call(io, secret, `${COLLECTIONS}/${number}${after === null ? "" : `?after=${after}`}`, { method: "GET" });
+    if (answer.status !== 200) return report(io, "collection", answer, null);
+    collection = answer.body.collection ?? null;
+    threads.push(...(Array.isArray(answer.body.threads) ? (answer.body.threads as unknown[]) : []));
+    after = typeof answer.body.next === "number" && NUMBER_SHAPE.test(String(answer.body.next)) ? String(answer.body.next) : null;
+    if (after === null) {
+      io.out(JSON.stringify({ collection, threads }));
+      return 0;
+    }
+  }
+  io.err(`inbox: collection stopped after ${MAX_PAGES} pages`);
+  return 1;
+}
+
+/** The flags `collection <number>` takes that need a value. */
+const COLLECTION_VALUES = ["--add", "--remove", "--move", "--rule", "--name", "--description"];
+
+/** A collection read, made, or changed one call per flag in the order given; the collection after the last is printed. */
+async function collection(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const [given, ...rest] = args;
+  if (given === "new") {
+    const [name, ...more] = rest;
+    if (name === undefined || name.startsWith("--") || name.trim() === "") throw new Usage("collection new takes a name, and --description <text> at most");
+    const made: { name: string; description?: string } = { name };
+    if (more.length > 0) {
+      if (more.length !== 2 || more[0] !== "--description" || more[1] === undefined) throw new Usage("collection new takes a name, and --description <text> at most");
+      made.description = more[1];
+    }
+    return report(io, "collection new", await call(io, secret, COLLECTIONS, { method: "POST", body: JSON.stringify(made) }), "collection");
+  }
+  if (given === undefined || !NUMBER_SHAPE.test(given)) throw new Usage("collection takes a collection's number, such as 3, or new <name>");
+  if (rest.length === 0) return readCollection(io, secret, given);
+  const changes: { path: string; body: unknown }[] = [];
+  for (let i = 0; i < rest.length; ) {
+    const flag = rest[i] ?? "";
+    if (flag === "--no-rule" || flag === "--pin" || flag === "--unpin") {
+      changes.push({ path: "", body: flag === "--no-rule" ? { rule: null } : { pinned: flag === "--pin" } });
+      i += 1;
+      continue;
+    }
+    const value = rest[i + 1];
+    if (!COLLECTION_VALUES.includes(flag) || value === undefined) throw new Usage(`collection: unknown flag or missing value at ${flag}`);
+    if (flag === "--add" || flag === "--remove" || flag === "--move") {
+      if (!NUMBER_SHAPE.test(value)) throw new Usage(`collection: ${flag} takes a thread's number, such as 42`);
+      if (flag === "--move") {
+        const place = rest[i + 3];
+        if (rest[i + 2] !== "--to" || place === undefined || !NUMBER_SHAPE.test(place)) throw new Usage("collection: --move takes a thread's number and --to <place>, 1 being the top");
+        changes.push({ path: "/threads", body: { move: Number(value), to: Number(place) } });
+        i += 4;
+        continue;
+      }
+      changes.push({ path: "/threads", body: flag === "--add" ? { add: Number(value) } : { remove: Number(value) } });
+    } else {
+      changes.push({ path: "", body: flag === "--rule" ? { rule: value } : flag === "--name" ? { name: value } : { description: value } });
+    }
+    i += 2;
+  }
+  let last: Answer | null = null;
+  for (const [index, change] of changes.entries()) {
+    last = await call(io, secret, `${COLLECTIONS}/${given}${change.path}`, { method: "POST", body: JSON.stringify(change.body) });
+    if (last.status !== 200) {
+      io.err(`inbox: collection refused at change ${index + 1} of ${changes.length} (${last.status} ${reasonOf(last)}); the changes before it were kept`);
+      return 1;
+    }
+  }
+  return last === null ? 1 : report(io, "collection", last, "collection");
+}
+
 /** A journal entry's key from the command line, or a usage error naming the verb. */
 function keyOf(verb: string, given: string | undefined, shape: RegExp = KEY_SHAPE): string {
   if (given === undefined || !shape.test(given)) throw new Usage(`journal ${verb} takes ${shape === DAY_SHAPE ? "a day, such as 2026-11-06" : "a day or a week, such as 2026-11-06 or 2026-W44"}`);
@@ -568,6 +687,8 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     if (verb === "person") return await person(io, secret, args);
     if (verb === "asks") return await asks(io, secret, args);
     if (verb === "ask") return await ask(io, secret, args);
+    if (verb === "collections") return await collections(io, secret, args);
+    if (verb === "collection") return await collection(io, secret, args);
     if (verb === "journal") return await journal(io, secret, args);
     throw new Usage(`unknown verb: ${verb}`);
   } catch (error) {
