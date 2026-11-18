@@ -7109,7 +7109,7 @@ class Threads {
     if (thread.main === 'page' && page) {
       // A page opens full screen under the collection's bar: back to the collection, and the threads either side.
       const bar = el('div', { class: 't-page-bar', 'data-answering': '' }, [
-        el('span', { class: 't-page-site' }, [el('b', {}, ['whysosuresh.com']), ' · ', ...where, ` · ${title}`]),
+        el('span', { class: 't-page-site' }, [el('b', {}, ['whysosuresh.com']), ` · ${open.collection.name}${walk.at < 0 ? '' : ` · ${walkLine(walk.at, walk.count)}`} · ${title}`]),
         el('span', { class: 't-grow' }),
         ...steps,
         el('a', { class: 't-btn', href: `${COLLECTIONS_PATH}/${open.key}`, 'data-public-collection': '' }, ['Back']),
