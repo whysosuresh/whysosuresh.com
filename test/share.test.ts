@@ -10,7 +10,7 @@
 // switch: only a public thread can be listed, and it says what everyone sees once it is.
 
 import { describe, expect, it } from "vitest";
-import { SEATS, addressOf, collectionInvitation, collectionSeatsLine, collectionSeesLines, feedLines, invitation, invitationProblem, isAddress, levelOf, linkShown, listed, noteReply, publicLines, seatsLine, seesLines } from "../site/app/share.js";
+import { SEATS, addressOf, collectionInvitation, collectionPublicLines, collectionSeatsLine, collectionSeesLines, feedLines, invitation, invitationProblem, isAddress, levelOf, linkShown, listed, noteReply, publicLines, seatsLine, seesLines } from "../site/app/share.js";
 
 describe("an invitation's check", () => {
   it("takes an address the Worker takes, for an invitation and a person's page alike", () => {
@@ -182,5 +182,16 @@ describe("sharing a collection", () => {
     expect(draft.body).toContain("Hi Meera,");
     expect(draft.body).toContain("https://hey.whysosuresh.com/collections/1-every-screen?invite");
     expect(draft.body).toContain("the ones I add later too");
+  });
+});
+
+describe("a collection's Public switch", () => {
+  it("says how many threads strangers read and how many they won't, and gives the link only while on", () => {
+    const on = collectionPublicLines("https://hey.whysosuresh.com", { threads: 6, hidden: 2, shareKey: "a".repeat(32) }, true);
+    expect(on.note).toBe("Anyone with the link reads 4 threads of your own words in it, and the ones you add later, read only. 2 threads they won't see: someone else's words or an ask.");
+    expect(on.link).toBe(`https://hey.whysosuresh.com/collections/${"a".repeat(32)}`);
+    const off = collectionPublicLines("https://hey.whysosuresh.com", { threads: 1, hidden: 0, shareKey: "a".repeat(32) }, false);
+    expect([off.link, off.note.startsWith("Off:")]).toEqual([null, true]);
+    expect(collectionPublicLines("https://x", { threads: 1, hidden: 0 }, true).note).toContain("reads 1 thread of");
   });
 });

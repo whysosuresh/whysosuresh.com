@@ -6,6 +6,7 @@
 //   POST /threads/api/collections          {"name", "description"?}  owner and sync: a new collection
 //   GET  /threads/api/collections/<n>[?q=<words>][&status=open|done][&after=<place>]   owner and sync: it and a page of its threads
 //   POST /threads/api/collections/<n>      {"name"} | {"description"} | {"rule"} | {"pinned"} | {"delete": true}   owner and sync
+//                                          {"public": true | false}   owner: its link, /collections/<key>, for anyone
 //   POST /threads/api/collections/<n>/threads   {"add": <thread>} | {"remove": <thread>} | {"move": <thread>, "to": <place>}   owner and sync
 //   GET  /threads/api/collections/<n>/people                   owner: who it is shared with, and how many are invited in all
 //   POST /threads/api/collections/<n>/people   {"add": {"email", "name"}} | {"remove": <person id>}   owner
@@ -33,7 +34,10 @@
 // shared with them (their name, description, how many threads, and a page of the threads in his order, each shaped as
 // their threads are), never another collection, which answers exactly as a number never used (404 `no-collection`),
 // and never its people, rule or pin; every other call refuses them with 403 `owner-only` before anything is read. His
-// writes come only from his own page, as every write of his does. Making a collection public is never the sync's.
+// writes come only from his own page, as every write of his does. Making a collection public, so anyone with its link
+// reads the threads of his own words in it (src/public-collections.ts), is his alone too: the sync is refused it with 403
+// `owner-only` before anything is read. Its key is given the first time and kept for good; he and the sync read it
+// (`shareKey`) with how many of its threads strangers can't read (`hidden`: a site note, a told thread, an ask's).
 // Nothing personal is logged: a refusal's line holds its status and reason only.
 
 import type { Caller } from "./access.ts";
@@ -90,6 +94,9 @@ export function collectionView(row: CollectionRow): { readonly [key: string]: Js
     changedAt: row.changed_at,
     createdAt: row.created_at,
     threads: row.threads,
+    publicAt: row.public_at,
+    shareKey: row.share_key,
+    hidden: row.hidden,
   };
 }
 
@@ -242,15 +249,19 @@ function readChange(value: unknown): CollectionChange | null {
   }
   const pinned = exactly(value, ["pinned"]);
   if (pinned !== null) return typeof pinned.pinned === "boolean" ? { pinned: pinned.pinned } : null;
+  const shown = exactly(value, ["public"]);
+  if (shown !== null) return typeof shown.public === "boolean" ? { public: shown.public } : null;
   const gone = exactly(value, ["delete"]);
   return gone !== null && gone.delete === true ? { delete: true } : null;
 }
 
-async function change(request: Request, number: number, env: Bindings): Promise<Response> {
+async function change(request: Request, number: number, env: Bindings, caller: "owner" | "sync"): Promise<Response> {
   const length = lengthRefusal(request, MAX_CHANGE_BYTES);
   if (length !== null) return length;
   const asked = readChange(await readJson(request));
   if (asked === null) return refuse(400, "collection");
+  // A public link opens it to anyone, so it is his alone.
+  if ("public" in asked && caller !== "owner") return refuse(403, "owner-only");
   const changed = await changeCollection(env.DB, number, asked);
   if (changed === "no-collection") return refuse(404, changed);
   if (changed === "name-taken") return refuse(409, changed);
@@ -307,5 +318,5 @@ export async function handleCollections(request: Request, url: URL, env: Binding
     if (request.method === "GET" && url.search !== "") return refuse(400, "query");
     return request.method === "GET" ? people(number, env) : changePeople(request, number, env);
   }
-  return request.method === "GET" ? one(url, number, env, shape, caller) : change(request, number, env);
+  return request.method === "GET" ? one(url, number, env, shape, caller) : change(request, number, env, caller.caller);
 }

@@ -1179,6 +1179,7 @@ a.t-pick { color: var(--ink); text-decoration: none; }
 .t-box .t-i { width: 12px; height: 12px; }
 .t-walk { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 12.5px; }
 .t-walk a { color: var(--ink); font-weight: 600; }
+.t-public-lede { margin: 0; color: var(--muted); font-size: 15px; max-width: 60ch; }
 /* A phone has no hover, so a row's pin and ⋯ always show there. */
 @media (max-width: 719px) {
   .t-pin, .t-row-kept .t-icon-button { opacity: 1; }

@@ -126,6 +126,9 @@ describe("making collections", () => {
       changedAt: expect.any(String),
       createdAt: made.collection.changedAt,
       threads: 0,
+      publicAt: null,
+      shareKey: null,
+      hidden: 0,
     });
     expect(await collection("Story deck", "sync")).toBe(2);
     expect(await reasonOf(await call("/collections", { body: { name: "every SCREEN" } }))).toEqual([409, "name-taken"]);

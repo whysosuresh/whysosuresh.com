@@ -186,7 +186,7 @@ import {
   walkLine,
 } from './collections.js';
 import { PEOPLE_PATH, PERSON_PATH, addressLine, folded, howLine, initials, nameOf, personPath, roleLine, saidOn, takenLine } from './people.js';
-import { addressOf, collectionInvitation, collectionSeatsLine, collectionSeesLines, feedLines, invitation, invitationProblem, isAddress, levelOf, linkShown, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
+import { addressOf, collectionInvitation, collectionPublicLines, collectionSeatsLine, collectionSeesLines, feedLines, invitation, invitationProblem, isAddress, levelOf, linkShown, listed, noteReply, publicLines, seatsLine, seesLines } from './share.js';
 import { prepare as prepareBotCheck, sendTo } from '../talk-send.js';
 import {
   Failed,
@@ -236,6 +236,9 @@ import {
   showAsk,
   showPerson,
   showPublic,
+  showPublicCollection,
+  showPublicKept,
+  publicKeptPageAddress,
   signInAddress,
   start,
   uninvite,
@@ -284,7 +287,9 @@ import {
  * @typedef {{ view: 'today' } | { view: 'list', tab: Tab, only: Open | null, space: string | null } | { view: 'thread', number: number } | { view: 'people' }
  *   | { view: 'person', number: number } | { view: 'meetings' } | { view: 'asks' } | { view: 'ask', slug: string }
  *   | { view: 'journal' } | { view: 'entry', key: string } | { view: 'storylines' } | { view: 'storyline', slug: string }
- *   | { view: 'shared', shareKey: string } | { view: 'collections' } | { view: 'collection', number: number }} Route
+ *   | { view: 'shared', shareKey: string } | { view: 'collections' } | { view: 'collection', number: number }
+ *   | { view: 'public-collection', key: string, number: number | null }} Route
+ * @typedef {import('./threads-store.js').PublicCollection} PublicCollection
  * @typedef {import('./threads-store.js').Collection} Collection
  * @typedef {import('./threads-store.js').CollectionShown} CollectionShown
  * @typedef {import('./threads-store.js').KeptThread} KeptThread
@@ -378,6 +383,8 @@ const THREAD_PATH = /^\/threads\/([1-9]\d{0,8})(?:-[^/]*)?$/;
  * this page can't import. A number is at most nine digits, so the two never overlap.
  */
 const SHARED_PATH = /^\/threads\/([0-9a-f]{32})$/;
+/** A public collection's link, and one of its threads under it. */
+const PUBLIC_COLLECTION_PATH = /^\/collections\/([0-9a-f]{32})(?:\/([1-9]\d{0,8}))?$/;
 /** The door everyone signed in enters by: Today for him, their threads for a person he invited. */
 const ME = '/';
 /** The home page, on its own host: where the site's name leads from every bar. */
@@ -822,6 +829,8 @@ function routeOf(at) {
   if (at.pathname === MEETINGS) return { view: 'meetings' };
   if (at.pathname === ASKS) return { view: 'asks' };
   if (at.pathname === COLLECTIONS_PATH) return { view: 'collections' };
+  const open = PUBLIC_COLLECTION_PATH.exec(at.pathname);
+  if (open) return { view: 'public-collection', key: open[1] ?? '', number: open[2] === undefined ? null : Number(open[2]) };
   const collection = COLLECTION_PATH.exec(at.pathname);
   if (collection) return { view: 'collection', number: Number(collection[1]) };
   const journal = journalRoute(at.pathname);
@@ -841,6 +850,7 @@ function pathOf(route, threads, people = []) {
   if (route.view === 'asks') return ASKS;
   if (route.view === 'collections') return COLLECTIONS_PATH;
   if (route.view === 'collection') return `${COLLECTIONS_PATH}/${route.number}`;
+  if (route.view === 'public-collection') return `${COLLECTIONS_PATH}/${route.key}${route.number === null ? '' : `/${route.number}`}`;
   if (route.view === 'ask') return `/ask/${route.slug}`;
   if (route.view === 'journal') return JOURNAL_PATH;
   if (route.view === 'entry') return entryPath(route.key);
@@ -1121,6 +1131,10 @@ class Threads {
     this.sharedCollections = [];
     /** The threads shared with an invited person on their own, which their list holds; a collection's are its own. @type {Set<number>} */
     this.ownThreads = new Set();
+    /** A public collection as its link reads it, and the thread of it open, by its key. @type {(PublicCollection & { key: string }) | null} */
+    this.publicCollection = null;
+    /** @type {{ number: number, shown: PublicShown } | null} */
+    this.publicKept = null;
     /** The kept thread whose row has the focus, given back after a redraw; null once the focus is anywhere else. @type {number | null} */
     this.keptFocus = null;
     /** The person whose page a thread was opened from. @type {number | null} */
@@ -1333,6 +1347,11 @@ class Threads {
     // An ask is answered by anyone, signed in or not, so its page asks nobody who is calling.
     if (this.route.view === 'ask') {
       await this.startAsk(this.route.slug);
+      return;
+    }
+    // A public collection is read by anyone, signed in or not, so its link asks nobody who is calling, as an ask's does.
+    if (this.route.view === 'public-collection') {
+      await this.openPublicCollection(this.route);
       return;
     }
     // A link names its thread by key: resolved once, here, so everything after it sees a thread's number.
@@ -1802,6 +1821,10 @@ class Threads {
    */
   onPop() {
     const route = routeOf(location);
+    if (route.view === 'public-collection' && this.route.view === 'public-collection') {
+      void this.openPublicCollection(route);
+      return;
+    }
     if (!this.pub.hidden && this.publicShown) {
       const address = this.publicAddress;
       const same =
@@ -3439,6 +3462,8 @@ class Threads {
       this.onAskPageMessage(said, frame);
       return;
     }
+    // A public collection's page is read only: it gets no greeting, so its questions show with no boxes.
+    if (this.route.view === 'public-collection') return;
     if (!signedIn) {
       this.onPublicPageMessage(said, frame);
       return;
@@ -6357,6 +6382,7 @@ class Threads {
         el('div', { class: 't-plist' }, rows),
         el('div', { class: 't-sees' }, [el('span', {}, [el('b', {}, ['They see']), ' ', lines.sees]), el('span', {}, [el('b', {}, ['Never']), ' ', lines.never])]),
         el('div', { class: 't-seats' }, [el('meter', { class: 't-seat-bar', min: '0', max: '50', value: String(sharing.count), 'aria-label': 'People with access' }), el('span', {}, [collectionSeatsLine(sharing.count)])]),
+        this.collectionPublicSwitch(collection),
         ...(draft === null || invited === null
           ? []
           : [
@@ -6368,6 +6394,46 @@ class Threads {
             ]),
       ]),
     ]);
+  }
+
+  /**
+   * The collection's Public switch: anyone with its link reads the threads of his own words in it, read only; its link
+   * with Copy link once the Worker has given its key.
+   * @param {Collection} collection
+   */
+  collectionPublicSwitch(collection) {
+    const on = collection.publicAt !== null && collection.publicAt !== undefined;
+    const said = collectionPublicLines(location.origin, collection, on);
+    return el('div', { class: 't-switch-row' }, [
+      el('b', { id: 'cpublic-label' }, [icon('globe'), ' ', said.label]),
+      el('button', { type: 'button', class: 't-switch', role: 'switch', 'aria-checked': String(on), 'aria-labelledby': 'cpublic-label', 'aria-describedby': 'cpublic-note', 'data-act': 'collection-public' }),
+      el('small', { id: 'cpublic-note' }, [said.note]),
+      ...(said.link === null
+        ? []
+        : [
+            el('div', { class: 't-full-link' }, [
+              el('span', {}, [el('b', {}, ['Link']), ' ', el('span', { class: 't-linkline' }, [shownAddress(location.origin, said.link.slice(location.origin.length))])]),
+              el('button', { type: 'button', class: 't-btn', 'data-act': 'collection-copy-link' }, ['Copy link']),
+            ]),
+          ]),
+    ]);
+  }
+
+  /** Turns the collection shown public, or back; the sheet and the page show where it stands once the Worker answers. */
+  async toggleCollectionPublic() {
+    const shown = this.collection;
+    if (!shown || this.member) return;
+    const on = shown.collection.publicAt !== null && shown.collection.publicAt !== undefined;
+    try {
+      const changed = await changeCollection(shown.collection.number, { public: !on });
+      if (changed && this.collection?.collection.number === changed.number) this.collection = { ...this.collection, collection: changed };
+    } catch (error) {
+      this.fail(error, "The collection wasn't changed.");
+      return;
+    }
+    this.say(on ? `${shown.collection.name} is no longer public. Its link opens nothing now.` : `${shown.collection.name} is public at its link.`, null);
+    this.renderCollectionShare();
+    this.drawKept();
   }
 
   /** Reads the sheet's fields into its state. */
@@ -6946,6 +7012,172 @@ class Threads {
     this.pubDoc.replaceChildren(...view);
   }
 
+  /* ---------- A public collection, for anyone with its link: /collections/<key> ---------- */
+
+  /**
+   * Opens a public collection's link, or one of its threads under it, for whoever opened it, with no sign-in: the
+   * collection is read once, a thread each time one opens. A key that opens nothing, a thread strangers may not read,
+   * or a call that fails shows "Nothing here".
+   * @param {{ view: 'public-collection', key: string, number: number | null }} route
+   */
+  async openPublicCollection(route) {
+    this.route = route;
+    try {
+      if (this.publicCollection?.key !== route.key) this.publicCollection = { ...(await showPublicCollection(route.key)), key: route.key };
+      this.publicKept = route.number === null ? null : { number: route.number, shown: await showPublicKept(route.key, route.number) };
+    } catch (error) {
+      if (!(error instanceof Missing)) console.error(error);
+      this.publicCollection = null;
+      this.publicKept = null;
+      this.lostTitle.textContent = 'Nothing here';
+      this.lostText.textContent = "There's nothing at this address.";
+      this.signIn.hidden = true;
+      this.app.hidden = true;
+      this.pub.hidden = true;
+      this.lost.hidden = false;
+      document.title = 'Nothing here · whysosuresh.com';
+      return;
+    }
+    this.renderPublicCollection();
+    window.scrollTo(0, 0);
+  }
+
+  /**
+   * Goes to a public collection's list or one of its threads, as a step of the browser's history.
+   * @param {number | null} number
+   */
+  goPublic(number) {
+    const key = this.publicCollection?.key;
+    if (key === undefined) return;
+    /** @type {{ view: 'public-collection', key: string, number: number | null }} */
+    const route = { view: 'public-collection', key, number };
+    history.pushState(null, '', pathOf(route, this.threads));
+    void this.openPublicCollection(route);
+  }
+
+  /** Where the open thread is in the public collection, and the threads before and after it. */
+  publicWalk() {
+    const threads = this.publicCollection?.threads ?? [];
+    const at = this.publicKept === null ? -1 : threads.findIndex((one) => one.number === this.publicKept?.number);
+    return { at, count: threads.length, prev: threads[at - 1]?.number ?? null, next: at < 0 ? null : (threads[at + 1]?.number ?? null) };
+  }
+
+  /** The public view of a collection: its list, or one of its threads read only, a page full screen under its bar. */
+  renderPublicCollection() {
+    const open = this.publicCollection;
+    if (open === null) return;
+    this.app.hidden = true;
+    this.lost.hidden = true;
+    this.pub.hidden = false;
+    this.pubSignIn.hidden = true;
+    const kept = this.publicKept;
+    if (kept === null) {
+      document.title = `${open.collection.name} · whysosuresh.com`;
+      const rows = open.threads.map((thread) =>
+        el('a', { class: 't-row', href: `${COLLECTIONS_PATH}/${open.key}/${thread.number}`, 'data-public-kept': String(thread.number) }, [
+          el('span', { class: 't-num' }, [String(thread.place)]),
+          el('span', { class: 't-row-main' }, [
+            el('span', { class: 't-row-title' }, [...(thread.main === 'page' ? [el('span', { class: 't-row-mark' }, [icon('doc')])] : []), thread.title ?? `#${thread.number}`]),
+            el('span', { class: 't-row-sub' }, [thread.main === 'page' ? 'A page' : thread.main === 'link' ? 'A link' : (thread.body ?? '').split('\n').find((line) => line.trim() !== '')?.replace(/[#*>`_]/g, '').trim() ?? '']),
+          ]),
+          el('span', { class: 't-row-meta' }, [el('span', {}, [day(thread.createdAt)])]),
+        ]),
+      );
+      this.pubDoc.replaceChildren(
+        el('div', { class: 't-byline' }, [avatar('owner', '', open.ownerPhoto ?? null), el('span', {}, [el('b', {}, ['Suresh']), ' keeps these together'])]),
+        el('h1', { class: 't-title' }, [open.collection.name]),
+        ...(open.collection.description ? [el('p', { class: 't-public-lede' }, [open.collection.description])] : []),
+        el('div', { class: 't-list' }, rows.length > 0 ? rows : [el('div', { class: 't-empty' }, ['Nothing here yet.'])]),
+        el('p', { class: 't-note' }, [`${threadsLine(open.threads.length)}, read only. Each opens on its own; J and K go from one to the next.`]),
+      );
+      return;
+    }
+    const thread = kept.shown.thread;
+    const title = thread.title ?? `#${thread.number}`;
+    document.title = `${title} · ${open.collection.name}`;
+    const walk = this.publicWalk();
+    const steps = [
+      el('button', { type: 'button', class: 't-btn', 'data-act': 'public-prev', 'aria-label': 'Previous (K)', ...(walk.prev === null ? { disabled: '' } : {}) }, [icon('up')]),
+      el('button', { type: 'button', class: 't-btn', 'data-act': 'public-next', 'aria-label': 'Next (J)', ...(walk.next === null ? { disabled: '' } : {}) }, [icon('down')]),
+    ];
+    const where = [
+      icon('stack'),
+      el('a', { href: `${COLLECTIONS_PATH}/${open.key}`, 'data-public-collection': '' }, [open.collection.name]),
+      el('span', { class: 't-n' }, [walk.at < 0 ? '' : walkLine(walk.at, walk.count)]),
+    ];
+    const page = kept.shown.page;
+    if (thread.main === 'page' && page) {
+      // A page opens full screen under the collection's bar: back to the collection, and the threads either side.
+      const bar = el('div', { class: 't-page-bar', 'data-answering': '' }, [
+        el('span', { class: 't-page-site' }, [el('b', {}, ['whysosuresh.com']), ' · ', ...where, ` · ${title}`]),
+        el('span', { class: 't-grow' }),
+        ...steps,
+        el('a', { class: 't-btn', href: `${COLLECTIONS_PATH}/${open.key}`, 'data-public-collection': '' }, ['Back']),
+      ]);
+      const frame = el('iframe', { class: 't-page-frame', sandbox: PAGE_SANDBOX, src: publicKeptPageAddress(open.key, thread.number, page.version), title: `Page, version ${page.version}` });
+      this.pubDoc.replaceChildren(el('section', { class: 't-page', 'aria-label': 'Page', 'data-full': 'true' }, [bar, frame]));
+      return;
+    }
+    const comments = kept.shown.comments.map((said) => {
+      const who = said.author === 'owner' ? 'owner' : said.author === 'member' ? 'member' : 'visitor';
+      const name = who === 'owner' ? 'Suresh' : said.name?.trim() || 'Someone';
+      return el('div', { class: 't-cm' }, [
+        avatar(who, name, who === 'owner' ? (kept.shown.ownerPhoto ?? null) : who === 'member' ? (said.photo ?? null) : null),
+        el('div', { class: 't-cm-box' }, [
+          el('div', { class: 't-cm-head' }, [el('b', {}, [name]), el('time', { datetime: said.createdAt }, [day(said.createdAt)])]),
+          el('div', { class: 't-cm-body' }, [who === 'visitor' ? plain(said.body) : prose(said.body)]),
+        ]),
+      ]);
+    });
+    this.pubDoc.replaceChildren(
+      el('div', { class: 't-walk' }, [...where, el('span', { class: 't-grow' }), ...steps]),
+      el('h1', { class: 't-title' }, [title]),
+      el('div', { class: 't-byline' }, [el('span', {}, [el('b', {}, ['Suresh']), `, ${day(thread.createdAt)}`])]),
+      ...(thread.summary ? [el('section', { class: 't-summary', 'aria-label': 'Summary' }, [el('div', { class: 't-summary-head' }, [el('span', {}, ['Summary'])]), summaryBody(thread.summary)])] : []),
+      ...(thread.main === 'link' && thread.link ? [linkCard(thread.link)] : thread.body !== null ? [prose(thread.body)] : []),
+      ...(comments.length > 0 ? [el('div', { class: 't-feed' }, comments)] : []),
+    );
+  }
+
+  /**
+   * A click in a public collection: a thread's row, the way back to the collection, and the steps either side.
+   * @param {Element} target
+   * @param {MouseEvent} event
+   */
+  onPublicCollectionClick(target, event) {
+    const link = target.closest('a[data-public-kept], a[data-public-collection]');
+    if (link instanceof HTMLAnchorElement && !wantsNewTab(event)) {
+      event.preventDefault();
+      this.goPublic(link.dataset.publicKept === undefined ? null : Number(link.dataset.publicKept));
+      return;
+    }
+    const button = target.closest('[data-act]');
+    if (!(button instanceof HTMLElement)) return;
+    const walk = this.publicWalk();
+    if (button.dataset.act === 'public-prev' && walk.prev !== null) this.goPublic(walk.prev);
+    if (button.dataset.act === 'public-next' && walk.next !== null) this.goPublic(walk.next);
+  }
+
+  /**
+   * Keys in a public collection: J and K go to the next and previous thread (from the list, the first), Esc back to the list.
+   * @param {KeyboardEvent} event
+   */
+  onPublicCollectionKey(event) {
+    if (typingIn(event.target) || event.metaKey || event.ctrlKey || event.altKey || this.publicCollection === null) return;
+    const walk = this.publicWalk();
+    const key = event.key.toLowerCase();
+    if (key === 'j' || key === 'k') {
+      const to = this.publicKept === null ? (key === 'j' ? (this.publicCollection.threads[0]?.number ?? null) : null) : key === 'j' ? walk.next : walk.prev;
+      if (to !== null) {
+        event.preventDefault();
+        this.goPublic(to);
+      }
+    } else if (event.key === 'Escape' && this.publicKept !== null) {
+      event.preventDefault();
+      this.goPublic(null);
+    }
+  }
+
   /* ---------- An ask, for anyone answering it: /ask/<slug> ---------- */
 
   /**
@@ -7469,6 +7701,10 @@ class Threads {
     }
     // An ask's page has nothing to click but its own links, which go where they say.
     if (this.route.view === 'ask') return;
+    if (this.route.view === 'public-collection') {
+      this.onPublicCollectionClick(target, event);
+      return;
+    }
     if (!this.pub.hidden) {
       this.onPublicClick(target);
       return;
@@ -7682,6 +7918,19 @@ class Threads {
       case 'collection-share':
         void this.openCollectionShare();
         break;
+      case 'collection-public':
+        void this.toggleCollectionPublic();
+        break;
+      case 'collection-copy-link': {
+        const key = this.collection?.collection.shareKey;
+        if (key) {
+          navigator.clipboard.writeText(`${location.origin}${COLLECTIONS_PATH}/${key}`).then(
+            () => this.say('Copied the link.', null),
+            () => this.say("Couldn't copy the link.", null),
+          );
+        }
+        break;
+      }
       case 'cshare-remove':
         void this.removeCollectionPerson(button.dataset.person ?? '');
         break;
@@ -8096,6 +8345,10 @@ class Threads {
 
   /** @param {KeyboardEvent} event */
   onKey(event) {
+    if (this.route.view === 'public-collection') {
+      this.onPublicCollectionKey(event);
+      return;
+    }
     if (!this.pub.hidden) {
       if (event.key === 'Enter' && event.target instanceof HTMLInputElement && event.target.id === 'visitor-name') {
         event.preventDefault();

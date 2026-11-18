@@ -32,6 +32,7 @@
 // there are none yet; a name is kept once ignoring case, a thread once per collection, each row names a collection
 // and a thread that are there, and a deleted collection's number is never given again. For 0024, collections shared
 // with people: nobody is invited to one yet, and an invitation names a collection and a person that are there, once.
+// For 0025, public collections: every collection starts private with no key, and a key is kept once.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -741,5 +742,23 @@ describe("0024, collections shared with people", () => {
     await expect(share(1, "nobody")).rejects.toThrow(/FOREIGN KEY/);
     await share(1, "p1");
     await expect(share(1, "p1")).rejects.toThrow(/UNIQUE/);
+  });
+});
+
+describe("0025, public collections", () => {
+  it("leaves every collection private with no key, and keeps a key once", async () => {
+    harness = await startHarness({ through: "0024" });
+    const database = await harness.db();
+    const make = (name: string): Promise<unknown> =>
+      database.prepare("INSERT INTO collections (name, changed_at, created_at) VALUES (?1, '2026-11-18T00:00:00.000Z', '2026-11-18T00:00:00.000Z')").bind(name).run();
+    await make("One");
+    await make("Two");
+    await harness.migrate();
+    expect((await database.prepare("SELECT public_at, share_key FROM collections").all()).results).toEqual([
+      { public_at: null, share_key: null },
+      { public_at: null, share_key: null },
+    ]);
+    await database.prepare("UPDATE collections SET share_key = ?1 WHERE number = 1").bind("c".repeat(32)).run();
+    await expect(database.prepare("UPDATE collections SET share_key = ?1 WHERE number = 2").bind("c".repeat(32)).run()).rejects.toThrow(/UNIQUE/);
   });
 });
