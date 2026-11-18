@@ -266,6 +266,9 @@ export interface PersonRow {
   added_at: string;
   /** Their photo (src/photos.ts), null while they have none. */
   photo_id: string | null;
+  /** For someone a shared collection reaches the thread through, that collection's number and name; null for an invitation to the thread. */
+  through_number?: number | null;
+  through_name?: string | null;
 }
 
 export interface EventRow {
@@ -342,10 +345,28 @@ const LISTED = `${PUBLIC} AND threads.feed_at IS NOT NULL`;
 /** Every thread: how the store itself looks a thread up after a write it made as the owner or the sync. */
 const EVERY_THREAD: Reader = { caller: "owner" };
 
-/** An invitation that stands, to the thread `thread` names (an SQL expression for its id), for the address bound in. */
-function standing(thread: string, email: string, p: Params): string {
+/** An invitation that stands to the thread `thread` names itself (an SQL expression for its id), for the address bound in. */
+function invitedDirectly(thread: string, email: string, p: Params): string {
   return `EXISTS (SELECT 1 FROM members JOIN people ON people.id = members.person_id
     WHERE members.thread_id = ${thread} AND members.removed_at IS NULL AND people.email = ${p.add(email)})`;
+}
+
+/**
+ * An invitation that stands to a collection the thread `thread` names is in, for the address bound in: a collection
+ * shared with them opens every thread in it, and only while the thread is in it and the invitation stands.
+ */
+function throughCollection(thread: string, email: string, p: Params): string {
+  return `EXISTS (SELECT 1 FROM collection_members JOIN people ON people.id = collection_members.person_id
+    JOIN collection_threads ON collection_threads.collection_number = collection_members.collection_number
+    WHERE collection_threads.thread_id = ${thread} AND collection_members.removed_at IS NULL AND people.email = ${p.add(email)})`;
+}
+
+/**
+ * An invitation that stands to the thread, for the address bound in: to the thread itself, or to a collection it is in.
+ * The one membership test: every reader's query, the door and the sign-in ask it.
+ */
+function standing(thread: string, email: string, p: Params): string {
+  return `(${invitedDirectly(thread, email, p)} OR ${throughCollection(thread, email, p)})`;
 }
 
 /**
@@ -381,7 +402,7 @@ export interface NewThread {
 }
 
 /** The number the next person gets: one more than the largest, given inside their INSERT, as a thread's is. */
-const NEXT_PERSON = "(SELECT COALESCE(MAX(number), 0) + 1 FROM people)";
+export const NEXT_PERSON = "(SELECT COALESCE(MAX(number), 0) + 1 FROM people)";
 
 /** Who a new thread is from, as the store finds them: by a typed address, by the sync's number, by a told name, or no one. */
 type Sender =
@@ -583,13 +604,16 @@ function waitingOn(alias: string): string {
 }
 
 /**
- * What the owner's list says of each row beside the thread: how many people it is shared with now (`shared`),
+ * What the owner's list says of each row beside the thread: how many people it is shared with now (`shared`), by an
+ * invitation to it or to a collection it is in, each person once,
  * whether the last word on it is someone else's (`waiting`): an invited person's or a visitor's newest comment is later
  * than the owner's newest comment or change, so it waits on him until he comments, moves it or edits it. Derived from
  * the rows already kept, with nothing stored for it; times
  * compare as the ISO strings every writer stamps.
  */
-const LIST_EXTRAS = `(SELECT COUNT(*) FROM members WHERE members.thread_id = threads.id AND members.removed_at IS NULL) AS shared,
+const LIST_EXTRAS = `(SELECT COUNT(*) FROM (SELECT members.person_id FROM members WHERE members.thread_id = threads.id AND members.removed_at IS NULL
+    UNION SELECT collection_members.person_id FROM collection_members JOIN collection_threads ON collection_threads.collection_number = collection_members.collection_number
+    WHERE collection_threads.thread_id = threads.id AND collection_members.removed_at IS NULL)) AS shared,
   ${waitingOn("threads")} AS waiting`;
 
 /** Up to `limit` threads of a tab, newest number first, below `before` when given, each with `LIST_EXTRAS`. */
@@ -600,13 +624,17 @@ export async function listByNumber(db: D1Database, tab: Tab, before: number | nu
   return listed(db, statement(db, `SELECT ${COLUMNS}, ${LIST_EXTRAS} FROM threads WHERE status IN (${statuses})${cursor} ORDER BY number DESC LIMIT ${limit}`, p));
 }
 
-/** Up to `limit` of the threads an invited person is in, most recently active first. */
+/**
+ * Up to `limit` of the threads an invited person is in by an invitation to the thread itself, most recently active
+ * first; the threads a shared collection opens to them are listed by the collection (src/collections-store.ts), so
+ * their door shows a collection as one line, not each of its threads.
+ */
 export async function listShared(db: D1Database, email: string, limit: number): Promise<ThreadRow[]> {
   const p = new Params();
   return (
     await statement(
       db,
-      `SELECT ${COLUMNS} FROM threads WHERE ${standing("threads.id", email, p)} ORDER BY COALESCE(activity_at, created_at) DESC, number DESC LIMIT ${limit}`,
+      `SELECT ${COLUMNS} FROM threads WHERE ${invitedDirectly("threads.id", email, p)} ORDER BY COALESCE(activity_at, created_at) DESC, number DESC LIMIT ${limit}`,
       p,
     ).all<ThreadRow>()
   ).results;
@@ -1074,28 +1102,45 @@ export async function setLink(db: D1Database, number: number, url: string | null
  */
 export async function isInvited(db: D1Database, email: string): Promise<boolean> {
   const row = await db
-    .prepare("SELECT 1 AS yes FROM members JOIN people ON people.id = members.person_id WHERE people.email = ?1 AND members.removed_at IS NULL LIMIT 1")
+    .prepare(
+      `SELECT 1 AS yes FROM people WHERE people.email = ?1 AND (
+         EXISTS (SELECT 1 FROM members WHERE members.person_id = people.id AND members.removed_at IS NULL)
+         OR EXISTS (SELECT 1 FROM collection_members WHERE collection_members.person_id = people.id AND collection_members.removed_at IS NULL))`,
+    )
     .bind(email)
     .first<{ yes: number }>();
   return row !== null;
 }
 
-/** The people a thread is shared with now, in the order they were invited. */
-export async function peopleOf(db: D1Database, threadId: string): Promise<PersonRow[]> {
-  return (
-    await db
-      .prepare(
-        `SELECT people.id, people.number, people.email, people.name, members.added_at, people.photo_id FROM members JOIN people ON people.id = members.person_id
-         WHERE members.thread_id = ?1 AND members.removed_at IS NULL ORDER BY members.added_at, people.id`,
-      )
-      .bind(threadId)
-      .all<PersonRow>()
-  ).results;
+/**
+ * The people a thread is shared with now, in the order they were invited: those invited to it, and with `throughCollections`
+ * (the owner's and the sync's reads), everyone else a shared collection it is in reaches, each once, by the first such
+ * collection, so his Share names how they reach it. An invited person reads only the first kind, because a collection's
+ * people are never shown to the people it is shared with.
+ */
+export async function peopleOf(db: D1Database, threadId: string, throughCollections = false): Promise<PersonRow[]> {
+  const direct = `SELECT people.id, people.number, people.email, people.name, members.added_at, people.photo_id, NULL AS through_number, NULL AS through_name
+    FROM members JOIN people ON people.id = members.person_id WHERE members.thread_id = ?1 AND members.removed_at IS NULL`;
+  const reached = `SELECT people.id, people.number, people.email, people.name, reach.added_at, people.photo_id, reach.through_number,
+      (SELECT collections.name FROM collections WHERE collections.number = reach.through_number) AS through_name
+    FROM (SELECT collection_members.person_id, MIN(collection_members.added_at) AS added_at, MIN(collection_members.collection_number) AS through_number
+          FROM collection_members JOIN collection_threads ON collection_threads.collection_number = collection_members.collection_number
+          WHERE collection_threads.thread_id = ?1 AND collection_members.removed_at IS NULL GROUP BY collection_members.person_id) AS reach
+    JOIN people ON people.id = reach.person_id
+    WHERE NOT EXISTS (SELECT 1 FROM members WHERE members.thread_id = ?1 AND members.person_id = people.id AND members.removed_at IS NULL)`;
+  const sql = throughCollections ? `SELECT * FROM (${direct} UNION ALL ${reached}) ORDER BY added_at, id` : `${direct} ORDER BY members.added_at, people.id`;
+  return (await db.prepare(sql).bind(threadId).all<PersonRow>()).results;
 }
 
-/** How many people have an invitation that stands, to any thread: each person once. */
+/** How many people have an invitation that stands, to a thread or to a collection: each person once. */
 export async function invitedCount(db: D1Database): Promise<number> {
-  return (await db.prepare("SELECT COUNT(DISTINCT person_id) AS n FROM members WHERE removed_at IS NULL").first<{ n: number }>())?.n ?? 0;
+  return (
+    (
+      await db
+        .prepare("SELECT COUNT(*) AS n FROM (SELECT person_id FROM members WHERE removed_at IS NULL UNION SELECT person_id FROM collection_members WHERE removed_at IS NULL)")
+        .first<{ n: number }>()
+    )?.n ?? 0
+  );
 }
 
 /** A person to invite, as the door checked them: the address lowercased, and the name he typed. */
@@ -1127,7 +1172,7 @@ export async function invite(db: D1Database, number: number, invitee: Invitee): 
     `INSERT INTO events (thread_id, at, actor, type, data)
      SELECT threads.id, ${e.add(now)}, 'owner', 'invited', json_object('person', people.id, 'name', people.name)
      FROM threads JOIN people ON people.email = ${e.add(invitee.email)}
-     WHERE threads.number = ${e.add(number)} AND NOT ${standing("threads.id", invitee.email, e)}`,
+     WHERE threads.number = ${e.add(number)} AND NOT ${invitedDirectly("threads.id", invitee.email, e)}`,
     e,
   );
   const m = new Params();
@@ -1685,6 +1730,8 @@ export interface PeopleRow {
   commented: number;
   noted: number;
   met: number;
+  /** The collections shared with them now (migrations/0024_collection_members.sql). */
+  collections: number;
   /** The latest of when they appeared, their threads and notes, their invitations, and their meetings that have begun. */
   last_contact: string;
   /**
@@ -1709,15 +1756,18 @@ const PEOPLE_COLUMNS = `people.id, people.number, people.email, people.name, peo
   (SELECT COUNT(*) FROM comments WHERE comments.person_id = people.id AND comments.author = 'member') AS commented,
   (SELECT COUNT(*) FROM comments WHERE comments.person_id = people.id AND comments.author = 'visitor') AS noted,
   (SELECT COUNT(*) FROM attendees WHERE attendees.person_id = people.id) AS met,
+  (SELECT COUNT(*) FROM collection_members WHERE collection_members.person_id = people.id AND collection_members.removed_at IS NULL) AS collections,
   MAX(people.created_at,
     COALESCE((SELECT MAX(created_at) FROM threads WHERE threads.person_id = people.id), ''),
     COALESCE((SELECT MAX(created_at) FROM comments WHERE comments.person_id = people.id), ''),
     COALESCE((SELECT MAX(added_at) FROM members WHERE members.person_id = people.id), ''),
+    COALESCE((SELECT MAX(added_at) FROM collection_members WHERE collection_members.person_id = people.id), ''),
     COALESCE((SELECT MAX(threads.meeting_when) FROM attendees JOIN threads ON threads.id = attendees.thread_id
               WHERE attendees.person_id = people.id AND threads.meeting_when <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), '')) AS last_contact,
   (EXISTS (SELECT 1 FROM threads WHERE threads.person_id = people.id AND threads.status <> 'dropped')
     OR EXISTS (SELECT 1 FROM members JOIN threads ON threads.id = members.thread_id
                WHERE members.person_id = people.id AND (members.removed_at IS NULL OR threads.status <> 'dropped'))
+    OR EXISTS (SELECT 1 FROM collection_members WHERE collection_members.person_id = people.id AND collection_members.removed_at IS NULL)
     OR EXISTS (SELECT 1 FROM comments JOIN threads ON threads.id = comments.thread_id
                WHERE comments.person_id = people.id AND comments.state <> 'dropped' AND threads.status <> 'dropped')
     OR EXISTS (SELECT 1 FROM attendees JOIN threads ON threads.id = attendees.thread_id

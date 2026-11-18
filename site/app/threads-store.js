@@ -63,7 +63,9 @@
 // words; `showCollection` one with a page of its threads (50, in his order), filtered and searched; `makeCollection`
 // and `changeCollection` make and change one (a name taken, ignoring case, is Failed `name-taken`), and `changeKept`
 // keeps a thread in one, takes it out or moves it to a place. A thread's own read names the collections it is in
-// (`collections`), and a search answers the collections beside the threads and people, for him alone.
+// (`collections`), and a search answers the collections beside the threads and people, for him alone. He shares a
+// collection with people (`collectionPeople`, `shareCollection`), and a person he invited reads the ones shared with
+// them through the same `listCollections` and `showCollection`, and finds them in their search.
 
 /**
  * @typedef {import('./standing.js').List} List
@@ -104,7 +106,7 @@
  * @typedef {{ author: 'owner' | 'member' | 'visitor' | string, name: string | null, body: string, createdAt: string, question?: string | null, mine?: boolean, photo?: string | null }} PublicComment
  * @typedef {{ thread: PublicThread, page: PublicPage | null, comments: PublicComment[], truncated: boolean, ownerPhoto?: string | null }} PublicShown
  * @typedef {'show' | 'drop'} Judgement
- * @typedef {{ id?: string, number?: number, name: string | null, email?: string, addedAt?: string, owner?: boolean, photo?: string | null }} Person
+ * @typedef {{ id?: string, number?: number, name: string | null, email?: string, addedAt?: string, owner?: boolean, photo?: string | null, through?: KeptIn | null }} Person
  * @typedef {{ sent: number, told: number, invited: number, removed: number, commented: number, noted: number, met?: number }} Counts
  * @typedef {{
  *   number: number, name: string | null, email: string | null, createdAt: string, lastContact: string,
@@ -543,6 +545,25 @@ export async function makeCollection(name, description) {
 export async function changeCollection(number, change) {
   const answer = /** @type {{ collection?: Collection }} */ (await post(`/collections/${number}`, change));
   return answer.collection ?? null;
+}
+
+/**
+ * Who a collection is shared with, and how many people have access to anything of his: his Share's read.
+ * @param {number} number
+ * @returns {Promise<People>}
+ */
+export async function collectionPeople(number) {
+  return /** @type {People} */ (await call(`/collections/${number}/people`, { method: 'GET' }));
+}
+
+/**
+ * Invites a person to a collection, or takes the invitation back; answers its people as they now stand.
+ * @param {number} number
+ * @param {{ add: { email: string, name: string } } | { remove: string }} change
+ * @returns {Promise<People>}
+ */
+export async function shareCollection(number, change) {
+  return /** @type {People} */ (await post(`/collections/${number}/people`, change));
 }
 
 /**

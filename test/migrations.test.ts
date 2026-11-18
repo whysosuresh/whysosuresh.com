@@ -30,7 +30,8 @@
 // 0022, preview cards: no thread has one yet, so every public thread's preview shows the site's card; a card names a
 // thread that is there, a thread has at most one, and a card's id and object are each kept once. For 0023, collections:
 // there are none yet; a name is kept once ignoring case, a thread once per collection, each row names a collection
-// and a thread that are there, and a deleted collection's number is never given again.
+// and a thread that are there, and a deleted collection's number is never given again. For 0024, collections shared
+// with people: nobody is invited to one yet, and an invitation names a collection and a person that are there, once.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -721,5 +722,24 @@ describe("0023, collections", () => {
     await keep(2, "t1");
     await database.batch([database.prepare("DELETE FROM collection_threads WHERE collection_number = 2"), database.prepare("DELETE FROM collections WHERE number = 2")]);
     expect(await make("Third")).toEqual({ number: 3 });
+  });
+});
+
+describe("0024, collections shared with people", () => {
+  it("starts with no one, keeps a person once per collection, only of a collection and a person that are there", async () => {
+    harness = await startHarness({ through: "0023" });
+    const database = await harness.db();
+    await database.batch([
+      database.prepare("INSERT INTO collections (name, changed_at, created_at) VALUES ('Every screen', '2026-11-18T00:00:00.000Z', '2026-11-18T00:00:00.000Z')"),
+      database.prepare("INSERT INTO people (id, number, email, name, created_at) VALUES ('p1', 1, 'meera@example.com', 'Meera', '2026-11-18T00:00:00.000Z')"),
+    ]);
+    await harness.migrate();
+    expect(await database.prepare("SELECT COUNT(*) AS n FROM collection_members").first<{ n: number }>()).toEqual({ n: 0 });
+    const share = (collection: number, person: string): Promise<unknown> =>
+      database.prepare("INSERT INTO collection_members (collection_number, person_id, added_at) VALUES (?1, ?2, '2026-11-18T01:00:00.000Z')").bind(collection, person).run();
+    await expect(share(9, "p1")).rejects.toThrow(/FOREIGN KEY/);
+    await expect(share(1, "nobody")).rejects.toThrow(/FOREIGN KEY/);
+    await share(1, "p1");
+    await expect(share(1, "p1")).rejects.toThrow(/UNIQUE/);
   });
 });

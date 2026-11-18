@@ -264,7 +264,7 @@ function migrations(): { number: string; statements: string[] }[] {
  * The tables `reset` empties, children before the tables they name, because D1 checks foreign keys; and last the
  * AUTOINCREMENT counters, so every test numbers its collections from 1.
  */
-const TABLES = ["outside_items", "events", "comments", "members", "attendees", "pages", "cards", "collection_threads", "collections", "threads", "people", "talk_days", "talk_senders", "answer_senders", "ask_thread_senders", "ask_answer_senders", "journal_answers", "journal_storylines", "journal_entries", "journal_versions", "journal_photos", "now_lines", "owner_photos", "photos", "sqlite_sequence"];
+const TABLES = ["outside_items", "events", "comments", "members", "attendees", "pages", "cards", "collection_threads", "collection_members", "collections", "threads", "people", "talk_days", "talk_senders", "answer_senders", "ask_thread_senders", "ask_answer_senders", "journal_answers", "journal_storylines", "journal_entries", "journal_versions", "journal_photos", "now_lines", "owner_photos", "photos", "sqlite_sequence"];
 
 /**
  * The Worker's evaluation key in the harness, as the deploy hands it over (an RSA private key as a JWK), and its

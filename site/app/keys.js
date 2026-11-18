@@ -99,10 +99,10 @@ export const MEMBER_SHEET = Object.freeze([
   {
     title: 'Move around',
     rows: [
-      { keys: 'J', label: 'Next thread' },
+      { keys: 'J', label: 'Next thread, in a collection too' },
       { keys: 'K', label: 'Previous thread' },
       { keys: '↵', label: 'Open the thread' },
-      { keys: 'Esc', label: 'Back to your threads' },
+      { keys: 'Esc', label: 'Back to your threads, or the collection' },
       { keys: '⌘K', label: 'Find in your threads' },
     ],
   },

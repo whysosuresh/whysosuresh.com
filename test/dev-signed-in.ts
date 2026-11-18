@@ -44,7 +44,8 @@
 // hey.whysosuresh.com live. His collections, 44 of them, made as the sync makes them: "Every screen", pinned, whose rule
 // ("Design page:") keeps the six design pages seeded after it; "Every decision", pinned, holding 180 made-up settled
 // calls (two thirds of them done), enough for its search, its filter and its pages; "Talk material" with a few of the
-// seed's threads; and 41 more holding a handful of the decisions each, so the room pages and searches. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
+// seed's threads; and 41 more holding a handful of the decisions each, so the room pages and searches. Every screen is
+// shared with the guest, so `--member` shows it on their door beside the thread shared with them on its own. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
 // played keys.
 
 import { readFileSync } from "node:fs";
@@ -544,6 +545,13 @@ async function seedCollections(): Promise<void> {
   }
   for (const number of [...settled].reverse()) await keep(decisions, number);
 
+  // Shared with the guest, as he shares one from its page, so `--member` shows a collection beside their own thread.
+  const shared = await harness.fetch(`${THREADS}/threads/api/collections/${screens}/people`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": harness.access.token(harness.access.ownerClaims()), Origin: THREADS },
+    body: new TextEncoder().encode(JSON.stringify({ add: { email: member ?? "meera@example.com", name: "Meera" } })),
+  });
+  if (!shared.ok) throw new Error(`sharing Every screen answered ${shared.status}`);
   const talk = await make("Talk material", "Everything the December talk draws on.");
   for (const number of [5, 3, 2]) await keep(talk, number);
 

@@ -109,7 +109,7 @@ describe("inviting", () => {
   it("keeps the person once, by their address lowercased, with an event naming them and never their address", async () => {
     const n = await thread();
     const first = await invite(n, "Meera@Example.com", "  Meera  ");
-    expect(first.people).toEqual([{ id: expect.any(String), number: 1, name: "Meera", email: MEERA, addedAt: expect.any(String), photo: null }]);
+    expect(first.people).toEqual([{ id: expect.any(String), number: 1, name: "Meera", email: MEERA, addedAt: expect.any(String), photo: null, through: null }]);
     expect(first.invitedCount).toBe(1);
     const shown = await answer<Shown>(await call(`/threads/${n}`));
     const invited = shown.events.filter((event) => event.type === "invited");
@@ -617,5 +617,143 @@ describe("a respondent he invites back to their thread", () => {
     for (const body of [{ action: "read" }, { action: "close" }, { action: "open" }, { slug: "mine" }]) {
       expect([body, await reasonOf(await call(`/threads/${theirs}/ask`, { ...meera, body }))]).toEqual([body, [403, "owner-only"]]);
     }
+  });
+});
+
+describe("a shared collection", () => {
+  /** A collection holding #a and #b, and #c outside it; answers their numbers and the collection's. */
+  async function stage(): Promise<{ c: number; a: number; b: number; outside: number }> {
+    const made = await answer<{ collection: { number: number } }>(await call("/collections", { body: { name: "Every screen" } }), 201);
+    const c = made.collection.number;
+    const [a, b, outside] = [await thread({ title: "Kept page one" }), await thread({ title: "Kept page two" }), await thread({ title: "Outside words" })];
+    for (const n of [a, b]) await answer(await call(`/collections/${c}/threads`, { body: { add: n } }));
+    return { c, a, b, outside };
+  }
+
+  async function share(c: number, email: string, name = "Meera"): Promise<People> {
+    return answer<People>(await call(`/collections/${c}/people`, { body: { add: { email, name } } }));
+  }
+
+  async function signsIn(email: string): Promise<boolean> {
+    const asked = await harness.fetch(`${HEY}/api/access/evaluate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: new TextEncoder().encode(JSON.stringify({ token: harness.access.token(harness.access.evaluationClaims(email)) })),
+    });
+    const verdict = (await answer<{ token: string }>(asked)).token.split(".")[1] ?? "";
+    return (JSON.parse(Buffer.from(verdict, "base64url").toString("utf8")) as { success: boolean }).success;
+  }
+
+  it("opens every thread in it, a thread added later included, and nothing outside it", async () => {
+    const { c, a, b, outside } = await stage();
+    expect(await signsIn(MEERA)).toBe(false);
+    const shared = await share(c, MEERA);
+    expect([shared.people.map((one) => one.email), shared.invitedCount]).toEqual([[MEERA], 1]);
+    expect(await signsIn(MEERA)).toBe(true);
+    const as = { email: MEERA };
+    for (const n of [a, b]) expect((await call(`/threads/${n}`, { as })).status).toBe(200);
+    expect(await reasonOf(await call(`/threads/${outside}`, { as }))).toEqual([404, "no-thread"]);
+    const later = await thread({ title: "Kept page three" });
+    expect(await reasonOf(await call(`/threads/${later}`, { as }))).toEqual([404, "no-thread"]);
+    await answer(await call(`/collections/${c}/threads`, { body: { add: later } }));
+    expect((await call(`/threads/${later}`, { as })).status).toBe(200);
+    // A comment of theirs is taken, as on any thread they are in.
+    expect((await call(`/threads/${later}/comments`, { as, body: { body: "Looks right." } })).status).toBe(201);
+    // Their search finds the collection's threads and the collection, never the thread outside it.
+    const found = await answer<{ threads: { number: number }[]; collections: { number: number }[] }>(await call("/search?q=page", { as }));
+    expect([found.threads.map((one) => one.number).sort(), found.collections]).toEqual([[a, b, later].sort(), []]);
+    expect((await answer<{ collections: { number: number }[] }>(await call("/search?q=screen", { as }))).collections.map((one) => one.number)).toEqual([c]);
+    expect((await answer<{ threads: unknown[] }>(await call("/search?q=Outside", { as }))).threads).toEqual([]);
+  });
+
+  it("lists to them the collections shared with them and their threads, never another collection, its people, rule or pin", async () => {
+    const { c, a, b } = await stage();
+    await answer(await call(`/collections/${c}`, { body: { rule: "Kept" } }));
+    await answer(await call(`/collections/${c}`, { body: { pinned: true } }));
+    const other = (await answer<{ collection: { number: number } }>(await call("/collections", { body: { name: "Private set" } }), 201)).collection.number;
+    await share(c, MEERA);
+    const as = { email: MEERA };
+    const listed = await answer<{ collections: Record<string, unknown>[] }>(await call("/collections", { as }));
+    expect(listed.collections).toEqual([{ number: c, name: "Every screen", description: null, changedAt: expect.any(String), threads: 2 }]);
+    const read = await answer<{ collection: Record<string, unknown>; threads: { number: number; place: number }[] }>(await call(`/collections/${c}`, { as }));
+    expect(read.collection).not.toHaveProperty("rule");
+    expect(read.collection).not.toHaveProperty("pinned");
+    expect(read.threads.map((one) => [one.place, one.number])).toEqual([[1, a], [2, b]]);
+    expect(JSON.stringify(read)).not.toMatch(/meera@|shareKey|senderEmail/);
+    expect(await reasonOf(await call(`/collections/${other}`, { as }))).toEqual([404, "no-collection"]);
+    expect(await reasonOf(await call("/collections/999", { as }))).toEqual([404, "no-collection"]);
+    expect(await reasonOf(await call(`/collections/${c}/people`, { as }))).toEqual([403, "owner-only"]);
+    for (const [path, body] of [[`/collections/${c}`, { name: "Mine" }], [`/collections/${c}/threads`, { add: a }], [`/collections/${c}/people`, { add: { email: DEV, name: "Dev" } }], ["/collections", { name: "Mine" }]] as const) {
+      expect(await reasonOf(await call(path, { as, body }))).toEqual([403, "owner-only"]);
+    }
+    // Their door's list holds the threads shared with them on their own, not the collection's.
+    expect((await answer<{ threads: unknown[] }>(await call("/threads", { as }))).threads).toEqual([]);
+    // A thread never names its collections or its kept lines to them.
+    const shown = await answer<Record<string, unknown> & { events: { type: string }[] }>(await call(`/threads/${a}`, { as }));
+    expect(shown).not.toHaveProperty("collections");
+    expect(shown.events.map((event) => event.type)).not.toContain("kept");
+  });
+
+  it("closes at once when the person is removed, the thread taken out or the collection deleted", async () => {
+    const { c, a, b } = await stage();
+    const id = (await share(c, MEERA)).people[0]?.id ?? "";
+    await share(c, DEV, "Dev");
+    const as = { email: MEERA };
+    await answer(await call(`/collections/${c}/threads`, { body: { remove: a } }));
+    expect(await reasonOf(await call(`/threads/${a}`, { as }))).toEqual([404, "no-thread"]);
+    expect((await call(`/threads/${b}`, { as })).status).toBe(200);
+    const after = await answer<People>(await call(`/collections/${c}/people`, { body: { remove: id } }));
+    expect(after.people.map((one) => one.email)).toEqual([DEV]);
+    expect(await reasonOf(await call(`/threads/${b}`, { as }))).toEqual([403, "caller"]);
+    expect(await signsIn(MEERA)).toBe(false);
+    expect(await reasonOf(await call(`/collections/${c}/people`, { body: { remove: id } }))).toEqual([409, "not-invited"]);
+    expect((await call(`/threads/${b}`, { as: { email: DEV } })).status).toBe(200);
+    await answer(await call(`/collections/${c}`, { body: { delete: true } }));
+    expect(await reasonOf(await call(`/threads/${b}`, { as: { email: DEV } }))).toEqual([403, "caller"]);
+    expect(await signsIn(DEV)).toBe(false);
+  });
+
+  it("keeps a direct invitation apart: removing the collection's leaves the thread's own, and its list lists only that", async () => {
+    const { c, a, b } = await stage();
+    const viaCollection = (await share(c, MEERA)).people[0]?.id ?? "";
+    await invite(a, MEERA);
+    const as = { email: MEERA };
+    expect((await answer<{ threads: { number: number }[] }>(await call("/threads", { as }))).threads.map((one) => one.number)).toEqual([a]);
+    await answer(await call(`/collections/${c}/people`, { body: { remove: viaCollection } }));
+    expect((await call(`/threads/${a}`, { as })).status).toBe(200);
+    expect(await reasonOf(await call(`/threads/${b}`, { as }))).toEqual([404, "no-thread"]);
+  });
+
+  it("counts each person once, names how a collection reaches a thread, and shows the People room both kinds", async () => {
+    const { c, a } = await stage();
+    await share(c, MEERA);
+    await invite(a, MEERA);
+    await share(c, DEV, "Dev");
+    expect((await answer<People>(await call(`/collections/${c}/people`))).invitedCount).toBe(2);
+    const people = await answer<{ people: { email: string; through: { number: number; name: string } | null }[] }>(await call(`/threads/${a}/people`));
+    expect(people.people.map((one) => [one.email, one.through])).toEqual([
+      [MEERA, null],
+      [DEV, { number: c, name: "Every screen" }],
+    ]);
+    const listed = await answer<{ threads: { number: number; shared: number }[] }>(await call("/threads?tab=pending"));
+    expect(listed.threads.find((one) => one.number === a)?.shared).toBe(2);
+    // An invited person reads the thread's own people, never the collection's.
+    const theirs = await answer<{ people: { name: string }[] }>(await call(`/threads/${a}`, { as: { email: MEERA } }));
+    expect(theirs.people.map((one) => one.name)).toEqual(["Suresh", "Meera"]);
+    const everyone = await answer<{ people: { email: string; invited: boolean; counts: { collections: number; invited: number } }[] }>(await call("/people"));
+    const dev = everyone.people.find((one) => one.email === DEV);
+    expect([dev?.invited, dev?.counts.collections, dev?.counts.invited]).toEqual([true, 1, 0]);
+    const number = (await answer<{ people: { number: number; email: string }[] }>(await call("/people"))).people.find((one) => one.email === DEV)?.number;
+    expect((await answer<{ collections: unknown[] }>(await call(`/people/${number}`))).collections).toEqual([{ number: c, name: "Every screen" }]);
+  });
+
+  it("is his alone to share, from his own page: the sync and another site are refused", async () => {
+    const { c } = await stage();
+    expect(await reasonOf(await call(`/collections/${c}/people`, { as: "sync", body: { add: { email: MEERA, name: "Meera" } } }))).toEqual([403, "owner-only"]);
+    expect(await reasonOf(await call(`/collections/${c}/people`, { as: "sync" }))).toEqual([403, "owner-only"]);
+    expect(await reasonOf(await call(`/collections/${c}/people`, { body: { add: { email: MEERA, name: "Meera" } }, origin: "https://example.com" }))).toEqual([403, "origin"]);
+    expect(await reasonOf(await call(`/collections/${c}/people`, { body: { add: { email: OWNER, name: "Me" } } }))).toEqual([400, "owner"]);
+    expect(await reasonOf(await call("/collections/99/people", { body: { add: { email: MEERA, name: "Meera" } } }))).toEqual([404, "no-collection"]);
+    expect(await signsIn(MEERA)).toBe(false);
   });
 });

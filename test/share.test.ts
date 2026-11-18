@@ -10,7 +10,7 @@
 // switch: only a public thread can be listed, and it says what everyone sees once it is.
 
 import { describe, expect, it } from "vitest";
-import { SEATS, addressOf, feedLines, invitation, invitationProblem, isAddress, levelOf, linkShown, listed, noteReply, publicLines, seatsLine, seesLines } from "../site/app/share.js";
+import { SEATS, addressOf, collectionInvitation, collectionSeatsLine, collectionSeesLines, feedLines, invitation, invitationProblem, isAddress, levelOf, linkShown, listed, noteReply, publicLines, seatsLine, seesLines } from "../site/app/share.js";
 
 describe("an invitation's check", () => {
   it("takes an address the Worker takes, for an invitation and a person's page alike", () => {
@@ -164,5 +164,23 @@ describe("a reply to a visitor's note", () => {
     const draft = noteReply({ number: 57, title: "T" }, { name: null, email: "a@example.com", body: "x".repeat(500) });
     expect(draft.body.startsWith("Hi there,")).toBe(true);
     expect(draft.body).toContain(`> ${"x".repeat(400)}…`);
+  });
+});
+
+describe("sharing a collection", () => {
+  it("says an invite opens every thread in it, as it changes, and never who else it is shared with", () => {
+    expect(collectionSeesLines(6).sees).toBe("every thread in it (6 threads now) and every one you add later, each as an invited person reads a thread, and can comment on each.");
+    expect(collectionSeesLines(1).sees).toContain("(1 thread now)");
+    expect(collectionSeesLines(0).sees).toContain("(no threads yet)");
+    expect(collectionSeesLines(6).never).toContain("who else it is shared with");
+    expect(collectionSeatsLine(1)).toBe(`An invite opens every thread in this collection, now and as it changes. 1 person has access to your threads; Cloudflare signs in ${SEATS} free.`);
+  });
+
+  it("drafts the invitation with the collection's own link and ?invite", () => {
+    const draft = collectionInvitation({ name: "Every screen", path: "/collections/1-every-screen" }, { name: "Meera K.", email: "meera@example.com" }, "https://hey.whysosuresh.com");
+    expect([draft.to, draft.subject]).toEqual(["meera@example.com", "Every screen"]);
+    expect(draft.body).toContain("Hi Meera,");
+    expect(draft.body).toContain("https://hey.whysosuresh.com/collections/1-every-screen?invite");
+    expect(draft.body).toContain("the ones I add later too");
   });
 });
