@@ -5730,7 +5730,8 @@ class Threads {
       el('span', { class: 't-num' }, [String(thread.place)]),
       el('a', { class: 't-row-main', href: threadPath(thread), 'data-thread': String(thread.number), 'data-from-kept': '' }, [
         el('span', { class: 't-row-title' }, [...rowMark(thread), `#${thread.number} `, titleOf(thread)]),
-        el('span', { class: 't-row-sub' }, [this.rowLine(thread)]),
+        // An invited person's rows say what the thread says, as their own list's do, never whose it is.
+        el('span', { class: 't-row-sub' }, [this.member ? firstLine(thread) : this.rowLine(thread)]),
       ]),
       meta,
     ]);
