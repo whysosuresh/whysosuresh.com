@@ -63,6 +63,7 @@ export const RAIL_WORDS = Object.freeze({
   owner: 'Owner',
   ownerDetail: 'Owner of whysosuresh.com',
   guest: 'Guest of Suresh',
+  guestAfterAddress: 'guest of Suresh',
   account: 'Account',
   photo: 'Your photo',
   keys: 'Keyboard shortcuts',
@@ -189,7 +190,7 @@ export function memberRail(input) {
     foot: {
       name: shown,
       role: RAIL_WORDS.guest,
-      detail: name === null ? RAIL_WORDS.guest : `${input.email} · ${RAIL_WORDS.guest.toLowerCase()}`,
+      detail: name === null ? RAIL_WORDS.guest : `${input.email} · ${RAIL_WORDS.guestAfterAddress}`,
       initial: (shown.trim().charAt(0) || '?').toUpperCase(),
     },
   };
