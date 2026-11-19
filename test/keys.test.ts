@@ -1,6 +1,7 @@
 // The threads page's keys (site/app/keys.js), one map for the key handler and the keyboard sheet. What it holds:
 // every key the sheet lists does what the sheet says, ⌘K and Ctrl+K find, the browser's own shortcuts stay its own,
-// and a key the page doesn't use does nothing (3 and 4 among them, now the list has two tabs); L keeps a thread and /
+// and a key the page doesn't use does nothing (3 and 4 among them, now the list has two tabs); Y sets a reminder and H
+// moves a due one Later; L keeps a thread and /
 // searches the room or collection shown. An invited person's sheet lists only keys their page answers, and
 // their page answers no move, edit, reply, new thread or share.
 
@@ -33,6 +34,9 @@ describe("the keys", () => {
     ["s", "share"],
     ["b", "meeting"],
     ["B", "meeting"],
+    ["y", "remind"],
+    ["Y", "remind"],
+    ["h", "later"],
     ["l", "keep"],
     ["L", "keep"],
     ["/", "search"],

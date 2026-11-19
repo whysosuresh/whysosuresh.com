@@ -2,7 +2,8 @@
 // The threads page's keys, as one map: it names what each key does for the page's key handler
 // (site/app/threads.js) and draws the keyboard sheet (`?`), so the two never disagree. The one-key moves are the
 // inbox's, kept as they were, plus 1 and 2 for the list's two tabs (Pending, Done), M (comment), W (edit), N (new),
-// S (share), B (the meeting: book it, move it, change who is in it), L (keep it in a collection), / (search the room
+// S (share), B (the meeting: book it, move it, change who is in it), Y (a reminder: set it or change it), H (Later on a
+// reminder that is due), L (keep it in a collection), / (search the room
 // or collection shown) and ⌘K (find). ⌥↑ and ⌥↓ move a kept thread in a collection's order, with ⇧ to the top or the
 // bottom; the page reads those itself, as it reads ⌘↵, because every other ⌥ key stays the browser's. A person the owner invited
 // reads and comments, so their page answers only the keys on their own sheet (`MEMBER_SHEET`, `MEMBER_COMMANDS`).
@@ -11,7 +12,7 @@
 
 /**
  * @typedef {'next' | 'prev' | 'open' | 'back' | 'tab-pending' | 'tab-done' | 'find' | 'act'
- *   | 'discuss' | 'drop' | 'done' | 'reopen' | 'space' | 'undo' | 'comment' | 'edit' | 'reply' | 'new' | 'share' | 'meeting' | 'keep' | 'search' | 'keys'} Command
+ *   | 'discuss' | 'drop' | 'done' | 'reopen' | 'space' | 'undo' | 'comment' | 'edit' | 'reply' | 'new' | 'share' | 'meeting' | 'remind' | 'later' | 'keep' | 'search' | 'keys'} Command
  * @typedef {{ keys: string, label: string }} KeyRow
  */
 
@@ -35,7 +36,8 @@ export const SHEET = Object.freeze([
       { keys: 'A', label: 'Act on it' },
       { keys: 'T', label: 'Talk it through' },
       { keys: 'D', label: 'Drop, then 1 – 4 for why' },
-      { keys: 'E', label: 'Done' },
+      { keys: 'E', label: 'Done; on a row under Due, done for this time' },
+      { keys: 'H', label: 'Later, on a reminder that is due' },
       { keys: 'U', label: 'Reopen' },
       { keys: 'C', label: 'Change the space, then 1 – 5' },
       { keys: 'Z', label: 'Undo the last move' },
@@ -50,6 +52,7 @@ export const SHEET = Object.freeze([
       { keys: 'N', label: 'New thread' },
       { keys: 'S', label: 'Share the thread' },
       { keys: 'B', label: 'Make it a meeting, or change it' },
+      { keys: 'Y', label: 'Remind me: once, or every so often' },
       { keys: '⌘↵', label: 'Save, or send the comment' },
       { keys: '?', label: 'These keys' },
     ],
@@ -88,6 +91,8 @@ const PLAIN = Object.freeze({
   n: 'new',
   s: 'share',
   b: 'meeting',
+  y: 'remind',
+  h: 'later',
   l: 'keep',
   '/': 'search',
   '?': 'keys',

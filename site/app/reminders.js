@@ -96,7 +96,7 @@ export function dueSince(reminder, status, today) {
 
 /**
  * Reminders in the order Today's Due shows them, oldest due first, then by number; the rows given are kept as they
- * are. @template {{ number: number, reminder: Reminder | null }} T @param {readonly T[]} rows
+ * are. @template {{ number: number, reminder?: Reminder | null }} T @param {readonly T[]} rows
  */
 export function byDue(rows) {
   return [...rows].sort((a, b) => (a.reminder?.on ?? '').localeCompare(b.reminder?.on ?? '') || a.number - b.number);
@@ -107,6 +107,11 @@ export function dayWords(day, today, locale) {
   const sameYear = day.slice(0, 4) === today.slice(0, 4);
   const options = /** @type {Intl.DateTimeFormatOptions} */ ({ timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) });
   return new Intl.DateTimeFormat(locale, options).format(new Date(`${day}T12:00:00Z`)).replaceAll(',', '');
+}
+
+/** "Monday", the day of the week a day is on, in the reader's locale. @param {string} day @param {Locale} locale */
+export function weekdayWords(day, locale) {
+  return new Intl.DateTimeFormat(locale, { timeZone: 'UTC', weekday: 'long' }).format(new Date(`${day}T12:00:00Z`));
 }
 
 /** "Every day", "Every week", "Every 2 weeks", "Every 10 days", or "Once". @param {number | null} every */
@@ -125,7 +130,7 @@ export function seriesWords(reminder, today, locale) {
 }
 
 /**
- * When it is due, as a reader says it: "Due today", "Due since Mon 16 Nov", "Due tomorrow", "Due Mon 30 Nov"; a
+ * When it is due, as a reader says it: "Due today", "Due since Mon 16 Nov", "Due tomorrow", "Next Mon 30 Nov"; a
  * dropped thread's reminder is "Paused while dropped".
  * @param {Reminder} reminder @param {string} status @param {string} today @param {Locale} locale
  */
@@ -134,7 +139,7 @@ export function dueWords(reminder, status, today, locale) {
   if (reminder.on === today) return 'Due today';
   if (reminder.on < today) return `Due since ${dayWords(reminder.on, today, locale)}`;
   if (reminder.on === addDays(today, 1)) return 'Due tomorrow';
-  return `Due ${dayWords(reminder.on, today, locale)}`;
+  return `Next ${dayWords(reminder.on, today, locale)}`;
 }
 
 /** The days Later offers: tomorrow, and the next Monday after today. @param {string} today */
@@ -171,4 +176,51 @@ export function reminderEventWords(type, data, today, locale) {
     return next === null ? `marked the reminder done for ${done}` : `marked the reminder done for ${done}; next ${next}`;
   }
   return null;
+}
+
+/**
+ * The line under a reminder on its thread: what Done will do while it is due, when it comes back while it is ahead, and
+ * that it waits while the thread is dropped.
+ * @param {Reminder} reminder @param {string} status @param {string} today @param {Locale} locale
+ */
+export function stripLine(reminder, status, today, locale) {
+  if (status === 'dropped') return 'Paused while the thread is dropped; reopening it brings it back.';
+  if (!isDue(reminder, status, today)) return "It comes back under Due on Today that morning, India's day.";
+  const next = afterDone(reminder, today);
+  return next === null ? 'Done ends it. It never changes where the thread stands.' : `Done sends it to ${dayWords(next, today, locale)}. It never changes where the thread stands.`;
+}
+
+/** Later's note under its days: only this time moves, and a repeat keeps its day; none for once. @param {Reminder} reminder @param {Locale} locale */
+export function laterNote(reminder, locale) {
+  if (reminder.every === null) return null;
+  return reminder.every % 7 === 0 ? `Only this time; it stays on ${weekdayWords(reminder.start, locale)}s.` : 'Only this time; its rhythm stays.';
+}
+
+/** What Done said: "Done for Mon 16 Nov. Next: Mon 23 Nov.", or, when it ended, "It won't come back." @param {Reminder} reminder @param {string | null} next @param {string} today @param {Locale} locale */
+export function doneWords(reminder, next, today, locale) {
+  const was = dayWords(reminder.on, today, locale);
+  return next === null ? `Done for ${was}. It won't come back.` : `Done for ${was}. Next: ${dayWords(next, today, locale)}.`;
+}
+
+/** What Later said: "Later: Fri 20 Nov, then back on Mondays." @param {Reminder} reminder @param {string} day @param {string} today @param {Locale} locale */
+export function laterWords(reminder, day, today, locale) {
+  const back = reminder.every !== null && reminder.every % 7 === 0 ? `, then back on ${weekdayWords(reminder.start, locale)}s` : '';
+  return `Later: ${dayWords(day, today, locale)}${back}.`;
+}
+
+/**
+ * What the editor says a series will do before it is saved: the problem with it, or a line in three parts, the day in
+ * the middle to stand out ("Next: " "Mon 23 Nov" ", then every Monday. …"; "Comes back under Due on Today " "on Wed 25
+ * Nov" ", once.").
+ * @param {Series} series @param {string} today @param {Locale} locale
+ * @returns {{ problem: string } | { lead: string, day: string, rest: string }}
+ */
+export function previewWords(series, today, locale) {
+  const next = firstOnOrAfter(series, today);
+  if (next === null) return { problem: 'That day has gone by. Pick today or a day after.' };
+  const every = series.every;
+  if (every === null) return { lead: 'Comes back under Due on Today ', day: next === today ? 'today' : `on ${dayWords(next, today, locale)}`, rest: ', once.' };
+  const weekday = weekdayWords(next, locale);
+  const then = every === 1 ? 'every day' : every === 7 ? `every ${weekday}` : every % 7 === 0 ? `every ${every / 7} weeks on ${weekday}s` : `every ${every} days`;
+  return { lead: 'Next: ', day: next === today ? 'today' : dayWords(next, today, locale), rest: `, then ${then}. Due by India's day wherever you are.` };
 }
