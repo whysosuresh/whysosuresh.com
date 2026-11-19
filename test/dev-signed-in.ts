@@ -668,7 +668,7 @@ async function seedReminders(): Promise<void> {
     (await (await harness.db()).prepare("SELECT number FROM threads WHERE origin_ref = ?1").bind(ref).first<{ number: number }>())?.number ?? 0;
   const make = async (ref: string, title: string, body: string): Promise<number> =>
     ((await asSync("", { ref, source: "self", status: "act", space: "stigmer", title, body })).thread as { number: number }).number;
-  const onboarding = await make("chat:seed-reminder-onboarding", "Weekly onboarding turn", "Run /run-onboarding-loop; its numbers go on its GitHub issue.");
+  const onboarding = await make("chat:seed-reminder-onboarding", "Weekly onboarding turn", "Run the onboarding loop; its numbers go on its GitHub issue.");
   await asSync(`/${onboarding}/reminder`, { start: today, every: 7 });
   const numbers = await make("chat:seed-reminder-numbers", "Weekly numbers", "Read the week's numbers.");
   await asSync(`/${numbers}/reminder`, { start: today, every: 7 });
