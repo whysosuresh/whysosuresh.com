@@ -93,8 +93,17 @@
 // `kept` and `unkept` events are his own business (`OWNERS_EVENTS`). A collection may carry a rule, a title prefix:
 // a new thread of his or the sync's whose title begins with it joins the collection in the batch that makes it
 // (`ruleStatements`), and only then.
+//
+// Any thread may also carry a reminder (migrations/0027_reminders.sql), a day of his to come back to it: once on a
+// day, or every N days from a day (`setReminder`). Its next due day (`remind_on`) is apart from its series
+// (`remind_start`, `remind_every`), so Later (`snoozeReminder`) moves one time and never the series, and Done
+// (`finishReminder`) puts a repeat back on its rhythm after today, or ends a reminder for once. Due is never stored: it
+// is that day compared with today in his zone, on read, by site/app/reminders.js, which the page and the command line
+// read too. A reminder never moves its thread, so its writes stamp the last activity and never `moved_at` or the
+// status. Its events are his own business (`OWNERS_EVENTS`): reminders are his alone.
 
 import { LISTS, isList, type List } from "../site/app/standing.js";
+import { afterDone, firstOnOrAfter, todayIn, type Reminder, type Series } from "../site/app/reminders.js";
 import { outsideItems, type OutsideRow } from "./outside-store.ts";
 
 /** Where a thread came from: the site's note flow, something told to him in person, or his own. */
@@ -128,7 +137,7 @@ export const isTab = isList;
 // order: SQLite doesn't order an aggregate, so the door sorts them, and it never emits an address; it reads one only
 // to tell an invited reader which attendee is them. A response thread reads its ask's number, slug and title the same way.
 export const COLUMNS =
-  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at, feed_at, share_key, public_by_number, person_id, (SELECT people.number FROM people WHERE people.id = threads.person_id) AS sender_number, meeting_when, meeting_minutes, meeting_where, (SELECT json_group_array(json_object('number', people.number, 'name', people.name, 'email', people.email, 'photo', people.photo_id)) FROM attendees JOIN people ON people.id = attendees.person_id WHERE attendees.thread_id = threads.id) AS meeting_people, ask_slug, ask_state, ask_thread_id, (SELECT asked.number FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_number, (SELECT asked.ask_slug FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_slug, (SELECT asked.title FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_title";
+  "id, number, created_at, source, space, title, body, summary, status, kind, sender_name, sender_email, drop_reason, reply_opened_at, origin_ref, filed_link, moved_at, COALESCE(activity_at, created_at) AS activity_at, main, link_url, link_title, public_at, feed_at, share_key, public_by_number, person_id, (SELECT people.number FROM people WHERE people.id = threads.person_id) AS sender_number, meeting_when, meeting_minutes, meeting_where, (SELECT json_group_array(json_object('number', people.number, 'name', people.name, 'email', people.email, 'photo', people.photo_id)) FROM attendees JOIN people ON people.id = attendees.person_id WHERE attendees.thread_id = threads.id) AS meeting_people, ask_slug, ask_state, ask_thread_id, (SELECT asked.number FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_number, (SELECT asked.ask_slug FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_slug, (SELECT asked.title FROM threads AS asked WHERE asked.id = threads.ask_thread_id) AS ask_of_title, remind_start, remind_on, remind_every";
 
 export interface ThreadRow {
   id: string;
@@ -178,6 +187,10 @@ export interface ThreadRow {
   ask_of_number: number | null;
   ask_of_slug: string | null;
   ask_of_title: string | null;
+  /** Its reminder: the day its series counts from, the next day it is due, and its repeat in days (null for once); all null while it has none. */
+  remind_start: string | null;
+  remind_on: string | null;
+  remind_every: number | null;
   /** On a list's rows only (`LIST_EXTRAS`): how many people the thread is shared with now. */
   shared?: number;
   /** On a list's rows only: 1 when the last word on it is an invited person's or a visitor's, else 0. */
@@ -654,9 +667,11 @@ const COMMENT_COLUMNS =
 /**
  * Events an invited person never sees: the owner's mail opening, the copy from the old inbox, a visitor's note
  * dropped or sent back to waiting, which would tell them a note arrived that they could never read, his marking
- * an ask's answers read, and his keeping a thread in a collection or taking it out, which would name his collections.
+ * an ask's answers read, his keeping a thread in a collection or taking it out, which would name his collections,
+ * and his reminders, which are his alone.
  */
-const OWNERS_EVENTS = "'reply-opened', 'imported', 'note-dropped', 'note-held', 'ask-read', 'kept', 'unkept'";
+const OWNERS_EVENTS =
+  "'reply-opened', 'imported', 'note-dropped', 'note-held', 'ask-read', 'kept', 'unkept', 'reminder-set', 'reminder-cleared', 'reminder-snoozed', 'reminder-done'";
 
 /**
  * A thread's comments and events, oldest first, up to `limit` of each. An invited person reads only the comments
@@ -1399,6 +1414,160 @@ export async function unattend(db: D1Database, number: number, personNumber: num
   if (row === undefined) return "no-thread";
   if ((taken?.results.length ?? 0) > 0) return row;
   return row.meeting_when === null ? "not-a-meeting" : "not-attending";
+}
+
+/** The reminder a row holds now, as a JSON object (null while it has none): what an event keeps as `from`. */
+const REMINDER_NOW = "CASE WHEN remind_on IS NULL THEN NULL ELSE json_object('start', remind_start, 'on', remind_on, 'every', remind_every) END";
+
+/** The reminder on the thread numbered `number`, as a condition on `threads`. */
+function reminderOn(number: number, p: Params): string {
+  return `threads.number = ${p.add(number)} AND threads.remind_on IS NOT NULL`;
+}
+
+/** A row's reminder as site/app/reminders.js reads it; null while it has none. */
+export function reminderOf(row: Pick<ThreadRow, "remind_start" | "remind_on" | "remind_every">): Reminder | null {
+  if (row.remind_on === null || row.remind_start === null) return null;
+  return { start: row.remind_start, on: row.remind_on, every: row.remind_every };
+}
+
+/** Why a reminder's write wasn't kept; nothing is written for any of them. */
+export type ReminderRefusal = "no-thread" | "not-a-reminder" | "past" | "stale";
+
+/**
+ * Sets a thread's reminder, or (null) clears it, with its event and the thread's last activity: one batch. A set
+ * starts the series and makes its next due day the first on or after today in his zone, so a weekly series started on
+ * a Monday gone by is next due on the coming Monday, not due at once; a reminder for once on a day gone by is refused
+ * (`past`). It writes `reminder-set` with the reminder it replaced (`from`, null when there was none) and the new one
+ * (`to`); setting it again to what it is still writes its event, as a meeting does. Clearing writes
+ * `reminder-cleared` with `from`. `no-thread` when there is no such thread, `not-a-reminder` when clearing one that has
+ * none; either way nothing is written. Never a move: the status and `moved_at` stay as they are.
+ */
+export async function setReminder(db: D1Database, number: number, series: Series | null, actor: Author): Promise<ThreadRow | Exclude<ReminderRefusal, "stale">> {
+  const now = new Date();
+  const at = now.toISOString();
+  if (series !== null) {
+    const on = firstOnOrAfter(series, todayIn(now.getTime()));
+    if (on === null) return "past";
+    const e = new Params();
+    const to = `json_object('start', ${e.add(series.start)}, 'on', ${e.add(on)}, 'every', ${e.add(series.every)})`;
+    const event = statement(
+      db,
+      `INSERT INTO events (thread_id, at, actor, type, data)
+       SELECT id, ${e.add(at)}, ${e.add(actor)}, 'reminder-set', json_object('from', ${REMINDER_NOW}, 'to', ${to}) FROM threads WHERE number = ${e.add(number)}`,
+      e,
+    );
+    const u = new Params();
+    const update = statement(
+      db,
+      `UPDATE threads SET remind_start = ${u.add(series.start)}, remind_on = ${u.add(on)}, remind_every = ${u.add(series.every)}, activity_at = ${u.add(at)}
+       WHERE number = ${u.add(number)} RETURNING ${COLUMNS}`,
+      u,
+    );
+    const [, updated] = await db.batch<ThreadRow>([event, update]);
+    return updated?.results[0] ?? "no-thread";
+  }
+  const e = new Params();
+  const cleared = statement(
+    db,
+    `INSERT INTO events (thread_id, at, actor, type, data)
+     SELECT id, ${e.add(at)}, ${e.add(actor)}, 'reminder-cleared', json_object('from', ${REMINDER_NOW}) FROM threads WHERE ${reminderOn(number, e)}`,
+    e,
+  );
+  const u = new Params();
+  const update = statement(
+    db,
+    `UPDATE threads SET remind_start = NULL, remind_on = NULL, remind_every = NULL, activity_at = ${u.add(at)} WHERE ${reminderOn(number, u)} RETURNING ${COLUMNS}`,
+    u,
+  );
+  const [, updated] = await db.batch<ThreadRow>([cleared, update]);
+  const row = updated?.results[0];
+  if (row !== undefined) return row;
+  return (await find(db, { number }, EVERY_THREAD)) === null ? "no-thread" : "not-a-reminder";
+}
+
+/**
+ * Later: moves a reminder's next due day to `day`, today in his zone or after (`past` before), with the
+ * `reminder-snoozed` event (`from`, the day it was due, and `to`) and the thread's last activity: one batch. Only this
+ * time moves: the series stays, so Done puts a weekly reminder back on its own day. `no-thread`, `not-a-reminder`.
+ */
+export async function snoozeReminder(db: D1Database, number: number, day: string, actor: Author): Promise<ThreadRow | Exclude<ReminderRefusal, "stale">> {
+  const now = new Date();
+  if (day < todayIn(now.getTime())) return "past";
+  const at = now.toISOString();
+  const e = new Params();
+  const event = statement(
+    db,
+    `INSERT INTO events (thread_id, at, actor, type, data)
+     SELECT id, ${e.add(at)}, ${e.add(actor)}, 'reminder-snoozed', json_object('from', remind_on, 'to', ${e.add(day)}) FROM threads WHERE ${reminderOn(number, e)}`,
+    e,
+  );
+  const u = new Params();
+  const update = statement(db, `UPDATE threads SET remind_on = ${u.add(day)}, activity_at = ${u.add(at)} WHERE ${reminderOn(number, u)} RETURNING ${COLUMNS}`, u);
+  const [, updated] = await db.batch<ThreadRow>([event, update]);
+  const row = updated?.results[0];
+  if (row !== undefined) return row;
+  return (await find(db, { number }, EVERY_THREAD)) === null ? "no-thread" : "not-a-reminder";
+}
+
+/**
+ * Done: marks the reminder due on `on` done, with the `reminder-done` event (the day it was due, and the next, null
+ * when it ended) and the thread's last activity: one batch. A reminder for once ends; a repeat goes to its first day on
+ * its rhythm after both today and `on` (site/app/reminders.js, `afterDone`), so weeks he missed never pile up and done
+ * early skips that one. `on` is the day the caller saw it due, and both statements hold it and the series as read, so
+ * a second Done, a double tap or a racing caller, finds the reminder moved on and is refused (`stale`) rather than
+ * skipping a time he never saw. `no-thread`, `not-a-reminder`, `stale` when it is due on another day now; nothing is
+ * written for any of them. The thread's status never changes.
+ */
+export async function finishReminder(db: D1Database, number: number, on: string, actor: Author): Promise<ThreadRow | Exclude<ReminderRefusal, "past">> {
+  const row = await find(db, { number }, EVERY_THREAD);
+  if (row === null) return "no-thread";
+  const reminder = reminderOf(row);
+  if (reminder === null) return "not-a-reminder";
+  if (reminder.on !== on) return "stale";
+  const now = new Date();
+  const at = now.toISOString();
+  const next = afterDone(reminder, todayIn(now.getTime()));
+  const held = (p: Params): string =>
+    `threads.number = ${p.add(number)} AND threads.remind_on = ${p.add(on)} AND threads.remind_start = ${p.add(reminder.start)} AND threads.remind_every IS ${p.add(reminder.every)}`;
+  const e = new Params();
+  const event = statement(
+    db,
+    `INSERT INTO events (thread_id, at, actor, type, data)
+     SELECT id, ${e.add(at)}, ${e.add(actor)}, 'reminder-done', json_object('day', ${e.add(on)}, 'next', ${e.add(next)}) FROM threads WHERE ${held(e)}`,
+    e,
+  );
+  const u = new Params();
+  const sets = next === null ? "remind_start = NULL, remind_on = NULL, remind_every = NULL" : `remind_on = ${u.add(next)}`;
+  const update = statement(db, `UPDATE threads SET ${sets}, activity_at = ${u.add(at)} WHERE ${held(u)} RETURNING ${COLUMNS}`, u);
+  const [, updated] = await db.batch<ThreadRow>([event, update]);
+  return updated?.results[0] ?? "stale";
+}
+
+/** A thread with a reminder, as the reminders' list reads it. */
+export interface ReminderRow {
+  number: number;
+  title: string | null;
+  status: string;
+  remind_start: string;
+  remind_on: string;
+  remind_every: number | null;
+}
+
+/** The most reminders the list answers: far beyond what he keeps, bounded so the read stays small. */
+const MAX_REMINDERS = 500;
+
+/**
+ * Every thread with a reminder, soonest due first, then by number: the command line's and the sync's read, which
+ * don't load every thread as his page does. A dropped thread's reminder is listed too, never due (the door says so).
+ */
+export async function listReminders(db: D1Database): Promise<ReminderRow[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT number, title, status, remind_start, remind_on, remind_every FROM threads WHERE remind_on IS NOT NULL AND remind_start IS NOT NULL ORDER BY remind_on, number LIMIT ${MAX_REMINDERS}`,
+      )
+      .all<ReminderRow>()
+  ).results;
 }
 
 /** A public thread by the address a stranger named it by; null for any address that doesn't open one. */

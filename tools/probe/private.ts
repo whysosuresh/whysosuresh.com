@@ -40,6 +40,7 @@ export function probes(day: string, week: string): Probe[] {
     "/threads/api/threads/1",
     "/threads/api/people",
     "/threads/api/asks",
+    "/threads/api/reminders",
     "/threads/api/me",
     "/threads/api/now",
     "/threads/api/photo",

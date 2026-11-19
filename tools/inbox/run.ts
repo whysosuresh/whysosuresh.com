@@ -18,6 +18,9 @@
 // pinned or renamed; sharing one and making it public have no verb, because they are his own acts, from his page.
 // Distribution (src/distribution.ts) is read as a product's room, and written as a distribution run ends: its acts from
 // stdin, one JSON object a line and one call each, a wrong act voided by its id, a platform's state, and a week's numbers.
+// A reminder is set on a thread by the day it starts and its repeat in days, moved for one time, marked done for the
+// day it is due (read from the thread first, so a second Done is refused rather than skipping a time), and cleared;
+// `reminders` lists every one, soonest first, with whether it is due today in his zone.
 // This module is the logic, with fetch, the environment and
 // the streams handed in, so the tests drive it with a played fetch; tools/inbox/inbox.ts is the entry point
 // that hands it the real ones.
@@ -45,6 +48,10 @@ const THREADS = "/threads/api/threads";
 const PEOPLE = "/threads/api/people";
 /** Where the asks' list lives. */
 const ASKS = "/threads/api/asks";
+/** Where the reminders' list lives. */
+const REMINDERS = "/threads/api/reminders";
+/** A repeat in days as typed: 1 to 366, which the Worker checks again. */
+const EVERY_SHAPE = /^[1-9]\d{0,2}$/;
 /** Where the collections' calls live. */
 const COLLECTIONS = "/threads/api/collections";
 /** Where the journal's calls live. */
@@ -100,6 +107,18 @@ export const USAGE = `Usage: inbox <verb> [arguments]
                                   or a moment with its zone (2026-11-09T15:00+05:30); --minutes its length
                                   (5 to 1440), --where one line; setting it again replaces all three
   meeting <number> --clear        the thread is no meeting, and its people are taken off it
+  remind <number> --start <day> [--every <days>]
+                                  a reminder on the thread: once on the day, or every <days> days from it (7 is
+                                  every week, 1 every day); it comes due on Today in Suresh's zone and never
+                                  moves the thread; a weekly one started on a day gone by is next due on its
+                                  coming day; setting it again replaces it
+  remind <number> --snooze <day>  this time only moved to the day (Later); a repeat keeps its rhythm
+  remind <number> --done          the reminder done for the day it is due: once, it ends; a repeat goes to its
+                                  next day after today, missed times never piling up
+  remind <number> --clear         the reminder removed
+  reminders                       every thread with a reminder, soonest due first, one JSON line each: its
+                                  number, title, status, reminder ({start, on, every}), due and dueSince; a
+                                  dropped thread's is never due
   attendees <number> (--add <person number> | --new <name> | --remove <person number>)...
                                   the meeting's people changed, one call each in the order given: --add a
                                   person by their number, --new someone inbox people doesn't hold (a new
@@ -401,6 +420,46 @@ async function meeting(io: Io, secret: string, args: readonly string[]): Promise
     if (change.when === null) throw new Usage("meeting takes a thread's number and --when <day or moment with its zone>, or --clear");
   }
   return report(io, "meeting", await call(io, secret, `${THREADS}/${number}/meeting`, { method: "POST", body: JSON.stringify(change) }), "thread");
+}
+
+/** A thread's reminder set, moved for one time, marked done, or cleared: one flag shape each. */
+async function remind(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  const [given, flag, value, ...rest] = args;
+  const number = numberOf("remind", given);
+  const path = `${THREADS}/${number}/reminder`;
+  const send = async (change: unknown): Promise<number> => report(io, "remind", await call(io, secret, path, { method: "POST", body: JSON.stringify(change) }), "thread");
+  if (flag === "--clear" && value === undefined) return send({ start: null, every: null });
+  if (flag === "--snooze" && value !== undefined && DAY_SHAPE.test(value) && rest.length === 0) return send({ snooze: value });
+  if (flag === "--start" && value !== undefined && DAY_SHAPE.test(value)) {
+    if (rest.length === 0) return send({ start: value, every: null });
+    if (rest.length === 2 && rest[0] === "--every" && EVERY_SHAPE.test(rest[1] ?? "")) return send({ start: value, every: Number(rest[1]) });
+    throw new Usage("remind: --every takes a whole number of days, 1 to 366");
+  }
+  if (flag === "--done" && value === undefined) {
+    // Done names the day it is due as the thread says now, so a second Done finds it moved on and is refused.
+    const shown = await call(io, secret, `${THREADS}/${number}`, { method: "GET" });
+    if (shown.status !== 200) return report(io, "remind", shown, null);
+    const thread = shown.body.thread as { reminder?: { on?: unknown } | null } | undefined;
+    const on = thread?.reminder?.on;
+    if (typeof on !== "string") {
+      io.err("inbox: remind refused (409 not-a-reminder)");
+      return 1;
+    }
+    return send({ action: "done", on });
+  }
+  throw new Usage("remind takes a thread's number and --start <day> [--every <days>], --snooze <day>, --done or --clear");
+}
+
+/** Every reminder, one line each, as the Worker answers them. */
+async function reminders(io: Io, secret: string, args: readonly string[]): Promise<number> {
+  if (args.length > 0) throw new Usage("reminders takes nothing more");
+  const answer = await call(io, secret, REMINDERS, { method: "GET" });
+  if (answer.status !== 200) {
+    io.err(`inbox: reminders refused (${answer.status} ${reasonOf(answer)})`);
+    return 1;
+  }
+  for (const one of Array.isArray(answer.body.reminders) ? (answer.body.reminders as unknown[]) : []) io.out(JSON.stringify(one));
+  return 0;
 }
 
 /** The flags `attendees` takes, each a change of one person. */
@@ -809,6 +868,8 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     if (verb === "link") return await link(io, secret, args);
     if (verb === "meeting") return await meeting(io, secret, args);
     if (verb === "attendees") return await attendees(io, secret, args);
+    if (verb === "remind") return await remind(io, secret, args);
+    if (verb === "reminders") return await reminders(io, secret, args);
     if (verb === "people") return await people(io, secret, args);
     if (verb === "person") return await person(io, secret, args);
     if (verb === "asks") return await asks(io, secret, args);

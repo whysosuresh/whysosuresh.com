@@ -174,6 +174,7 @@ describe("an add", () => {
       ask: null,
       shareKey: null,
       publicByNumber: false,
+      reminder: null,
     });
     const again = await call("", { body: { ...body, title: "Another title" } });
     expect(again.status).toBe(200);

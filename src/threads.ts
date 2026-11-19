@@ -28,7 +28,9 @@
 //                                             {"action": "open"}               owner
 //                                             {"action": "close"}              owner and sync
 //                                             {"action": "read"}               owner: its answers marked read
+//   POST /threads/api/threads/<n>/reminder    {"start", "every"} | {"snooze": <day>} | {"action": "done", "on": <day>}   owner and sync
 //   GET  /threads/api/asks                                                    owner and sync
+//   GET  /threads/api/reminders                                               owner and sync
 //   GET  /threads/api/search?q=<words or a number>                            everyone
 //   GET  /threads/api/sign-in?next=<a threads page>                           everyone
 //   GET  /threads/api/people[/<n>], POST /threads/api/people/<n>               owner and sync read; owner writes (src/people.ts)
@@ -42,7 +44,7 @@
 //
 // An invited person reads only the threads they are in: every read takes the caller as its reader, and the
 // store's queries see no other thread, so one they aren't in answers 404 `no-thread`, exactly as a number never
-// used. Every call that isn't theirs (a move, a text, a link, a page, a meeting, an add, a tab's list, the people) is refused
+// used. Every call that isn't theirs (a move, a text, a link, a page, a meeting, a reminder, an add, a tab's list, the people) is refused
 // with 403 `owner-only` before anything is read, so the refusal says nothing about a number. What they see of a
 // thread is shaped here (`thread`, `commentView`, `eventView`): never a visitor's email, the origin, the issue
 // link, a drop reason, the owner's mail opening or an earlier version of any text, and never an "Only me"
@@ -121,6 +123,17 @@
 // never given a page or a link of its own (409 `asked`), because its page is its ask's, which it shows to everyone
 // in it. The asks' list answers every ask with how many answered, when last, and the Send a note topic that opens
 // it, if any (site/talk-topics.js). Invited people are refused every ask call with 403 `owner-only`.
+//
+// Any thread may carry a reminder, his alone: a day to come back to it, once or every N days (site/app/reminders.js
+// holds what due means, in his zone). The owner and the sync set and clear it (`{"start", "every"}`, `every` null for
+// once, both null to clear), move its next day for one time (Later, `{"snooze": <day>}`), and mark it done for the day
+// they saw it due (`{"action": "done", "on": <day>}`), which ends a reminder for once and puts a repeat back on its
+// rhythm after today. The owner's and the sync's thread says it (`reminder`: `{start, on, every}`, null while it has
+// none); an invited person's never holds the key, and the public, collection and ask answers never read it. The
+// reminders' list answers today in his zone and every thread with a reminder, soonest first, each with whether it is
+// due and since when, for the command line and the sync. Refusals: 400 `reminder` for a malformed call or a day gone
+// by; 404 `no-thread`; 409 `not-a-reminder` for a thread with none, `stale` for a Done on a day it is no longer due.
+// An invited person is refused both calls with 403 `owner-only` before anything is read.
 
 import { identify, type Caller, type Refusal } from "./access.ts";
 import type { Bindings } from "./bindings.ts";
@@ -137,6 +150,7 @@ import { handlePhoto } from "./photos.ts";
 import { ownerPhotoId, personFace } from "./photos-store.ts";
 import { SLUG_SHAPE } from "./asks.ts";
 import { TOPICS } from "../site/talk-topics.js";
+import { dueSince, isDue, todayIn } from "../site/app/reminders.js";
 import { sameOrigin } from "./request.ts";
 import {
   answeredBy,
@@ -145,6 +159,7 @@ import {
   create,
   edit,
   find,
+  finishReminder,
   history,
   invite,
   invitedCount,
@@ -153,6 +168,7 @@ import {
   findPage,
   listAsks,
   listByNumber,
+  listReminders,
   listShared,
   makeAsk,
   makeMove,
@@ -166,6 +182,9 @@ import {
   setAskState,
   setLink,
   setMeeting,
+  setReminder,
+  snoozeReminder,
+  reminderOf,
   unattend,
   uninvite,
   judgeNote,
@@ -196,6 +215,7 @@ import {
   quoted,
   readAttendee,
   readMeeting,
+  readReminder,
   refuse,
   text,
 } from "./wire.ts";
@@ -282,6 +302,8 @@ function thread(row: ThreadRow, reader: Reader): { readonly [key: string]: JsonV
     // opens one thread for, so they can't hand strangers a link he didn't give.
     shareKey: row.share_key,
     publicByNumber: row.public_by_number === 1,
+    // His reminder, after the invited person's return above, so their answer never holds the key.
+    reminder: reminderOf(row),
   };
 }
 
@@ -783,6 +805,40 @@ async function changeAsk(request: Request, number: number, env: Bindings, caller
   return json(200, { thread: thread(changed, caller) });
 }
 
+/**
+ * Sets a thread's reminder or clears it, moves its next day for one time (Later), or marks it done for the day it was
+ * due: the owner's and the sync's. Answers the thread.
+ */
+async function changeReminder(request: Request, number: number, env: Bindings, caller: Writer): Promise<Response> {
+  const length = lengthRefusal(request, MAX_CHANGE_BYTES);
+  if (length !== null) return length;
+  const asked = readReminder(await readJson(request));
+  if (asked === null) return refuse(400, "reminder");
+  const changed =
+    "set" in asked
+      ? await setReminder(env.DB, number, asked.set, caller.caller)
+      : "snooze" in asked
+        ? await snoozeReminder(env.DB, number, asked.snooze, caller.caller)
+        : await finishReminder(env.DB, number, asked.done, caller.caller);
+  if (changed === "past") return refuse(400, "reminder");
+  if (changed === "no-thread") return refuse(404, changed);
+  if (changed === "not-a-reminder" || changed === "stale") return refuse(409, changed);
+  return json(200, { thread: thread(changed, caller) });
+}
+
+/** Every thread with a reminder, soonest first, with today in his zone and whether each is due and since when. */
+async function reminders(env: Bindings): Promise<Response> {
+  const today = todayIn(Date.now());
+  const rows = await listReminders(env.DB);
+  return json(200, {
+    today,
+    reminders: rows.map((row) => {
+      const reminder = { start: row.remind_start, on: row.remind_on, every: row.remind_every };
+      return { number: row.number, title: row.title, status: row.status, reminder, due: isDue(reminder, row.status, today), dueSince: dueSince(reminder, row.status, today) };
+    }),
+  });
+}
+
 /** Every ask, for Asks: drafts first, with how many answered, when last, and the Send a note topic that opens it. */
 async function asks(env: Bindings): Promise<Response> {
   const rows = await listAsks(env.DB);
@@ -863,9 +919,10 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
     if (url.pathname === "/threads/api/me") return me(who, env);
     return url.pathname === "/threads/api/search" ? lookUp(url, env, who) : signedIn(url);
   }
-  if (url.pathname === "/threads/api/asks") {
+  if (url.pathname === "/threads/api/asks" || url.pathname === "/threads/api/reminders") {
     if (request.method !== "GET") return json(405, { reason: "method" }, { Allow: "GET" });
-    return who.caller === "member" ? refuse(403, "owner-only") : asks(env);
+    if (who.caller === "member") return refuse(403, "owner-only");
+    return url.pathname === "/threads/api/asks" ? asks(env) : reminders(env);
   }
   if (url.pathname === "/threads/api/threads") {
     if (request.method !== "GET" && request.method !== "POST") return json(405, { reason: "method" }, { Allow: "GET, POST" });
@@ -888,7 +945,7 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
     const [, number = "", noteId = ""] = ruling;
     return NUMBER_SHAPE.test(number) ? judge(request, Number(number), noteId, env, who) : refuse(404, "no-thread");
   }
-  const route = /^\/threads\/api\/threads\/([^/]+)(?:\/(comments|text|pages|link|people|meeting|attendees|ask|card))?$/.exec(url.pathname);
+  const route = /^\/threads\/api\/threads\/([^/]+)(?:\/(comments|text|pages|link|people|meeting|attendees|ask|reminder|card))?$/.exec(url.pathname);
   if (route === null) return json(404, { reason: "not-found" });
   const [, given = "", part] = route;
   const readable = part === undefined || part === "people";
@@ -918,5 +975,6 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
   if (part === "meeting") return replaceMeeting(request, number, env, who);
   if (part === "attendees") return changeAttendees(request, number, env, who);
   if (part === "ask") return changeAsk(request, number, env, who);
+  if (part === "reminder") return changeReminder(request, number, env, who);
   return move(request, number, env, who);
 }

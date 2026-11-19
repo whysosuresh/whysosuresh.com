@@ -39,6 +39,7 @@ const SERVED = [
   "app/people.js",
   "app/meetings.js",
   "app/rail.js",
+  "app/reminders.js",
   "app/share.js",
   "app/standing.js",
   "app/threads-store.js",

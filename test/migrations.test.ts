@@ -35,6 +35,7 @@
 // For 0025, public collections: every collection starts private with no key, and a key is kept once. For 0026,
 // distribution: it starts empty; an act's origin is kept once, its person is one that is there, and a product, a kind,
 // an audience, a state, a pace or a reading outside its set is refused; a platform and a week's metric are one row each.
+// For 0027, reminders: every earlier thread has none, and every reader's thread says so.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -294,6 +295,9 @@ describe("0007, the inbox retired a deploy later", () => {
           ask_thread_id: _asked,
           share_key: _key,
           public_by_number: _byNumber,
+          remind_start: _start,
+          remind_on: _on,
+          remind_every: _every,
           ...rest
         }) => rest,
       ),
@@ -796,5 +800,18 @@ describe("0026, distribution", () => {
     await expect(reading(-1)).rejects.toThrow(/CHECK/);
     await reading(4);
     await expect(reading(5)).rejects.toThrow(/UNIQUE|PRIMARY KEY/);
+  });
+});
+
+describe("0027, reminders", () => {
+  it("leaves every earlier thread with no reminder, and every reader's thread says so", async () => {
+    harness = await startHarness({ through: "0026" });
+    const database = await harness.db();
+    await database.prepare("INSERT INTO threads (id, number, created_at, source, body, status) VALUES ('t1', 1, '2026-11-01T00:00:00.000Z', 'self', 'x', 'act')").run();
+    await harness.migrate();
+    expect(await database.prepare("SELECT remind_start, remind_on, remind_every FROM threads").all().then((r) => r.results)).toEqual([
+      { remind_start: null, remind_on: null, remind_every: null },
+    ]);
+    expect((await threadsTab(harness, "act")).threads.map((row) => row.reminder)).toEqual([null]);
   });
 });
