@@ -8,11 +8,14 @@
 // urgency; a push service that says the device is gone forgets it, and any other failure keeps it and says the status;
 // turning a device off forgets it. Every call is his alone: the sync and an invited person are refused before anything
 // is read, his writes come only from his own page, nobody gets in signed out, and without the key every call answers
-// 503. No answer ever carries an endpoint or a key.
+// 503. No answer ever carries an endpoint or a key. The morning's push, a leg of the hourly run judged by the run's own
+// time: nothing before 7:30 his time, with nothing due, or with no device; at 7:47 with something due, one message to
+// each device, which its own key decrypts to how many are due and their titles, a dropped thread's and one still ahead
+// left out; never twice in a day; when every device failed, the next hour tries again; a device gone is forgotten.
 
 import { createECDH, randomBytes, verify, webcrypto } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { TEST_PUSH } from "../site/app/reminders.js";
+import { TEST_PUSH, todayIn } from "../site/app/reminders.js";
 import { PUSH_PUBLIC_KEY, THREADS, startHarness, type Harness, type Pushed } from "./harness.ts";
 
 const MEERA = "meera@example.com";
@@ -289,5 +292,110 @@ describe("who may", () => {
     } finally {
       await keyless.dispose();
     }
+  });
+});
+
+describe("the morning's push", () => {
+  let hourly: Harness;
+  beforeAll(async () => {
+    hourly = await startHarness({ triggers: true });
+  });
+  afterAll(async () => {
+    await hourly.dispose();
+  });
+  beforeEach(async () => {
+    await hourly.reset();
+  });
+
+  /** A moment today in his zone, as the hourly run is scheduled for it. */
+  const at = (time: string): number => Date.parse(`${todayIn(Date.now())}T${time}:00+05:30`);
+
+  let made = 0;
+  /** A thread the sync adds, with a reminder from `start` every 7 days; answers its number. */
+  async function reminded(title: string, start: string, status = "act"): Promise<number> {
+    made += 1;
+    const sync = { "Content-Type": "application/json", "Cf-Access-Jwt-Assertion": token("sync", hourly) };
+    const added = await hourly.fetch(`${THREADS}/threads/api/threads`, {
+      method: "POST",
+      headers: sync,
+      body: new TextEncoder().encode(JSON.stringify({ ref: `chat:morning-${made}`, source: "self", title, body: "x", space: "company", status: "act" })),
+    });
+    const number = (await answer<{ thread: { number: number } }>(added, 201)).thread.number;
+    const set = await hourly.fetch(`${THREADS}/threads/api/threads/${number}/reminder`, { method: "POST", headers: sync, body: new TextEncoder().encode(JSON.stringify({ start, every: 7 })) });
+    await answer(set);
+    if (status === "dropped") {
+      const dropped = await hourly.fetch(`${THREADS}/threads/api/threads/${number}`, { method: "POST", headers: sync, body: new TextEncoder().encode(JSON.stringify({ action: "drop", reason: "" })) });
+      await answer(dropped);
+    }
+    return number;
+  }
+
+  async function turnOn(held = device()): Promise<ReturnType<typeof device>> {
+    await answer(await call("", { body: held.subscription, target: hourly }));
+    return held;
+  }
+
+  async function sentRow(): Promise<{ sent_at: string | null; count: number | null } | null> {
+    return (await hourly.db()).prepare("SELECT sent_at, count FROM reminder_pushes WHERE day = ?1").bind(todayIn(Date.now())).first();
+  }
+
+  const today = (): string => todayIn(Date.now());
+
+  it("sends nothing before 7:30, then one message to each device at 7:47 with what is due, never twice", async () => {
+    await reminded("Weekly onboarding turn", today());
+    await reminded("Back up the recorder", today());
+    await reminded("Dropped one", today(), "dropped");
+    const ahead = new Date(Date.parse(`${today()}T00:00:00Z`) + 2 * 864e5).toISOString().slice(0, 10);
+    await reminded("Not yet", ahead);
+    const phone = await turnOn(device(`${APPLE}${randomBytes(8).toString("hex")}`));
+    const mac = await turnOn();
+    expect(await hourly.scheduled(at("07:29"))).toBe("ok");
+    expect([hourly.pushes.sent.length, await sentRow()]).toEqual([0, null]);
+    expect(await hourly.scheduled(at("07:47"))).toBe("ok");
+    expect(hourly.pushes.sent.map((pushed) => pushed.endpoint).sort()).toEqual([phone.subscription.endpoint, mac.subscription.endpoint].sort());
+    for (const held of [phone, mac]) {
+      const pushed = hourly.pushes.sent.find((one) => one.endpoint === held.subscription.endpoint) as Pushed;
+      expect(await decrypt(pushed.body, held)).toEqual({ title: "2 reminders due", lines: ["Weekly onboarding turn", "Back up the recorder"] });
+      expect(pushed.headers.ttl).toBe("43200");
+    }
+    expect(await sentRow()).toEqual({ sent_at: expect.any(String), count: 2 });
+    expect(await hourly.scheduled(at("08:47"))).toBe("ok");
+    expect(hourly.pushes.sent).toHaveLength(2);
+  });
+
+  it("sends nothing with nothing due, or with no device", async () => {
+    await turnOn();
+    expect(await hourly.scheduled(at("07:47"))).toBe("ok");
+    expect([hourly.pushes.sent.length, await sentRow()]).toEqual([0, null]);
+    await hourly.reset();
+    await reminded("Weekly onboarding turn", today());
+    expect(await hourly.scheduled(at("07:47"))).toBe("ok");
+    expect([hourly.pushes.sent.length, await sentRow()]).toEqual([0, null]);
+  });
+
+  it("tries again the next hour when no device took it, and forgets a device that is gone", async () => {
+    await reminded("Weekly onboarding turn", today());
+    const down = await turnOn();
+    const gone = await turnOn(device(`${APPLE}${randomBytes(8).toString("hex")}`));
+    hourly.pushes.answers.set(down.subscription.endpoint, 500);
+    hourly.pushes.answers.set(gone.subscription.endpoint, 410);
+    expect(await hourly.scheduled(at("07:47"))).toBe("ok");
+    expect(await sentRow()).toBeNull();
+    expect((await (await hourly.db()).prepare("SELECT endpoint FROM push_devices").all<{ endpoint: string }>()).results.map((row) => row.endpoint)).toEqual([down.subscription.endpoint]);
+    hourly.pushes.answers.clear();
+    expect(await hourly.scheduled(at("08:47"))).toBe("ok");
+    expect(hourly.pushes.sent.filter((pushed) => pushed.endpoint === down.subscription.endpoint)).toHaveLength(2);
+    expect(await sentRow()).toEqual({ sent_at: expect.any(String), count: 1 });
+  });
+
+  it("takes over a claim a run left an hour ago, and never one that is fresh", async () => {
+    await reminded("Weekly onboarding turn", today());
+    await turnOn();
+    const database = await hourly.db();
+    await database.prepare("INSERT INTO reminder_pushes (day, claimed_at) VALUES (?1, ?2)").bind(today(), new Date(at("07:40")).toISOString()).run();
+    expect(await hourly.scheduled(at("07:47"))).toBe("ok");
+    expect(hourly.pushes.sent).toHaveLength(0);
+    expect(await hourly.scheduled(at("08:47"))).toBe("ok");
+    expect(hourly.pushes.sent).toHaveLength(1);
   });
 });

@@ -38,6 +38,16 @@ export function todayIn(now) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(now));
 }
 
+/** The minutes since his midnight at a moment, in his zone: 7:45 is 465. @param {number} now */
+export function minutesIn(now) {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: ZONE, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(now));
+  const part = (/** @type {string} */ type) => Number(parts.find((one) => one.type === type)?.value ?? '0');
+  return part('hour') * 60 + part('minute');
+}
+
+/** The earliest the morning's push goes, in minutes since his midnight: 7:30, so the hourly run at :47 sends it at 7:47. */
+export const MORNING_AT = 7 * 60 + 30;
+
 /** A day `n` days after another. @param {string} day @param {number} n */
 export function addDays(day, n) {
   return new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);

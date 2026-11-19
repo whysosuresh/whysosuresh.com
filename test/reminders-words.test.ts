@@ -25,6 +25,7 @@ import {
   laterDays,
   laterNote,
   laterWords,
+  minutesIn,
   morningPush,
   nextAfter,
   previewWords,
@@ -221,5 +222,14 @@ describe("the morning's push", () => {
     const long = "x".repeat(100);
     expect(morningPush([long]).lines[0]).toBe(`${"x".repeat(79)}…`);
     expect(morningPush(["1", "2", "3", "4", "5", "6", "7"])).toEqual({ title: "7 reminders due", lines: ["1", "2", "3", "4", "5", "and 2 more"] });
+  });
+});
+
+describe("his clock", () => {
+  it("says the minutes since his midnight, whatever zone the moment is written in", () => {
+    expect(minutesIn(Date.parse("2026-11-23T07:47:00+05:30"))).toBe(467);
+    expect(minutesIn(Date.parse("2026-11-23T02:17:00Z"))).toBe(467);
+    expect(minutesIn(Date.parse("2026-11-22T18:30:00Z"))).toBe(0);
+    expect(minutesIn(Date.parse("2026-11-23T18:29:00Z"))).toBe(23 * 60 + 59);
   });
 });

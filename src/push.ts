@@ -1,5 +1,6 @@
 // His reminders on his own devices: the calls his page makes to turn a device on and off and to send it a test,
-// and the devices they keep (migrations/0028_push_devices.sql). The message itself is src/web-push.ts's.
+// and the devices they keep (migrations/0028_push_devices.sql), and the morning's push of what is due, a leg of the
+// hourly run (`sendMorning`, migrations/0029_reminder_pushes.sql). The message itself is src/web-push.ts's.
 //
 //   GET    /threads/api/push/key                                  owner: the site's public key, for the browser to subscribe with
 //   POST   /threads/api/push       {"endpoint", "keys": {"p256dh", "auth"}}   owner, from his own page: this device on
@@ -13,13 +14,23 @@
 // keys and keeps when it was first turned on (`since`). The endpoint and keys are never answered and never logged: a
 // test logs its push service's status alone. A test to a device the push service says is gone (404, 410) forgets it
 // and answers 410 `gone`; any other failure answers 502 `push-failed` with the status (0 when it wasn't reached).
+//
+// The morning's push: once a day in his zone, at the first run of the hourly trigger at or after 7:30 (the trigger
+// fires at :47, so 7:47), when something is due (site/app/reminders.js: today or earlier, never a dropped thread's) and
+// he has a device, every device gets one message, its title how many are due and its lines up to five titles
+// (`morningPush`). The run's own time decides it (`controller.scheduledTime`), never the clock, so a late run judges
+// the hour it was for. The day is claimed first, by its row, so two runs never both send; a device the push service
+// says is gone is forgotten; when no device took it, the claim is let go and the next hour tries again; a claim left by
+// a run that died is taken over after half an hour. Its log line holds counts and statuses only, never a title or an
+// endpoint. Without the key it logs that and sends nothing, so the run's other legs are untouched.
 
 import type { Caller } from "./access.ts";
 import type { Bindings } from "./bindings.ts";
 import { json } from "./json.ts";
 import { sameOrigin } from "./request.ts";
 import { exactly, lengthRefusal, readJson, refuse } from "./wire.ts";
-import { TEST_PUSH } from "../site/app/reminders.js";
+import { MORNING_AT, TEST_PUSH, isDue, minutesIn, morningPush, todayIn } from "../site/app/reminders.js";
+import { listReminders } from "./store.ts";
 import { importVapidKey, isDeviceKeys, isPushEndpoint, send, type Device, type VapidKey } from "./web-push.ts";
 
 /** The most devices kept: his phone, his Macs' browsers, and room to spare. */
@@ -146,4 +157,64 @@ export async function handlePush(request: Request, url: URL, env: Bindings, who:
   const since = await keep(env.DB, device);
   if (since === "too-many") return refuse(409, "too-many");
   return json(200, { device: { since } });
+}
+
+/** How long a claim on a day holds before another run may take it over: a run that died never blocks the day. */
+const CLAIM_MS = 30 * 60 * 1000;
+
+/**
+ * Claims the day for this run: a new row, or a claim older than half an hour with nothing sent, taken over by its own
+ * old time, so of two runs one wins. Answers whether this run holds it.
+ */
+async function claim(db: D1Database, day: string, at: number): Promise<boolean> {
+  const now = new Date(at).toISOString();
+  const made = await db.prepare("INSERT OR IGNORE INTO reminder_pushes (day, claimed_at) VALUES (?1, ?2)").bind(day, now).run();
+  if (made.meta.changes > 0) return true;
+  const stale = new Date(at - CLAIM_MS).toISOString();
+  const taken = await db.prepare("UPDATE reminder_pushes SET claimed_at = ?1 WHERE day = ?2 AND sent_at IS NULL AND claimed_at < ?3").bind(now, day, stale).run();
+  return taken.meta.changes > 0;
+}
+
+/**
+ * The morning's push, as a leg of the hourly run at `at` (its scheduled time): what is due today in his zone, once, to
+ * every device he turned on. Nothing happens before 7:30 his time, on a day already sent, with nothing due, or with no
+ * device.
+ */
+export async function sendMorning(env: Bindings, at: number): Promise<void> {
+  if (minutesIn(at) < MORNING_AT) return;
+  const day = todayIn(at);
+  const done = await env.DB.prepare("SELECT sent_at FROM reminder_pushes WHERE day = ?1").bind(day).first<{ sent_at: string | null }>();
+  if (done?.sent_at) return;
+  const titles = (await listReminders(env.DB))
+    .filter((row) => isDue({ start: row.remind_start, on: row.remind_on, every: row.remind_every }, row.status, day))
+    .map((row) => row.title ?? `#${row.number}`);
+  if (titles.length === 0) return;
+  const held = await devices(env.DB);
+  if (held.length === 0) return;
+  const key = await vapidKey(env);
+  if (key === null) {
+    console.log(JSON.stringify({ push: "morning", skipped: "push-key" }));
+    return;
+  }
+  if (!(await claim(env.DB, day, at))) return;
+  const said = morningPush(titles);
+  const body = message(said.title, said.lines);
+  const statuses = await Promise.all(held.map((device) => send(key, device, body, Date.now())));
+  const took = new Date().toISOString();
+  let ok = 0;
+  let gone = 0;
+  for (const [i, status] of statuses.entries()) {
+    const device = held[i];
+    if (device === undefined) continue;
+    if (status >= 200 && status < 300) {
+      ok += 1;
+      await tookIt(env.DB, device.endpoint, took);
+    } else if (status === 404 || status === 410) {
+      gone += 1;
+      await forget(env.DB, device.endpoint);
+    }
+  }
+  if (ok > 0) await env.DB.prepare("UPDATE reminder_pushes SET sent_at = ?1, count = ?2 WHERE day = ?3").bind(took, ok, day).run();
+  else await env.DB.prepare("DELETE FROM reminder_pushes WHERE day = ?1 AND sent_at IS NULL").bind(day).run();
+  console.log(JSON.stringify({ push: "morning", due: titles.length, devices: held.length, ok, gone, statuses: [...new Set(statuses)].sort() }));
 }
