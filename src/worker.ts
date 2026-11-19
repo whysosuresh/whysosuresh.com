@@ -21,8 +21,11 @@
 // page's host (/threads/42, /ask/<slug>, /journal) lead nowhere. It also runs every hour on a cron trigger
 // (wrangler.jsonc): `scheduled` fetches his videos and the products' releases into the home page's list
 // (src/outside.ts) and, beside it, looks up the Gravatars of people he invited (src/photos.ts), each failing on its own
-// without stopping the other, and awaits both, so Cloudflare's record of each run says how it ended.
+// without stopping the other, and sends his devices the morning's push of what is due, once a day from 7:30 his time
+// (src/push.ts), judged by the run's own scheduled time; it awaits all three, so Cloudflare's record of each run says
+// how it ended.
 
+import { sendMorning } from "./push.ts";
 import { handlePublicCollections } from "./public-collections.ts";
 import { isThreadsHost } from "../site/hosts.js";
 import { serveCard } from "./cards.ts";
@@ -81,9 +84,11 @@ export default {
     const { hostname, pathname } = new URL(request.url);
     return isThreadsHost(hostname) ? threads(request, env, pathname) : home(request, env, pathname);
   },
-  async scheduled(_controller, env): Promise<void> {
-    const [outside, photos] = await Promise.allSettled([refreshOutside(env), refreshPhotos(env)]);
+  async scheduled(controller, env): Promise<void> {
+    // The morning's push judges the hour the run was for (`scheduledTime`), never the clock.
+    const [outside, photos, morning] = await Promise.allSettled([refreshOutside(env), refreshPhotos(env), sendMorning(env, controller.scheduledTime)]);
     if (outside.status === "rejected") throw outside.reason;
     if (photos.status === "rejected") throw photos.reason;
+    if (morning.status === "rejected") throw morning.reason;
   },
 } satisfies ExportedHandler<Bindings>;

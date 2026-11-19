@@ -36,7 +36,7 @@
 // distribution: it starts empty; an act's origin is kept once, its person is one that is there, and a product, a kind,
 // an audience, a state, a pace or a reading outside its set is refused; a platform and a week's metric are one row each.
 // For 0027, reminders: every earlier thread has none, and every reader's thread says so. For 0028, his devices' pushes:
-// none is kept yet, and an endpoint is kept once.
+// none is kept yet, and an endpoint is kept once. For 0029, the morning's pushes: no day is claimed yet, and a day once.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -830,5 +830,17 @@ describe("0028, his devices' pushes", () => {
         .run();
     await keep("d1");
     await expect(keep("d2")).rejects.toThrow(/UNIQUE/);
+  });
+});
+
+describe("0029, the morning's pushes", () => {
+  it("starts with no day claimed, and keeps a day once", async () => {
+    harness = await startHarness({ through: "0028" });
+    const database = await harness.db();
+    await harness.migrate();
+    expect(await database.prepare("SELECT COUNT(*) AS n FROM reminder_pushes").first<{ n: number }>()).toEqual({ n: 0 });
+    const claim = (): Promise<unknown> => database.prepare("INSERT INTO reminder_pushes (day, claimed_at) VALUES ('2026-11-23', '2026-11-23T02:17:00.000Z')").run();
+    await claim();
+    await expect(claim()).rejects.toThrow(/UNIQUE|PRIMARY KEY/);
   });
 });

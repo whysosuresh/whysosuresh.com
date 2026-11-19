@@ -250,8 +250,8 @@ export interface Harness {
   outside: PlayedOutside;
   /** The push services, played. */
   pushes: PlayedPushes;
-  /** Fires the Worker's hourly run, as its cron trigger does, and answers how it ended (`ok`, or why not). */
-  scheduled(): Promise<string>;
+  /** Fires the Worker's hourly run, as its cron trigger does, for the moment given (now when not), and answers how it ended (`ok`, or why not). */
+  scheduled(at?: number): Promise<string>;
   /** Applies the migrations not yet applied, up to and including `through` (a four-digit number), or all of them. */
   migrate(through?: string): Promise<void>;
   /** Empties every table, between tests. */
@@ -281,7 +281,7 @@ function migrations(): { number: string; statements: string[] }[] {
  * The tables `reset` empties, children before the tables they name, because D1 checks foreign keys; and last the
  * AUTOINCREMENT counters, so every test numbers its collections from 1.
  */
-const TABLES = ["push_devices", "outside_items", "events", "comments", "members", "attendees", "pages", "cards", "collection_threads", "collection_members", "collections", "threads", "distribution_acts", "distribution_platforms", "distribution_readings", "people", "talk_days", "talk_senders", "answer_senders", "ask_thread_senders", "ask_answer_senders", "journal_answers", "journal_storylines", "journal_entries", "journal_versions", "journal_photos", "now_lines", "owner_photos", "photos", "sqlite_sequence"];
+const TABLES = ["reminder_pushes", "push_devices", "outside_items", "events", "comments", "members", "attendees", "pages", "cards", "collection_threads", "collection_members", "collections", "threads", "distribution_acts", "distribution_platforms", "distribution_readings", "people", "talk_days", "talk_senders", "answer_senders", "ask_thread_senders", "ask_answer_senders", "journal_answers", "journal_storylines", "journal_entries", "journal_versions", "journal_photos", "now_lines", "owner_photos", "photos", "sqlite_sequence"];
 
 /**
  * The Worker's evaluation key in the harness, as the deploy hands it over (an RSA private key as a JWK), and its
@@ -522,9 +522,10 @@ export async function startHarness(options: { secret?: string; owner?: string; t
     access,
     outside,
     pushes,
-    async scheduled() {
+    async scheduled(at?: number) {
       if (options.triggers !== true) throw new Error("start the harness with { triggers: true } to fire the hourly run");
-      const response = (await mf.dispatchFetch(`${SITE}/cdn-cgi/local/scheduled?cron=${encodeURIComponent("17 * * * *")}&format=json`)) as unknown as Response;
+      const time = at === undefined ? "" : `&time=${at}`;
+      const response = (await mf.dispatchFetch(`${SITE}/cdn-cgi/local/scheduled?cron=${encodeURIComponent("17 * * * *")}&format=json${time}`)) as unknown as Response;
       return ((await response.json()) as { outcome: string }).outcome;
     },
     migrate,
