@@ -56,7 +56,7 @@
 // since nine days ago (so Done lands on its next day after today), "Inbox review" every week moved by Later to two days
 // out, pricing for small teams once tomorrow, the done "Rename the inbox to threads" every two weeks and due today, and
 // "Who owns what", shared with the guest, every week from two days out, so `--member` shows that none of it reaches
-// them. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
+// them, and the first public thread every week from today, so `--signed-out` shows a stranger reads none of it. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
 // played keys.
 
 import { readFileSync } from "node:fs";
@@ -682,6 +682,9 @@ async function seedReminders(): Promise<void> {
   await asSync(`/${await numberOf("chat:seed-3")}/reminder`, { start: addDays(today, 1), every: null });
   await asSync(`/${await numberOf("chat:seed-6")}/reminder`, { start: today, every: 14 });
   await asSync(`/${await numberOf("chat:seed-1")}/reminder`, { start: addDays(today, 2), every: 7 });
+  // A public thread due today, so `--signed-out` shows a stranger reads nothing of it.
+  const open = await (await harness.db()).prepare("SELECT number FROM threads WHERE share_key IS NOT NULL ORDER BY number LIMIT 1").first<{ number: number }>();
+  if (open !== null) await asSync(`/${open.number}/reminder`, { start: today, every: 7 });
 }
 
 await seed();

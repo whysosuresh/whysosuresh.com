@@ -158,7 +158,7 @@ describe("words", () => {
     expect(dueWords(weekly(MONDAY), "act", MONDAY, GB)).toBe("Due today");
     expect(dueWords(weekly("2026-11-16"), "act", MONDAY, GB)).toBe("Due since Mon 16 Nov");
     expect(dueWords(weekly("2026-11-24"), "act", MONDAY, GB)).toBe("Due tomorrow");
-    expect(dueWords(weekly("2026-11-30"), "act", MONDAY, GB)).toBe("Due Mon 30 Nov");
+    expect(dueWords(weekly("2026-11-30"), "act", MONDAY, GB)).toBe("Next Mon 30 Nov");
     expect(dueWords(weekly("2026-11-16"), "dropped", MONDAY, GB)).toBe("Paused while dropped");
   });
 

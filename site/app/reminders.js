@@ -130,7 +130,7 @@ export function seriesWords(reminder, today, locale) {
 }
 
 /**
- * When it is due, as a reader says it: "Due today", "Due since Mon 16 Nov", "Due tomorrow", "Due Mon 30 Nov"; a
+ * When it is due, as a reader says it: "Due today", "Due since Mon 16 Nov", "Due tomorrow", "Next Mon 30 Nov"; a
  * dropped thread's reminder is "Paused while dropped".
  * @param {Reminder} reminder @param {string} status @param {string} today @param {Locale} locale
  */
@@ -139,7 +139,7 @@ export function dueWords(reminder, status, today, locale) {
   if (reminder.on === today) return 'Due today';
   if (reminder.on < today) return `Due since ${dayWords(reminder.on, today, locale)}`;
   if (reminder.on === addDays(today, 1)) return 'Due tomorrow';
-  return `Due ${dayWords(reminder.on, today, locale)}`;
+  return `Next ${dayWords(reminder.on, today, locale)}`;
 }
 
 /** The days Later offers: tomorrow, and the next Monday after today. @param {string} today */
