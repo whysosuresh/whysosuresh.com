@@ -742,6 +742,31 @@ export async function removePhoto() {
   return null;
 }
 
+/** The site's public key, which a browser subscribes this device with, as base64url. @returns {Promise<string>} */
+export async function pushKey() {
+  return /** @type {{ key: string }} */ (await call('/push/key', { method: 'GET' })).key;
+}
+
+/**
+ * Turns reminders on for this device: its browser's subscription, as `toJSON()` gives it; answers when this device
+ * was first turned on.
+ * @param {PushSubscriptionJSON} subscription
+ * @returns {Promise<string>}
+ */
+export async function pushOn(subscription) {
+  return /** @type {{ device: { since: string } }} */ (await post('/push', subscription)).device.since;
+}
+
+/** Turns reminders off for this device, by its endpoint. @param {string} endpoint */
+export async function pushOff(endpoint) {
+  await call('/push', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint }) });
+}
+
+/** Sends this device a test; a device its push service says is gone fails as `gone`. @param {string} endpoint */
+export async function pushTest(endpoint) {
+  await post('/push/test', { endpoint });
+}
+
 /** Every public thread with the stamp of its preview card, null while it has none. @returns {Promise<CardDue[]>} */
 export async function listCards() {
   return /** @type {{ cards: CardDue[] }} */ (await call('/cards', { method: 'GET' })).cards;

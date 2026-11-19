@@ -35,7 +35,8 @@
 // For 0025, public collections: every collection starts private with no key, and a key is kept once. For 0026,
 // distribution: it starts empty; an act's origin is kept once, its person is one that is there, and a product, a kind,
 // an audience, a state, a pace or a reading outside its set is refused; a platform and a week's metric are one row each.
-// For 0027, reminders: every earlier thread has none, and every reader's thread says so.
+// For 0027, reminders: every earlier thread has none, and every reader's thread says so. For 0028, his devices' pushes:
+// none is kept yet, and an endpoint is kept once.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -813,5 +814,21 @@ describe("0027, reminders", () => {
       { remind_start: null, remind_on: null, remind_every: null },
     ]);
     expect((await threadsTab(harness, "act")).threads.map((row) => row.reminder)).toEqual([null]);
+  });
+});
+
+describe("0028, his devices' pushes", () => {
+  it("starts with no device, and keeps an endpoint once", async () => {
+    harness = await startHarness({ through: "0027" });
+    const database = await harness.db();
+    await harness.migrate();
+    expect(await database.prepare("SELECT COUNT(*) AS n FROM push_devices").first<{ n: number }>()).toEqual({ n: 0 });
+    const keep = (id: string): Promise<unknown> =>
+      database
+        .prepare("INSERT INTO push_devices (id, endpoint, p256dh, auth, created_at) VALUES (?1, 'https://fcm.googleapis.com/fcm/send/a', 'k', 'a', '2026-11-19T00:00:00.000Z')")
+        .bind(id)
+        .run();
+    await keep("d1");
+    await expect(keep("d2")).rejects.toThrow(/UNIQUE/);
   });
 });

@@ -143,6 +143,21 @@ export interface Played {
   readonly hang?: boolean;
 }
 
+/** A message the Worker pushed to a played push service: where, its headers (lowercased), and its encrypted bytes. */
+export interface Pushed {
+  readonly endpoint: string;
+  readonly headers: Record<string, string>;
+  readonly body: Uint8Array;
+}
+
+/** The push services browsers use, played: every message kept, each answered 201 unless a test says otherwise. */
+export interface PlayedPushes {
+  readonly sent: Pushed[];
+  /** A push service's answer for one endpoint; 201 when not set. */
+  readonly answers: Map<string, number>;
+  reset(): void;
+}
+
 /** The made-up answers the home page's outside sources give, which a test switches per source. */
 export interface PlayedOutside {
   /** The channel's feed: test/fixtures/youtube-feed.xml by default. */
@@ -233,6 +248,8 @@ export interface Harness {
   access: PlayedAccess;
   /** The home page's outside sources, played. */
   outside: PlayedOutside;
+  /** The push services, played. */
+  pushes: PlayedPushes;
   /** Fires the Worker's hourly run, as its cron trigger does, and answers how it ended (`ok`, or why not). */
   scheduled(): Promise<string>;
   /** Applies the migrations not yet applied, up to and including `through` (a four-digit number), or all of them. */
@@ -264,7 +281,7 @@ function migrations(): { number: string; statements: string[] }[] {
  * The tables `reset` empties, children before the tables they name, because D1 checks foreign keys; and last the
  * AUTOINCREMENT counters, so every test numbers its collections from 1.
  */
-const TABLES = ["outside_items", "events", "comments", "members", "attendees", "pages", "cards", "collection_threads", "collection_members", "collections", "threads", "distribution_acts", "distribution_platforms", "distribution_readings", "people", "talk_days", "talk_senders", "answer_senders", "ask_thread_senders", "ask_answer_senders", "journal_answers", "journal_storylines", "journal_entries", "journal_versions", "journal_photos", "now_lines", "owner_photos", "photos", "sqlite_sequence"];
+const TABLES = ["push_devices", "outside_items", "events", "comments", "members", "attendees", "pages", "cards", "collection_threads", "collection_members", "collections", "threads", "distribution_acts", "distribution_platforms", "distribution_readings", "people", "talk_days", "talk_senders", "answer_senders", "ask_thread_senders", "ask_answer_senders", "journal_answers", "journal_storylines", "journal_entries", "journal_versions", "journal_photos", "now_lines", "owner_photos", "photos", "sqlite_sequence"];
 
 /**
  * The Worker's evaluation key in the harness, as the deploy hands it over (an RSA private key as a JWK), and its
@@ -273,6 +290,17 @@ const TABLES = ["outside_items", "events", "comments", "members", "attendees", "
 const evaluation = generateKeyPairSync("rsa", { modulusLength: 2048 });
 export const EVALUATION_KEY = JSON.stringify(evaluation.privateKey.export({ format: "jwk" }));
 export const EVALUATION_PUBLIC_KEY: KeyObject = createPublicKey(evaluation.privateKey);
+
+/**
+ * The Worker's VAPID key in the harness, as the deploy hands it over (a P-256 private key as a JWK), and its public
+ * half, which the tests check each push's token against.
+ */
+const vapid = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+export const PUSH_VAPID_KEY = JSON.stringify(vapid.privateKey.export({ format: "jwk" }));
+export const PUSH_PUBLIC_KEY: KeyObject = createPublicKey(vapid.privateKey);
+
+/** The push services' hosts the harness plays, as src/web-push.ts allows them. */
+const PUSH_HOSTS = new Set(["web.push.apple.com", "fcm.googleapis.com", "updates.push.services.mozilla.com"]);
 
 const base64Url = (bytes: Buffer): string => bytes.toString("base64url");
 
@@ -356,7 +384,7 @@ function playAccess(): PlayedAccess & { serve(request: RuntimeRequest): RuntimeR
   };
 }
 
-export async function startHarness(options: { secret?: string; owner?: string; through?: string; evaluationKey?: string; triggers?: boolean } = {}): Promise<Harness> {
+export async function startHarness(options: { secret?: string; owner?: string; through?: string; evaluationKey?: string; pushKey?: string; triggers?: boolean } = {}): Promise<Harness> {
   const bundlePath = join(root, "dist", "worker.js");
   if (!existsSync(bundlePath)) throw new Error("dist/worker.js is missing: run `npm run dry-run` first (`npm test` does)");
   if (!COMPATIBILITY_DATE) throw new Error("wrangler.jsonc names no compatibility_date");
@@ -365,10 +393,24 @@ export async function startHarness(options: { secret?: string; owner?: string; t
   let askedHost = new URL(SITE).hostname;
   const access = playAccess();
   const outside = playOutside();
+  const pushes: PlayedPushes = {
+    sent: [],
+    answers: new Map(),
+    reset() {
+      pushes.sent.length = 0;
+      pushes.answers.clear();
+    },
+  };
 
   async function outbound(request: RuntimeRequest): Promise<RuntimeResponse> {
     const url = new URL(request.url);
     outboundHosts.add(url.host);
+    if ((PUSH_HOSTS.has(url.host) || url.host.endsWith(".notify.windows.com")) && request.method === "POST") {
+      const headers: Record<string, string> = {};
+      request.headers.forEach((value, name) => (headers[name.toLowerCase()] = value));
+      pushes.sent.push({ endpoint: url.href, headers, body: new Uint8Array(await request.arrayBuffer()) });
+      return new RuntimeResponse(null, { status: pushes.answers.get(url.href) ?? 201 });
+    }
     if (url.host === ACCESS_TEAM_DOMAIN && url.pathname === "/cdn-cgi/access/certs" && request.method === "GET") {
       return access.serve(request);
     }
@@ -421,6 +463,7 @@ export async function startHarness(options: { secret?: string; owner?: string; t
   const secret = options.secret ?? SECRET;
   const owner = options.owner ?? OWNER;
   const evaluationKey = options.evaluationKey ?? EVALUATION_KEY;
+  const pushKey = options.pushKey ?? PUSH_VAPID_KEY;
   const mf = new Miniflare({
     host: "127.0.0.1",
     port: 0,
@@ -445,6 +488,7 @@ export async function startHarness(options: { secret?: string; owner?: string; t
             ...(secret === "" ? {} : { TURNSTILE_SECRET: { type: "text" as const, value: secret } }),
             ...(owner === "" ? {} : { INBOX_OWNER_EMAIL: { type: "text" as const, value: owner } }),
             ...(evaluationKey === "" ? {} : { THREADS_EVALUATION_KEY: { type: "text" as const, value: evaluationKey } }),
+            ...(pushKey === "" ? {} : { PUSH_VAPID_KEY: { type: "text" as const, value: pushKey } }),
             ACCESS_TEAM_DOMAIN: { type: "text" as const, value: ACCESS_TEAM_DOMAIN },
             THREADS_ACCESS_AUD: { type: "text" as const, value: THREADS_ACCESS_AUD },
             INBOX_SYNC_CLIENT_ID: { type: "text" as const, value: INBOX_SYNC_CLIENT_ID },
@@ -477,6 +521,7 @@ export async function startHarness(options: { secret?: string; owner?: string; t
     outboundHosts,
     access,
     outside,
+    pushes,
     async scheduled() {
       if (options.triggers !== true) throw new Error("start the harness with { triggers: true } to fire the hourly run");
       const response = (await mf.dispatchFetch(`${SITE}/cdn-cgi/local/scheduled?cron=${encodeURIComponent("17 * * * *")}&format=json`)) as unknown as Response;
@@ -494,6 +539,7 @@ export async function startHarness(options: { secret?: string; owner?: string; t
       if (kept.length > 0) await bucket.delete(kept);
       outboundHosts.clear();
       outside.reset();
+      pushes.reset();
     },
     dispose: () => mf.dispose(),
   };

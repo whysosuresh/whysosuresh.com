@@ -154,6 +154,8 @@ import {
   laterDays,
   laterNote,
   laterWords,
+  morningPush,
+  PUSH_WORDS,
   previewWords,
   reminderEventWords,
   seriesWords,
@@ -274,6 +276,10 @@ import {
   markAskRead,
   me,
   meet,
+  pushKey,
+  pushOff,
+  pushOn,
+  pushTest,
   remind,
   move,
   pageAddress,
@@ -335,6 +341,7 @@ import {
  * @typedef {{ key: string, base: number, text: string, stale: boolean, busy: boolean, problem: string }} JournalEdit
  * @typedef {{ number: number, day: string, time: string, minutes: string, where: string, chosen: number[], named: string[], query: string, problem: string, busy: boolean }} MeetingDraft
  * @typedef {{ number: number, kind: 'once' | 'repeat', day: string, n: string, unit: 'days' | 'weeks', busy: boolean }} ReminderDraft
+ * @typedef {'checking' | 'safari' | 'unsupported' | 'blocked' | 'off' | 'on'} PushState
  * @typedef {import('./page-talk.js').Places<ThreadComment>} Places
  * @typedef {{ quote: string, prefix: string, suffix: string, top: number }} WordsDraft
  * @typedef {{ ready: boolean, questions: Set<string>, anchors: Map<string, number | null>, questionTops: Map<string, number>, answered: number[], sent: string,
@@ -360,7 +367,7 @@ import {
  * @typedef {{ to: string, subject: string, body: string }} Draft
  * @typedef {{ title: string, summary: string, body: string }} Editing
  * @typedef {{ title: string, space: string, status: 'received' | 'act' | 'discuss', body: string }} NewDraft
- * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share' | 'discussion' | 'meeting' | 'reminder' | 'more' | 'photo' | 'account' | 'keep' | 'kept-menu' | 'collection-edit' | 'collection-delete' | 'collection-share'} Overlay
+ * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share' | 'discussion' | 'meeting' | 'reminder' | 'push' | 'more' | 'photo' | 'account' | 'keep' | 'kept-menu' | 'collection-edit' | 'collection-delete' | 'collection-share'} Overlay
  * @typedef {{ number: number, people: Person[], count: number, email: string, name: string, problem: string, invited: { name: string, email: string } | null, busy: boolean }} CollectionSharing
  * @typedef {{ number: number, people: Person[], count: number, email: string, name: string, problem: string,
  *   invited: { name: string, email: string } | null, busy: boolean }} Sharing
@@ -1387,6 +1394,12 @@ class Threads {
     this.meetingDraft = null;
     /** The reminder being set in its editor. @type {ReminderDraft | null} */
     this.reminderDraft = null;
+    /** How this device stands for his reminders' pushes, when it was turned on, and a problem to say. @type {{ state: PushState, since: string | null, busy: boolean, problem: string }} */
+    this.push = { state: 'checking', since: null, busy: false, problem: '' };
+    /** This device's service worker once the switch has registered it, and the site's key it subscribes with. @type {ServiceWorkerRegistration | null} */
+    this.pushRegistration = null;
+    /** @type {string | null} */
+    this.pushPublicKey = null;
     /** The thread whose Later menu is open, on Today's row or its own strip, and whether it is picking a day. @type {number | null} */
     this.laterOf = null;
     this.laterPicking = false;
@@ -2384,11 +2397,219 @@ class Threads {
     const foot = this.foot;
     if (foot === null) return;
     const rows = [
+      ...(this.member ? [] : [this.pushRow('t-menu-row')]),
       ...(this.member ? [] : [el('button', { type: 'button', class: 't-menu-row', 'data-act': 'photo' }, [icon('photo'), RAIL_WORDS.photo])]),
       el('button', { type: 'button', class: 't-menu-row', 'data-act': 'keys' }, [icon('keys'), RAIL_WORDS.keys, kbd('?')]),
     ];
     this.openOverlay('account', RAIL_WORDS.account, 'menu', [el('div', { class: 't-menu-head' }, [el('b', {}, [foot.name]), el('small', {}, [foot.detail])]), el('div', { class: 't-menu-list' }, rows)]);
     rows[0]?.focus();
+    if (!this.member) void this.readPush();
+  }
+
+  /**
+   * The Notifications row, in the account menu or More on a phone: On or Off for this device, which opens its sheet.
+   * @param {string} kind its class, the menu's row or More's pick
+   */
+  pushRow(kind) {
+    const on = this.push.state === 'on';
+    return el('button', { type: 'button', class: kind, 'data-act': 'push' }, [
+      icon('bell'),
+      PUSH_WORDS.row,
+      el('span', { class: 't-push-state', 'data-on': String(on) }, [this.push.state === 'checking' ? '' : on ? 'On' : 'Off']),
+    ]);
+  }
+
+  /**
+   * How this device stands, from the browser alone (it registers nothing): an iPhone in Safari can't get pushes until
+   * the site is on its Home Screen; a browser without them can't at all; blocked; on while it holds a subscription.
+   */
+  async readPush() {
+    const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const standalone = matchMedia('(display-mode: standalone)').matches || /** @type {{ standalone?: boolean }} */ (navigator).standalone === true;
+    const before = this.push.state;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) this.push.state = ios && !standalone ? 'safari' : 'unsupported';
+    else if (Notification.permission === 'denied') this.push.state = 'blocked';
+    else {
+      const registration = await navigator.serviceWorker.getRegistration('/');
+      const subscription = await registration?.pushManager.getSubscription();
+      this.push.state = subscription ? 'on' : 'off';
+      if (registration) this.pushRegistration = registration;
+    }
+    if (before !== this.push.state) this.redrawPushRow();
+  }
+
+  /** Puts the row's On or Off right where the menu or the sheet is open. */
+  redrawPushRow() {
+    for (const row of this.dialog.querySelectorAll('[data-act="push"]')) {
+      if (row instanceof HTMLElement) row.replaceWith(this.pushRow(row.className));
+    }
+    if (this.overlay === 'push') this.renderPush();
+  }
+
+  /**
+   * Opens the sheet: reads the device, and when it can be turned on, registers the service worker and fetches the
+   * site's key now, so Turn on asks the browser at once, inside his tap, as an iPhone requires.
+   */
+  async openPush() {
+    this.push.problem = '';
+    this.renderPush();
+    await this.readPush();
+    if (this.push.state !== 'off' && this.push.state !== 'on') return;
+    try {
+      this.pushRegistration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+      const subscription = await this.pushRegistration.pushManager.getSubscription();
+      if (subscription) {
+        // On means the Worker has it too: sending it again is harmless, and says since when.
+        this.push.since = await pushOn(subscription.toJSON());
+        this.push.state = 'on';
+      } else this.pushPublicKey = await pushKey();
+    } catch (error) {
+      this.fail(error, 'This device couldn’t be read.');
+    }
+    if (this.overlay === 'push') this.renderPush();
+  }
+
+  /** The sheet, as this device stands. */
+  renderPush() {
+    const state = this.push.state;
+    /** @param {readonly string[]} list @param {boolean} [share] */
+    const steps = (list, share = false) =>
+      el('ol', { class: 't-push-steps' }, list.map((step, i) => el('li', {}, i === 0 && share ? ['Tap ', icon('share'), ' ', step] : [step])));
+    const due = this.due().map((thread) => titleOf(thread));
+    const sample = morningPush(due.length > 0 ? due : [PUSH_WORDS.sampleTitle]);
+    const banner = [
+      el('span', { class: 't-push-lbl' }, [PUSH_WORDS.arrives]),
+      el('div', { class: 't-push-banner', 'aria-label': PUSH_WORDS.arrives }, [
+        el('img', { src: '/img/icon-192.png', alt: '' }),
+        el('b', {}, [sample.title]),
+        el('small', {}, ['7:45 AM']),
+        el('span', {}, [sample.lines.join(' · ')]),
+      ]),
+    ];
+    const busy = this.push.busy ? { disabled: '' } : {};
+    /** @type {(Node | string)[]} */
+    const body = [];
+    if (state === 'checking') body.push(el('p', {}, [PUSH_WORDS.checking]));
+    if (state === 'safari') body.push(el('p', {}, [PUSH_WORDS.safari]), steps(PUSH_WORDS.safariSteps, true), el('p', { class: 't-note' }, [PUSH_WORDS.safariNote]));
+    if (state === 'unsupported') body.push(el('p', {}, [PUSH_WORDS.unsupported]));
+    if (state === 'blocked') {
+      const phone = /iPhone|iPad|iPod/.test(navigator.userAgent);
+      body.push(el('p', {}, [PUSH_WORDS.blocked]), phone ? steps(PUSH_WORDS.blockedSteps) : el('p', {}, [PUSH_WORDS.blockedMac]));
+    }
+    if (state === 'off') {
+      body.push(
+        el('p', {}, [PUSH_WORDS.off]),
+        ...banner,
+        el('p', { class: 't-note' }, [PUSH_WORDS.offNote]),
+        el('div', { class: 't-push-acts' }, [el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'push-on', ...busy }, [PUSH_WORDS.turnOn])]),
+        el('p', { class: 't-note' }, [PUSH_WORDS.allowNote]),
+      );
+    }
+    if (state === 'on') {
+      const since = this.push.since === null ? '' : reminderDay(todayIn(Date.parse(this.push.since)), todayIn(Date.now()), LOCALE);
+      body.push(
+        el('p', {}, [since === '' ? PUSH_WORDS.off : PUSH_WORDS.on(since)]),
+        ...banner,
+        el('div', { class: 't-push-acts' }, [
+          el('button', { type: 'button', class: 't-btn t-btn-primary', 'data-act': 'push-test', ...busy }, [PUSH_WORDS.test]),
+          el('button', { type: 'button', class: 't-btn', 'data-act': 'push-off', ...busy }, [PUSH_WORDS.turnOff]),
+        ]),
+      );
+    }
+    if (this.push.problem !== '') body.push(el('p', { class: 't-err', role: 'alert' }, [this.push.problem]));
+    this.openOverlay('push', PUSH_WORDS.title, 'narrow', [this.sheetHead(PUSH_WORDS.title), el('div', { class: 't-push-body' }, body)]);
+  }
+
+  /** The site's key as the browser wants it: bytes. @param {string} key */
+  static keyBytes(key) {
+    const plain = key.replace(/-/g, '+').replace(/_/g, '/');
+    return Uint8Array.from(atob(plain.padEnd(Math.ceil(plain.length / 4) * 4, '=')), (char) => char.charCodeAt(0));
+  }
+
+  /** Turn on: the browser asks first, inside his tap; then the Worker keeps the subscription. */
+  async turnPushOn() {
+    const registration = this.pushRegistration;
+    const key = this.pushPublicKey;
+    if (!registration || key === null || this.push.busy) return;
+    const asked = registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: Threads.keyBytes(key) });
+    this.push.busy = true;
+    this.push.problem = '';
+    this.renderPush();
+    /** @type {PushSubscription} */
+    let subscription;
+    try {
+      subscription = await asked;
+    } catch {
+      this.push.busy = false;
+      this.push.state = Notification.permission === 'denied' ? 'blocked' : 'off';
+      // A tap that wasn't allowed says so in its own state; a browser that failed to subscribe says it here.
+      this.push.problem = this.push.state === 'off' ? PUSH_WORDS.couldNot : '';
+      this.renderPush();
+      return;
+    }
+    try {
+      this.push.since = await pushOn(subscription.toJSON());
+    } catch (error) {
+      await subscription.unsubscribe();
+      this.push.busy = false;
+      this.renderPush();
+      this.fail(error, 'Reminders weren’t turned on.');
+      return;
+    }
+    this.push.busy = false;
+    this.push.state = 'on';
+    this.renderPush();
+    this.say(PUSH_WORDS.turnedOn, null);
+  }
+
+  /** Turn off: the Worker forgets this device, then the browser drops its subscription. */
+  async turnPushOff() {
+    const subscription = await this.pushRegistration?.pushManager.getSubscription();
+    this.push.busy = true;
+    this.renderPush();
+    try {
+      if (subscription) {
+        await pushOff(subscription.endpoint);
+        await subscription.unsubscribe();
+      }
+      this.pushPublicKey = await pushKey();
+    } catch (error) {
+      this.push.busy = false;
+      this.renderPush();
+      this.fail(error, 'Reminders weren’t turned off.');
+      return;
+    }
+    this.push.busy = false;
+    this.push.state = 'off';
+    this.push.since = null;
+    this.renderPush();
+    this.say(PUSH_WORDS.turnedOff, null);
+  }
+
+  /** Send a test to this device; one its push service says is gone is off now, and says so. */
+  async testPush() {
+    const subscription = await this.pushRegistration?.pushManager.getSubscription();
+    if (!subscription || this.push.busy) return;
+    this.push.busy = true;
+    this.push.problem = '';
+    this.renderPush();
+    try {
+      await pushTest(subscription.endpoint);
+      this.say(PUSH_WORDS.tested, null);
+    } catch (error) {
+      if (error instanceof Failed && error.message === 'gone') {
+        await subscription.unsubscribe();
+        this.push.state = 'off';
+        this.push.problem = PUSH_WORDS.gone;
+        this.pushPublicKey = await pushKey().catch(() => null);
+      } else if (error instanceof Failed && error.message === 'push-failed') {
+        const detail = error.detail;
+        const status = typeof detail === 'object' && detail !== null && 'status' in detail && typeof detail.status === 'number' ? detail.status : 0;
+        this.push.problem = PUSH_WORDS.failed(status);
+      } else this.fail(error, 'The test wasn’t sent.');
+    }
+    this.push.busy = false;
+    this.renderPush();
   }
 
   renderTabbar() {
@@ -2410,6 +2631,7 @@ class Threads {
     const picks = [
       ...MORE_ROOMS.map((room) => el('a', { class: 't-pick', href: room.href, 'data-go': room.go }, [icon(room.icon), room.label])),
       el('button', { type: 'button', class: 't-pick t-pick-photo', 'data-act': 'photo' }, [avatar('owner', '', this.ownerPhoto), PHOTO_SHEET.title]),
+      this.pushRow('t-pick'),
     ];
     this.openOverlay('more', 'More rooms', 'narrow', [this.sheetHead('More'), el('div', { class: 't-sheet-body' }, [el('div', { class: 't-pick-list' }, picks)])]);
     picks[0]?.focus();
@@ -8746,6 +8968,18 @@ class Threads {
       }
       case 'remind-clear':
         void this.clearReminder();
+        break;
+      case 'push':
+        if (!this.member) void this.openPush();
+        break;
+      case 'push-on':
+        void this.turnPushOn();
+        break;
+      case 'push-off':
+        void this.turnPushOff();
+        break;
+      case 'push-test':
+        void this.testPush();
         break;
       case 'meet-choose':
       case 'meet-unchoose':

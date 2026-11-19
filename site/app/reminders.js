@@ -224,3 +224,60 @@ export function previewWords(series, today, locale) {
   const then = every === 1 ? 'every day' : every === 7 ? `every ${weekday}` : every % 7 === 0 ? `every ${every / 7} weeks on ${weekday}s` : `every ${every} days`;
   return { lead: 'Next: ', day: next === today ? 'today' : dayWords(next, today, locale), rest: `, then ${then}. Due by India's day wherever you are.` };
 }
+
+/** The test a device gets when he turns it on and taps Send a test: what the morning's push looks like, said plainly. */
+export const TEST_PUSH = Object.freeze({
+  title: 'Reminders work on this device',
+  lines: Object.freeze(['On a morning something is due, it shows here at about 7:45.']),
+});
+
+/** The most titles one push carries, and the longest a title runs, in UTF-16 code units, before it is cut. */
+export const PUSH_TITLES = 5;
+export const PUSH_TITLE_LENGTH = 80;
+
+/**
+ * The morning's push for what is due: "2 reminders due", and up to five titles, each cut at 80 characters, then
+ * "and 3 more". The service worker (site/sw.js) shows the lines under the title.
+ * @param {readonly string[]} titles
+ */
+export function morningPush(titles) {
+  const cut = (/** @type {string} */ title) => (title.length > PUSH_TITLE_LENGTH ? `${title.slice(0, PUSH_TITLE_LENGTH - 1)}…` : title);
+  const lines = titles.slice(0, PUSH_TITLES).map(cut);
+  if (titles.length > PUSH_TITLES) lines.push(`and ${titles.length - PUSH_TITLES} more`);
+  return { title: titles.length === 1 ? '1 reminder due' : `${titles.length} reminders due`, lines };
+}
+
+/**
+ * The words of his Notifications switch, in its account menu row (More on a phone) and its sheet, for each way a
+ * device finds it: an iPhone in Safari, which can't get pushes until the site is on its Home Screen; a browser that
+ * can't at all; blocked; off; and on.
+ */
+export const PUSH_WORDS = Object.freeze({
+  row: 'Notifications',
+  title: 'Reminders on this device',
+  checking: 'Checking this device…',
+  safari: 'On an iPhone, notifications come only to the site on your Home Screen. Once, in Safari:',
+  safariSteps: Object.freeze(['Share at the bottom of the screen.', 'Tap Add to Home Screen, then Add.', 'Open hey from your Home Screen, sign in, and come back here.']),
+  safariNote: 'It opens full screen, like an app. This switch will be there.',
+  unsupported: "This browser can't show notifications from a site. On a Mac, use Chrome or Safari; on an iPhone, the site from your Home Screen.",
+  blocked: 'Notifications are blocked for this site on this device, so nothing can arrive.',
+  blockedSteps: Object.freeze(['Open Settings, then Notifications.', 'Tap hey and turn on Allow Notifications.', 'Come back here and turn this on.']),
+  blockedMac: "In your browser's settings for this site, allow notifications, then come back here.",
+  off: "On a morning something is due, at about 7:45 your time, this device shows what's due, even with the site closed.",
+  arrives: 'What arrives',
+  offNote: "Only you get these, and only what's due. Tapping one opens Today.",
+  allowNote: "Your phone asks once whether to allow notifications. Choose Allow: if you don't, it won't ask again.",
+  turnOn: 'Turn on',
+  turnOff: 'Turn off',
+  test: 'Send a test',
+  sampleTitle: 'What you set to come back',
+  turnedOn: 'Reminders are on for this device.',
+  turnedOff: 'Reminders are off for this device.',
+  tested: 'Sent. It shows on this device in a few seconds.',
+  gone: "This device's subscription ended. Turn it on again.",
+  couldNot: "This browser couldn't turn notifications on. Try again in a moment; if it keeps failing, use another browser.",
+  /** @param {number} status */
+  failed: (status) => `The push service didn't take it${status > 0 ? ` (${status})` : ''}. Try again in a minute.`,
+  /** @param {string} since */
+  on: (since) => `On for this device since ${since}. Mornings something is due, about 7:45, it shows the titles.`,
+});
