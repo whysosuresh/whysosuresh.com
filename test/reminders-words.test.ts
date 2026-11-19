@@ -25,6 +25,7 @@ import {
   laterDays,
   laterNote,
   laterWords,
+  morningPush,
   nextAfter,
   previewWords,
   reminderEventWords,
@@ -210,5 +211,15 @@ describe("words", () => {
     expect(previewWords({ start: "2026-11-25", every: null }, THURSDAY, GB)).toEqual({ lead: "Comes back under Due on Today ", day: "on Wed 25 Nov", rest: ", once." });
     expect(previewWords({ start: THURSDAY, every: null }, THURSDAY, GB)).toEqual({ lead: "Comes back under Due on Today ", day: "today", rest: ", once." });
     expect(previewWords({ start: "2026-11-18", every: null }, THURSDAY, GB)).toEqual({ problem: "That day has gone by. Pick today or a day after." });
+  });
+});
+
+describe("the morning's push", () => {
+  it("names how many are due, up to five titles cut at 80 characters, then how many more", () => {
+    expect(morningPush(["Weekly onboarding turn"])).toEqual({ title: "1 reminder due", lines: ["Weekly onboarding turn"] });
+    expect(morningPush(["A", "B"])).toEqual({ title: "2 reminders due", lines: ["A", "B"] });
+    const long = "x".repeat(100);
+    expect(morningPush([long]).lines[0]).toBe(`${"x".repeat(79)}…`);
+    expect(morningPush(["1", "2", "3", "4", "5", "6", "7"])).toEqual({ title: "7 reminders due", lines: ["1", "2", "3", "4", "5", "and 2 more"] });
   });
 });

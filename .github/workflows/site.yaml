@@ -91,8 +91,9 @@ jobs:
           TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
           INBOX_OWNER_EMAIL: ${{ secrets.INBOX_OWNER_EMAIL }}
           THREADS_EVALUATION_KEY: ${{ secrets.THREADS_EVALUATION_KEY }}
+          PUSH_VAPID_KEY: ${{ secrets.PUSH_VAPID_KEY }}
         run: |
-          for name in TURNSTILE_SECRET INBOX_OWNER_EMAIL THREADS_EVALUATION_KEY; do
+          for name in TURNSTILE_SECRET INBOX_OWNER_EMAIL THREADS_EVALUATION_KEY PUSH_VAPID_KEY; do
             if [ -z "${!name}" ]; then
               echo "::error::$name is empty in the environment production; nothing was changed"
               exit 1
@@ -117,10 +118,11 @@ jobs:
           TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
           INBOX_OWNER_EMAIL: ${{ secrets.INBOX_OWNER_EMAIL }}
           THREADS_EVALUATION_KEY: ${{ secrets.THREADS_EVALUATION_KEY }}
+          PUSH_VAPID_KEY: ${{ secrets.PUSH_VAPID_KEY }}
         run: |
           secrets="$RUNNER_TEMP/worker-secrets.json"
           trap 'rm -f "$secrets"' EXIT
-          (umask 077 && jq -n '{TURNSTILE_SECRET: env.TURNSTILE_SECRET, INBOX_OWNER_EMAIL: env.INBOX_OWNER_EMAIL, THREADS_EVALUATION_KEY: env.THREADS_EVALUATION_KEY}' > "$secrets")
+          (umask 077 && jq -n '{TURNSTILE_SECRET: env.TURNSTILE_SECRET, INBOX_OWNER_EMAIL: env.INBOX_OWNER_EMAIL, THREADS_EVALUATION_KEY: env.THREADS_EVALUATION_KEY, PUSH_VAPID_KEY: env.PUSH_VAPID_KEY}' > "$secrets")
           ./node_modules/.bin/wrangler deploy --config ../wrangler.jsonc --secrets-file "$secrets" --message "main ${GITHUB_SHA::12}"
 
   private:

@@ -37,6 +37,7 @@
 //   GET  /threads/api/journal[/...], POST /threads/api/journal/...             owner and sync; never invited people (src/journal.ts)
 //   GET  /threads/api/now, POST /threads/api/now  {"text"}                    owner: the home page's Now line (src/home.ts)
 //   POST /threads/api/photo (a JPEG or PNG), DELETE /threads/api/photo       owner: his photo (src/photos.ts)
+//   GET /threads/api/push/key, POST|DELETE /threads/api/push, POST /threads/api/push/test   owner: his devices' reminders (src/push.ts)
 //   GET  /threads/api/cards                                                   owner: every public thread's card stamp (src/cards.ts)
 //   GET  /threads/api/collections[/<n>], POST /threads/api/collections[/<n>[/threads]]   owner and sync; never invited people (src/collections.ts)
 //   GET  /threads/api/distribution?product=<p>, POST /threads/api/distribution/...   owner and sync read; sync writes; never invited people (src/distribution.ts)
@@ -147,6 +148,7 @@ import { handleDistribution } from "./distribution.ts";
 import { collectionsFor, collectionsOf, searchCollections } from "./collections-store.ts";
 import { addCard, listCards } from "./cards.ts";
 import { handlePhoto } from "./photos.ts";
+import { handlePush } from "./push.ts";
 import { ownerPhotoId, personFace } from "./photos-store.ts";
 import { SLUG_SHAPE } from "./asks.ts";
 import { TOPICS } from "../site/talk-topics.js";
@@ -913,6 +915,7 @@ export async function handleThreads(request: Request, env: Bindings): Promise<Re
   }
   if (url.pathname === "/threads/api/now") return handleNow(request, env, who);
   if (url.pathname === "/threads/api/photo") return handlePhoto(request, env, who);
+  if (url.pathname === "/threads/api/push" || url.pathname.startsWith("/threads/api/push/")) return handlePush(request, url, env, who);
   if (url.pathname === "/threads/api/cards") return listCards(request, env, who);
   if (url.pathname === "/threads/api/search" || url.pathname === "/threads/api/sign-in" || url.pathname === "/threads/api/me") {
     if (request.method !== "GET") return json(405, { reason: "method" }, { Allow: "GET" });

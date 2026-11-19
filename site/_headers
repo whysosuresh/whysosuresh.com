@@ -1,13 +1,15 @@
 # The headers on every file the site serves; the Worker's own answers under /api/ set theirs in code.
 # The CSP allows the site's own files (the home page's video pictures among them, copied to the site and served
 # from /thumbs/), its own frames (a page saved into a thread, sealed by its own answer's headers), the note flow's
-# scripts and Cloudflare's Turnstile (its script and its frame), and requests only to the site itself.
+# scripts and Cloudflare's Turnstile (its script and its frame), and requests only to the site itself; its own
+# manifest (/manifest.webmanifest), which makes the threads an app on his phone's home screen, and its own service
+# worker (/sw.js, a script, so `script-src` covers it), which shows his reminders' pushes.
 # No page may use the camera, the microphone or the location.
 # The referrer policy is never no-referrer: strict-origin-when-cross-origin tells a site a reader leaves for that
 # they came from whysosuresh.com, and never which page.
 # test/site.test.ts checks this file against the pages and the scripts.
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; img-src 'self'; connect-src 'self'; frame-src 'self' https://challenges.cloudflare.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; img-src 'self'; connect-src 'self'; manifest-src 'self'; frame-src 'self' https://challenges.cloudflare.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   Referrer-Policy: strict-origin-when-cross-origin
   X-Content-Type-Options: nosniff
   Permissions-Policy: camera=(), microphone=(), geolocation=()

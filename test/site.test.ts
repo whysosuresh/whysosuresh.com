@@ -51,6 +51,8 @@ const SERVED = [
   "img/card.png",
   "img/icon-192.png",
   "img/share.jpg",
+  "manifest.webmanifest",
+  "sw.js",
   "index.html",
   "robots.txt",
   "hosts.js",
@@ -87,6 +89,8 @@ const EXPECTED_HEADERS: Record<string, string> = {
     "style-src 'self'",
     "img-src 'self'",
     "connect-src 'self'",
+    // The threads' own manifest, which makes them an app on his phone's home screen, so its pushes reach it.
+    "manifest-src 'self'",
     // The site's own frames are the pages saved into threads, each sealed by its own answer's CSP (src/page.ts).
     `frame-src 'self' ${originsOf(SCRIPT_RESOURCES)}`,
     "base-uri 'none'",
