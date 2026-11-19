@@ -1,9 +1,10 @@
 // What the threads' calls (src/threads.ts) read from a request before the store sees it: the size and type
 // checks, and an add or a move as the store's own intent (src/store.ts). What a thread is about is its `space`,
 // any of site/spaces.js. The sync's add and the owner's own add, from the threads page, have their own shapes
-// (`readAdd`, `readOwnAdd`). A meeting and its people have theirs too (`readMeeting`, `readAttendee`). Every refusal
-// logs its status and reason only, nothing personal.
+// (`readAdd`, `readOwnAdd`). A meeting and its people have theirs too (`readMeeting`, `readAttendee`), and so does a
+// reminder (`readReminder`). Every refusal logs its status and reason only, nothing personal.
 
+import { isEvery, type Series } from "../site/app/reminders.js";
 import { isSpace } from "../site/spaces.js";
 import { json } from "./json.ts";
 import { isJson } from "./request.ts";
@@ -340,4 +341,38 @@ export function readAttendee(value: unknown): { readonly add: Attendee } | { rea
   }
   const removing = exactly(value, ["remove"]);
   return removing !== null && isPersonNumber(removing.remove) ? { remove: removing.remove } : null;
+}
+
+/** A change to a thread's reminder: set (or, null, cleared), moved for one time (Later), or marked done for the day it was due. */
+export type ReminderChange = { readonly set: Series | null } | { readonly snooze: string } | { readonly done: string };
+
+/** A day as the call gives it: a string that is a day on the calendar, in the years a meeting may be in; null otherwise. */
+function dayOf(value: unknown): string | null {
+  return typeof value === "string" ? calendarDay(value) : null;
+}
+
+/**
+ * A reminder's change as the call asks for it, exactly one of three shapes: `{"start", "every"}` sets it, the start a
+ * day and the repeat null (once) or a whole number of days from 1 to 366, both null clearing it; `{"snooze": <day>}`
+ * moves its next due day (Later); `{"action": "done", "on": <day>}` marks it done for the day it was due when the
+ * caller saw it. Null for anything else. Whether a day has gone by is the store's to say, in his zone.
+ */
+export function readReminder(value: unknown): ReminderChange | null {
+  const setting = exactly(value, ["every", "start"]);
+  if (setting !== null) {
+    if (setting.start === null) return setting.every === null ? { set: null } : null;
+    const start = dayOf(setting.start);
+    const every = setting.every;
+    if (start === null || (every !== null && !isEvery(every))) return null;
+    return { set: { start, every } };
+  }
+  const snoozing = exactly(value, ["snooze"]);
+  if (snoozing !== null) {
+    const day = dayOf(snoozing.snooze);
+    return day === null ? null : { snooze: day };
+  }
+  const finishing = exactly(value, ["action", "on"]);
+  if (finishing === null || finishing.action !== "done") return null;
+  const on = dayOf(finishing.on);
+  return on === null ? null : { done: on };
 }

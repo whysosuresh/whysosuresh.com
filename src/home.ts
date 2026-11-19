@@ -43,6 +43,9 @@
 // kept (migrations/0018_feed.sql).
 
 import { threadsOrigin } from "../site/hosts.js";
+// The zone the dates are his days in: the feed is his diary of what happened, so his day is the one it shows. His
+// reminders are due by the same zone, so it is written once, beside them.
+import { ZONE } from "../site/app/reminders.js";
 import type { Caller } from "./access.ts";
 import type { Bindings } from "./bindings.ts";
 import { json } from "./json.ts";
@@ -65,8 +68,7 @@ export const UPDATES_LIMIT = 500;
 export const UPDATES_PATH = "/updates";
 /** The longest excerpt under an item's title, in UTF-16 code units. */
 export const MAX_EXCERPT = 280;
-/** The zone the dates are his days in: the feed is his diary of what happened, so his day is the one it shows. */
-const ZONE = "Asia/Kolkata";
+
 /** When the feed began: the empty feed's `updated`, which Atom requires even with no entry. */
 const FEED_BEGAN = "2026-11-06T00:00:00.000Z";
 /** The feed's own address. */

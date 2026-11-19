@@ -4,7 +4,9 @@
 // person passed through an add; a thread shown with each comment's place passed through whole; a list followed through every page; an add answered line by line; a comment (for everyone
 // in the thread, or with --only-me for the owner alone) and an edit taking their words from stdin as they are; a page sent from a file as HTML, refused here past 16 MiB; a link set
 // and cleared; a meeting set by a day or a moment and cleared, and its people changed one call per flag, stopping at
-// the first refusal; every ask listed, a draft made from a thread under a slug, and an ask closed, with no verb that
+// the first refusal; a reminder set once or every N days, moved for one time, cleared, and marked done for the day the
+// thread says it is due (read first, so a thread with none is refused without a write), and every reminder listed;
+// every ask listed, a draft made from a thread under a slug, and an ask closed, with no verb that
 // opens one; the journal read, written on the version it was built on (a stale save printing the newest version and
 // exiting non-zero), a photo uploaded by its file's type and read back to a file byte for byte, a day's answers and the
 // storylines; collections listed through every page or found by words, one read with every thread through its pages,
@@ -499,6 +501,79 @@ describe("add, naming a told thread's person", () => {
       { line: 1, status: 201, thread: { number: 43, senderNumber: 7 } },
       { line: 2, status: 404, reason: "no-person" },
     ]);
+  });
+});
+
+describe("reminders", () => {
+  const reminder = { start: "2026-11-23", on: "2026-11-23", every: 7 };
+
+  it("sets one once or every N days, moves it for one time, and clears it, printing the thread", async () => {
+    const { io, sent, out } = client([1, 2, 3, 4].map(() => ({ status: 200, body: { thread: { ...THREAD, reminder } } })));
+    expect(await run(["remind", "42", "--start", "2026-11-23", "--every", "7"], io)).toBe(0);
+    expect(await run(["remind", "42", "--start", "2026-11-25"], io)).toBe(0);
+    expect(await run(["remind", "42", "--snooze", "2026-11-24"], io)).toBe(0);
+    expect(await run(["remind", "42", "--clear"], io)).toBe(0);
+    expect(sent.map((one) => [one.method, one.url, one.body === null ? null : JSON.parse(one.body)])).toEqual([
+      ["POST", `${THREADS}/42/reminder`, { start: "2026-11-23", every: 7 }],
+      ["POST", `${THREADS}/42/reminder`, { start: "2026-11-25", every: null }],
+      ["POST", `${THREADS}/42/reminder`, { snooze: "2026-11-24" }],
+      ["POST", `${THREADS}/42/reminder`, { start: null, every: null }],
+    ]);
+    expect(out.map((line) => JSON.parse(line).reminder)).toEqual([reminder, reminder, reminder, reminder]);
+  });
+
+  it("marks it done for the day the thread says it is due", async () => {
+    const next = { ...reminder, on: "2026-11-30" };
+    const { io, sent, out } = client([
+      { status: 200, body: { thread: { ...THREAD, reminder }, comments: [], events: [] } },
+      { status: 200, body: { thread: { ...THREAD, reminder: next } } },
+    ]);
+    expect(await run(["remind", "42", "--done"], io)).toBe(0);
+    expect(sent.map((one) => [one.method, one.url, one.body])).toEqual([
+      ["GET", `${THREADS}/42`, null],
+      ["POST", `${THREADS}/42/reminder`, JSON.stringify({ action: "done", on: "2026-11-23" })],
+    ]);
+    expect(out.map((line) => JSON.parse(line).reminder)).toEqual([next]);
+  });
+
+  it("refuses Done on a thread with none without a write, and passes the Worker's refusals through", async () => {
+    const none = client([{ status: 200, body: { thread: { ...THREAD, reminder: null } } }]);
+    expect(await run(["remind", "42", "--done"], none.io)).toBe(1);
+    expect([none.sent.length, none.err]).toEqual([1, ["inbox: remind refused (409 not-a-reminder)"]]);
+    const missing = client([{ status: 404, body: { reason: "no-thread" } }]);
+    expect(await run(["remind", "999", "--done"], missing.io)).toBe(1);
+    expect(missing.err).toEqual(["inbox: remind refused (404 no-thread)"]);
+    const stale = client([{ status: 400, body: { reason: "reminder" } }]);
+    expect(await run(["remind", "42", "--start", "2026-11-01"], stale.io)).toBe(1);
+    expect(stale.err).toEqual(["inbox: remind refused (400 reminder)"]);
+  });
+
+  it("prints every reminder, one line each, as the Worker answers them", async () => {
+    const reminders = [{ number: 42, title: "Weekly onboarding turn", status: "act", reminder, due: true, dueSince: null }];
+    const { io, sent, out } = client([{ status: 200, body: { today: "2026-11-23", reminders } }]);
+    expect(await run(["reminders"], io)).toBe(0);
+    expect(sent.map((one) => [one.method, one.url])).toEqual([["GET", `${ORIGIN}/threads/api/reminders`]]);
+    expect(out.map((line) => JSON.parse(line))).toEqual(reminders);
+  });
+
+  it.each([
+    [["remind", "42"]],
+    [["remind", "42", "--start"]],
+    [["remind", "42", "--start", "23 Nov"]],
+    [["remind", "42", "--start", "2026-11-23", "--every"]],
+    [["remind", "42", "--start", "2026-11-23", "--every", "weekly"]],
+    [["remind", "42", "--start", "2026-11-23", "--every", "0"]],
+    [["remind", "42", "--start", "2026-11-23", "--repeat", "7"]],
+    [["remind", "42", "--snooze"]],
+    [["remind", "42", "--snooze", "2026-11-24", "--every", "7"]],
+    [["remind", "42", "--done", "2026-11-23"]],
+    [["remind", "42", "--clear", "now"]],
+    [["remind", "x", "--clear"]],
+    [["reminders", "--due"]],
+  ])("is a usage error for %j, sending nothing", async (argv) => {
+    const { io, sent } = client([]);
+    expect(await run(argv, io)).toBe(2);
+    expect(sent).toEqual([]);
   });
 });
 

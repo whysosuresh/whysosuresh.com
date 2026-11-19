@@ -51,12 +51,18 @@
 // never read, so `--signed-out` shows what its link opens. Distribution's room as a few days of the sync's runs leave
 // it, for both products: platforms in every state with paces, acts of ours, made-up people who wrote to us (one still
 // waiting on a reply, so Today and the rail carry it), a team act kept apart, weekly readings, a "Distribution"
-// collection whose threads wait on a condition or on him, and the quarter's Engage log. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
+// collection whose threads wait on a condition or on him, and the quarter's Engage log. Reminders, set as the sync
+// sets them, relative to today in his zone: "Weekly onboarding turn" due today, "Weekly numbers" every week and due
+// since nine days ago (so Done lands on its next day after today), "Inbox review" every week moved by Later to two days
+// out, pricing for small teams once tomorrow, the done "Rename the inbox to threads" every two weeks and due today, and
+// "Who owns what", shared with the guest, every week from two days out, so `--member` shows that none of it reaches
+// them. Nothing here is deployed or reaches Cloudflare: the harness refuses every outside request but Access's
 // played keys.
 
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { addDays, weekDays, weekOf } from "../site/app/journal.js";
+import { todayIn } from "../site/app/reminders.js";
 import { SITE, TEST_SECRET, THREADS, THUMB, startHarness, type Harness } from "./harness.ts";
 
 const PORT = 8790;
@@ -655,9 +661,33 @@ async function seedDistribution(): Promise<void> {
   await asSync(`/${log}`, { action: "done" });
 }
 
+/** Reminders, as the sync sets them, relative to today in his zone; an overdue one is moved back as days passing would. */
+async function seedReminders(): Promise<void> {
+  const today = todayIn(Date.now());
+  const numberOf = async (ref: string): Promise<number> =>
+    (await (await harness.db()).prepare("SELECT number FROM threads WHERE origin_ref = ?1").bind(ref).first<{ number: number }>())?.number ?? 0;
+  const make = async (ref: string, title: string, body: string): Promise<number> =>
+    ((await asSync("", { ref, source: "self", status: "act", space: "stigmer", title, body })).thread as { number: number }).number;
+  const onboarding = await make("chat:seed-reminder-onboarding", "Weekly onboarding turn", "Run /run-onboarding-loop; its numbers go on its GitHub issue.");
+  await asSync(`/${onboarding}/reminder`, { start: today, every: 7 });
+  const numbers = await make("chat:seed-reminder-numbers", "Weekly numbers", "Read the week's numbers.");
+  await asSync(`/${numbers}/reminder`, { start: today, every: 7 });
+  await (await harness.db())
+    .prepare("UPDATE threads SET remind_start = ?1, remind_on = ?2 WHERE number = ?3")
+    .bind(addDays(today, -16), addDays(today, -9), numbers)
+    .run();
+  const review = await make("chat:seed-reminder-review", "Inbox review", "Go through what sat a week.");
+  await asSync(`/${review}/reminder`, { start: today, every: 7 });
+  await asSync(`/${review}/reminder`, { snooze: addDays(today, 2) });
+  await asSync(`/${await numberOf("chat:seed-3")}/reminder`, { start: addDays(today, 1), every: null });
+  await asSync(`/${await numberOf("chat:seed-6")}/reminder`, { start: today, every: 14 });
+  await asSync(`/${await numberOf("chat:seed-1")}/reminder`, { start: addDays(today, 2), every: 7 });
+}
+
 await seed();
 await seedCollections();
 await seedDistribution();
+await seedReminders();
 const links = (
   await (await harness.db())
     .prepare("SELECT number, title, share_key, public_by_number FROM threads WHERE share_key IS NOT NULL ORDER BY number")
