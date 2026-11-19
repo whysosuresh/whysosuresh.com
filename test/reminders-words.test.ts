@@ -21,11 +21,17 @@ import {
   isDayShape,
   isDue,
   isEvery,
+  doneWords,
   laterDays,
+  laterNote,
+  laterWords,
   nextAfter,
+  previewWords,
   reminderEventWords,
   seriesWords,
+  stripLine,
   todayIn,
+  weekdayWords,
   ZONE,
 } from "../site/app/reminders.js";
 
@@ -173,5 +179,36 @@ describe("words", () => {
   it("check a day's shape and a repeat's range", () => {
     expect([MONDAY, "2026-11-3", "23 Nov", 20261123, null].map(isDayShape)).toEqual([true, false, false, false, false]);
     expect([1, 7, 366, 0, 367, 1.5, "7", null].map(isEvery)).toEqual([true, true, true, false, false, false, false, false]);
+  });
+
+  it("say what Done and Later did, and what Later keeps", () => {
+    expect(doneWords(weekly("2026-11-16"), "2026-11-30", MONDAY, GB)).toBe("Done for Mon 16 Nov. Next: Mon 30 Nov.");
+    expect(doneWords({ start: "2026-11-25", on: "2026-11-25", every: null }, null, MONDAY, GB)).toBe("Done for Wed 25 Nov. It won't come back.");
+    expect(laterWords(weekly(MONDAY), "2026-11-24", MONDAY, GB)).toBe("Later: Tue 24 Nov, then back on Mondays.");
+    expect(laterWords({ start: MONDAY, on: MONDAY, every: 10 }, "2026-11-24", MONDAY, GB)).toBe("Later: Tue 24 Nov.");
+    expect(laterNote(weekly(MONDAY), GB)).toBe("Only this time; it stays on Mondays.");
+    expect(laterNote({ start: MONDAY, on: MONDAY, every: 3 }, GB)).toBe("Only this time; its rhythm stays.");
+    expect(laterNote({ start: MONDAY, on: MONDAY, every: null }, GB)).toBeNull();
+    expect(weekdayWords("2026-11-26", GB)).toBe("Thursday");
+  });
+
+  it("say on the thread what Done will do, when it comes back, and that a dropped thread's waits", () => {
+    expect(stripLine(weekly(MONDAY), "act", MONDAY, GB)).toBe("Done sends it to Mon 30 Nov. It never changes where the thread stands.");
+    expect(stripLine({ start: MONDAY, on: MONDAY, every: null }, "act", MONDAY, GB)).toBe("Done ends it. It never changes where the thread stands.");
+    expect(stripLine(weekly("2026-11-30"), "act", MONDAY, GB)).toBe("It comes back under Due on Today that morning, India's day.");
+    expect(stripLine(weekly(MONDAY), "dropped", MONDAY, GB)).toBe("Paused while the thread is dropped; reopening it brings it back.");
+  });
+
+  it("preview a series before it is saved, and refuse once on a day gone by", () => {
+    const THURSDAY = "2026-11-19";
+    const rest = (then: string) => `, then ${then}. Due by India's day wherever you are.`;
+    expect(previewWords({ start: MONDAY, every: 7 }, THURSDAY, GB)).toEqual({ lead: "Next: ", day: "Mon 23 Nov", rest: rest("every Monday") });
+    expect(previewWords({ start: "2026-11-16", every: 7 }, THURSDAY, GB)).toEqual({ lead: "Next: ", day: "Mon 23 Nov", rest: rest("every Monday") });
+    expect(previewWords({ start: THURSDAY, every: 1 }, THURSDAY, GB)).toEqual({ lead: "Next: ", day: "today", rest: rest("every day") });
+    expect(previewWords({ start: MONDAY, every: 14 }, THURSDAY, GB)).toEqual({ lead: "Next: ", day: "Mon 23 Nov", rest: rest("every 2 weeks on Mondays") });
+    expect(previewWords({ start: MONDAY, every: 10 }, THURSDAY, GB)).toEqual({ lead: "Next: ", day: "Mon 23 Nov", rest: rest("every 10 days") });
+    expect(previewWords({ start: "2026-11-25", every: null }, THURSDAY, GB)).toEqual({ lead: "Comes back under Due on Today ", day: "on Wed 25 Nov", rest: ", once." });
+    expect(previewWords({ start: THURSDAY, every: null }, THURSDAY, GB)).toEqual({ lead: "Comes back under Due on Today ", day: "today", rest: ", once." });
+    expect(previewWords({ start: "2026-11-18", every: null }, THURSDAY, GB)).toEqual({ problem: "That day has gone by. Pick today or a day after." });
   });
 });

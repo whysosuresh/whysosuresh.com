@@ -32,6 +32,10 @@
 // Any thread can be one meeting (`meeting` on every thread: its when, length, where and people): `meet` sets or
 // clears it, and `attendee` adds someone by number, or someone new by name, or takes one off; each answers the thread.
 //
+// Any thread can carry his reminder (`reminder` on his own thread: the day it counts from, the next day it is due, and
+// its repeat in days, null for once): `remind` sets it, clears it, moves its next day for one time (Later) or marks it
+// done for the day it was due; each answers the thread. What due means is site/app/reminders.js's.
+//
 // One of his own threads whose main section is a page can be an ask, a questions page anyone answers by one link,
 // /ask/<slug>, each browser that answers getting a thread of its own (`ask` on every thread says which it is).
 // `listAsks` reads every ask for Asks, `askAction` opens, closes or marks an ask's answers read. A visitor reads an ask
@@ -83,7 +87,8 @@
  *   main: 'text' | 'page' | 'link', link: { url: string, title: string | null } | null, publicAt: string | null,
  *   feedAt?: string | null, senderNumber?: number | null, shared?: number, waiting?: boolean,
  *   shareKey?: string | null, publicByNumber?: boolean,
- *   meeting?: import('./meetings.js').Meeting | null, ask?: AskMark | null
+ *   meeting?: import('./meetings.js').Meeting | null, ask?: AskMark | null,
+ *   reminder?: import('./reminders.js').Reminder | null
  * }} Thread
  * @typedef {'draft' | 'open' | 'closed'} AskState
  * @typedef {{ slug: string, state: AskState } | { number?: number, slug: string, title: string | null }} AskMark
@@ -499,6 +504,17 @@ export async function uninvite(number, person) {
  */
 export async function meet(number, meeting) {
   return /** @type {{ thread: Thread }} */ (await post(`/threads/${number}/meeting`, meeting)).thread;
+}
+
+/**
+ * Changes a thread's reminder: sets it (`start` and `every`, null for once; both null clear it), moves its next day for
+ * one time (`snooze`), or marks it done for the day it was due (`on`); answers the thread as it now is.
+ * @param {number} number
+ * @param {{ start: string | null, every: number | null } | { snooze: string } | { action: 'done', on: string }} change
+ * @returns {Promise<Thread>}
+ */
+export async function remind(number, change) {
+  return /** @type {{ thread: Thread }} */ (await post(`/threads/${number}/reminder`, change)).thread;
 }
 
 /**

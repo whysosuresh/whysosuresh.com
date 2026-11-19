@@ -142,6 +142,24 @@ import { SPACES } from '../spaces.js';
 import { MEMBER_COMMANDS, MEMBER_SHEET, SHEET, commandFor } from './keys.js';
 import { STATUS_NAMES, TAB_NAMES, TABS, breakdown, countWords, listPath, ordered, routeTab, shows, tabOf, tagOf } from './standing.js';
 import { parse, summaryLines } from './markdown.js';
+import {
+  addDays as addReminderDays,
+  afterDone,
+  byDue,
+  dayWords as reminderDay,
+  doneWords,
+  dueWords,
+  everyWords,
+  isDue,
+  laterDays,
+  laterNote,
+  laterWords,
+  previewWords,
+  reminderEventWords,
+  seriesWords,
+  stripLine,
+  todayIn,
+} from './reminders.js';
 import { cardLines, chipWords, dayWords, isDay, leadWords, lengthWords, momentWords, partsOf, peopleChanges, split, stateOf, todayKey, whenLine, whenOf, withLine } from './meetings.js';
 import {
   JOURNAL_PATH,
@@ -256,6 +274,7 @@ import {
   markAskRead,
   me,
   meet,
+  remind,
   move,
   pageAddress,
   people,
@@ -315,6 +334,7 @@ import {
  * @typedef {import('./journal.js').Block} JournalBlock
  * @typedef {{ key: string, base: number, text: string, stale: boolean, busy: boolean, problem: string }} JournalEdit
  * @typedef {{ number: number, day: string, time: string, minutes: string, where: string, chosen: number[], named: string[], query: string, problem: string, busy: boolean }} MeetingDraft
+ * @typedef {{ number: number, kind: 'once' | 'repeat', day: string, n: string, unit: 'days' | 'weeks', busy: boolean }} ReminderDraft
  * @typedef {import('./page-talk.js').Places<ThreadComment>} Places
  * @typedef {{ quote: string, prefix: string, suffix: string, top: number }} WordsDraft
  * @typedef {{ ready: boolean, questions: Set<string>, anchors: Map<string, number | null>, questionTops: Map<string, number>, answered: number[], sent: string,
@@ -340,7 +360,7 @@ import {
  * @typedef {{ to: string, subject: string, body: string }} Draft
  * @typedef {{ title: string, summary: string, body: string }} Editing
  * @typedef {{ title: string, space: string, status: 'received' | 'act' | 'discuss', body: string }} NewDraft
- * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share' | 'discussion' | 'meeting' | 'more' | 'photo' | 'account' | 'keep' | 'kept-menu' | 'collection-edit' | 'collection-delete' | 'collection-share'} Overlay
+ * @typedef {null | 'find' | 'new' | 'keys' | 'drop' | 'space' | 'versions' | 'share' | 'discussion' | 'meeting' | 'reminder' | 'more' | 'photo' | 'account' | 'keep' | 'kept-menu' | 'collection-edit' | 'collection-delete' | 'collection-share'} Overlay
  * @typedef {{ number: number, people: Person[], count: number, email: string, name: string, problem: string, invited: { name: string, email: string } | null, busy: boolean }} CollectionSharing
  * @typedef {{ number: number, people: Person[], count: number, email: string, name: string, problem: string,
  *   invited: { name: string, email: string } | null, busy: boolean }} Sharing
@@ -1365,6 +1385,11 @@ class Threads {
     this.newDraft = null;
     /** The meeting being set in its editor. @type {MeetingDraft | null} */
     this.meetingDraft = null;
+    /** The reminder being set in its editor. @type {ReminderDraft | null} */
+    this.reminderDraft = null;
+    /** The thread whose Later menu is open, on Today's row or its own strip, and whether it is picking a day. @type {number | null} */
+    this.laterOf = null;
+    this.laterPicking = false;
     this.newPreview = false;
     /** @type {FindItem[]} */
     this.found = [];
@@ -2074,16 +2099,29 @@ class Threads {
    * in Waiting on you while they are new, and once read (Mark read) they are read.
    */
   fresh() {
+    const today = todayIn(Date.now());
     return [...this.threads.values()]
-      .filter((thread) => thread.status === 'received' && !thread.waiting && answeredAsk(thread) === null)
+      .filter((thread) => thread.status === 'received' && !thread.waiting && answeredAsk(thread) === null && !isDue(thread.reminder ?? null, thread.status, today))
       .sort((a, b) => b.activityAt.localeCompare(a.activityAt));
   }
 
-  /** Open threads sorted into a tab that sat a week untouched, the longest first, but for one waiting on him. */
+  /**
+   * Threads whose reminder is due today in his zone, the longest due first, but for one waiting on him, which Waiting
+   * on you already shows: a thread is on Today once, in the first section that takes it (Waiting, Due, New, Sat a week).
+   */
+  due() {
+    const today = todayIn(Date.now());
+    return byDue([...this.threads.values()].filter((thread) => !thread.waiting && isDue(thread.reminder ?? null, thread.status, today)));
+  }
+
+  /**
+   * Open threads sorted into a tab that sat a week untouched, the longest first, but for one waiting on him and one
+   * with a reminder: he set the day it comes back, so it isn't sitting forgotten.
+   */
   sat() {
     const cutoff = Date.now() - WEEK_MS;
     return [...this.threads.values()]
-      .filter((thread) => (thread.status === 'act' || thread.status === 'discuss') && !thread.waiting && new Date(thread.activityAt).getTime() <= cutoff)
+      .filter((thread) => (thread.status === 'act' || thread.status === 'discuss') && !thread.waiting && !thread.reminder && new Date(thread.activityAt).getTime() <= cutoff)
       .sort((a, b) => a.activityAt.localeCompare(b.activityAt));
   }
 
@@ -2117,7 +2155,12 @@ class Threads {
     if (this.from !== 'today') return this.inTab(this.tab, this.only).map((thread) => thread.number);
     const seen = new Set();
     // Today's rows as drawn: a folded group of new answers is its ask, so the walk never lands on a thread with no row.
-    return [...this.folded().map((entry) => entry.number), ...this.fresh().map((thread) => thread.number), ...this.sat().map((thread) => thread.number)].filter((number) =>
+    return [
+      ...this.folded().map((entry) => entry.number),
+      ...this.due().map((thread) => thread.number),
+      ...this.fresh().map((thread) => thread.number),
+      ...this.sat().map((thread) => thread.number),
+    ].filter((number) =>
       seen.has(number) ? false : (seen.add(number), true),
     );
   }
@@ -2300,7 +2343,7 @@ class Threads {
       here: this.railHere(),
       tab: this.tab,
       only: this.only,
-      today: this.folded().length + this.fresh().length + this.sat().length + waitingRooms.length,
+      today: this.folded().length + this.due().length + this.fresh().length + this.sat().length + waitingRooms.length,
       waiting: waitingRooms.reduce((sum, room) => sum + room.acts.length, 0),
       meetings: this.meetings().coming.length,
       asks: this.asks.filter((ask) => ask.state !== 'closed').length,
@@ -2876,9 +2919,10 @@ class Threads {
   todayView() {
     const waiting = this.waiting();
     const waitingRows = [...this.distributionRows(), ...this.waitingRows(waiting)];
+    const due = this.due();
     const fresh = this.fresh();
     const sat = this.sat();
-    const total = waitingRows.length + fresh.length + sat.length;
+    const total = waitingRows.length + due.length + fresh.length + sat.length;
     const date = new Date().toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
     /**
      * @param {string} title
@@ -2913,6 +2957,18 @@ class Threads {
                 el('span', { class: 't-hint' }, ["the last word is someone else's: a person you invited, a visitor, someone who answered an ask, or someone met in public"]),
               ]),
               el('div', { class: 't-list' }, waitingRows),
+            ]),
+          ]
+        : []),
+      ...(due.length > 0
+        ? [
+            el('section', { class: 't-section' }, [
+              el('div', { class: 't-section-head' }, [
+                el('h2', {}, ['Due']),
+                el('span', { class: 't-n' }, [String(due.length)]),
+                el('span', { class: 't-hint' }, ['the day you set came round · ', el('span', { class: 't-keys-hint' }, [kbd('E'), ' done · ', kbd('H'), ' later'])]),
+              ]),
+              el('div', { class: 't-list t-list-due' }, due.map((thread) => this.dueRow(thread))),
             ]),
           ]
         : []),
@@ -3753,6 +3809,7 @@ class Threads {
       ...(this.member ? [] : [this.moves(thread)]),
       ...this.askStrip(thread),
       ...this.meetingStrip(thread),
+      ...this.reminderStrip(thread),
       summary,
       ...(this.reply ? [this.replyPanel(this.reply)] : []),
       ...this.answeredSection(thread),
@@ -4224,6 +4281,7 @@ class Threads {
     if (canReply(thread)) out.push(el('button', { type: 'button', class: 't-btn', 'data-act': 'reply' }, [icon('reply'), 'Reply ', kbd('R')]));
     out.push(el('button', { type: 'button', class: 't-btn', 'data-act': 'share' }, [icon('people'), 'Share ', kbd('S')]));
     out.push(el('button', { type: 'button', class: 't-btn', 'data-act': 'keep' }, [icon('stack'), 'Keep ', kbd('L')]));
+    if (!thread.reminder) out.push(el('button', { type: 'button', class: 't-btn', 'data-act': 'remind' }, [icon('bell'), 'Remind ', kbd('Y')]));
     out.push(el('span', { class: 't-grow' }));
     out.push(el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'edit' }, [icon('pen'), 'Edit ', kbd('W')]));
     return el('div', { class: 't-moves' }, out);
@@ -4263,6 +4321,324 @@ class Threads {
         ...(this.member ? [] : [el('button', { type: 'button', class: 't-btn t-meet-act', 'data-act': 'meeting' }, ['Change ', kbd('B')])]),
       ]),
     ];
+  }
+
+  /**
+   * A row under Due: its title opening the thread, when it was due and its repeat, the space (and the thread's status
+   * when it is done or new), and Done and Later. A row with buttons in it can't be a link, so its title is the link and
+   * a click anywhere else on it opens the thread too.
+   * @param {Thread} thread
+   */
+  dueRow(thread) {
+    const reminder = thread.reminder;
+    if (!reminder) return this.row(thread, firstLine(thread));
+    const today = todayIn(Date.now());
+    const meta = el('span', { class: 't-row-meta' }, []);
+    const tag = tagOf(thread, ['act', 'discuss']);
+    if (tag) meta.append(el('span', { class: 't-chip t-chip-status', 'data-status': tag.status }, [tag.words]));
+    meta.append(el('span', { class: 't-chip' }, [spaceLabel(thread.space)]), ...this.reminderActs(thread, false));
+    return el('div', { class: 't-row t-row-due', 'data-thread': String(thread.number), 'data-late': String(reminder.on < today), 'aria-selected': String(this.sel === thread.number) }, [
+      el('span', { class: 't-num' }, [`#${thread.number}`]),
+      el('span', { class: 't-row-main' }, [
+        el('a', { class: 't-row-title t-row-link', href: threadPath(thread), 'data-thread': String(thread.number) }, [...rowMark(thread), titleOf(thread)]),
+        el('span', { class: 't-row-sub' }, [el('span', { class: 't-row-when' }, [dueWords(reminder, thread.status, today, LOCALE)]), ` · ${everyWords(reminder.every)}`]),
+      ]),
+      meta,
+    ]);
+  }
+
+  /**
+   * Done and Later for a due reminder, with Later's menu under it while open.
+   * @param {Thread} thread @param {boolean} strip whether they sit on the thread's own strip
+   */
+  reminderActs(thread, strip) {
+    const open = this.laterOf === thread.number;
+    return [
+      el('button', { type: 'button', class: 't-btn', 'data-act': 'remind-done', 'data-thread-act': String(thread.number) }, ['Done']),
+      el('span', { class: 't-later' }, [
+        el('button', { type: 'button', class: 't-btn', 'data-act': 'remind-later', 'data-thread-act': String(thread.number), 'aria-haspopup': 'menu', 'aria-expanded': String(open) }, [
+          'Later',
+          ...(strip ? [' ', kbd('H')] : []),
+        ]),
+        ...(open ? [this.laterMenu(thread)] : []),
+      ]),
+    ];
+  }
+
+  /** Later's menu: tomorrow, next Monday, or a day he picks, each moving this time only. @param {Thread} thread */
+  laterMenu(thread) {
+    const today = todayIn(Date.now());
+    const { tomorrow, monday } = laterDays(today);
+    const note = thread.reminder ? laterNote(thread.reminder, LOCALE) : null;
+    /** @param {string} day @param {string} label @param {string} key */
+    const pick = (day, label, key) =>
+      el('button', { type: 'button', class: 't-menu-row', role: 'menuitem', 'data-act': 'later-day', 'data-day': day }, [label, el('small', {}, [reminderDay(day, today, LOCALE)]), kbd(key)]);
+    const day = el('input', { class: 't-field', type: 'date', id: 'later-day', min: today, value: addReminderDays(today, 3), 'aria-label': 'Day' });
+    return el('div', { class: 't-later-menu', role: 'menu', 'aria-label': 'Later' }, [
+      pick(tomorrow, 'Tomorrow', '1'),
+      pick(monday, 'Next Monday', '2'),
+      el('button', { type: 'button', class: 't-menu-row t-later-own', role: 'menuitem', 'data-act': 'later-pick' }, ['Pick a day', kbd('3')]),
+      ...(this.laterPicking ? [el('form', { class: 't-later-pick', 'data-submit': 'later' }, [day, el('button', { type: 'submit', class: 't-btn t-btn-primary' }, ['Move'])])] : []),
+      ...(note === null ? [] : [el('div', { class: 't-later-note' }, [note])]),
+    ]);
+  }
+
+  /** Opens or closes a thread's Later menu. @param {number} number @param {boolean} [picking] */
+  toggleLater(number, picking = false) {
+    this.laterOf = this.laterOf === number && !picking ? null : number;
+    this.laterPicking = picking;
+    this.keepScroll = true;
+    this.render();
+    if (picking) focusIn(this.main, '#later-day');
+  }
+
+  /**
+   * His reminder as a strip under the meeting: when it is due and its series, what Done will do or when it comes back,
+   * and Done, Later and Change (Y) while it is due, Change alone while it is ahead. His alone: the thread an invited
+   * person reads never carries one.
+   * @param {Thread} thread
+   */
+  reminderStrip(thread) {
+    const reminder = thread.reminder;
+    if (this.member || !reminder) return [];
+    const today = todayIn(Date.now());
+    const due = isDue(reminder, thread.status, today);
+    return [
+      el('section', { class: 't-meet t-remind', 'aria-label': 'Reminder', 'data-when': due ? 'due' : 'later' }, [
+        el('span', { class: 't-meet-cal', 'aria-hidden': 'true' }, [icon('bell')]),
+        el('span', { class: 't-meet-when' }, [dueWords(reminder, thread.status, today, LOCALE), el('span', {}, [` · ${seriesWords(reminder, today, LOCALE)}`])]),
+        el('span', { class: 't-meet-with' }, [stripLine(reminder, thread.status, today, LOCALE)]),
+        el('span', { class: 't-meet-act' }, [...(due ? this.reminderActs(thread, true) : []), el('button', { type: 'button', class: 't-btn', 'data-act': 'remind' }, ['Change ', kbd('Y')])]),
+      ]),
+    ];
+  }
+
+  /**
+   * Done for the day it was due: a repeat goes to its next day after today, once ends; the thread's status never moves.
+   * Undo sets it back, due again (a day gone by comes back as today, since no day before today can be set).
+   * @param {Thread} thread
+   */
+  async finishReminder(thread) {
+    const reminder = thread.reminder;
+    if (!reminder) return;
+    const today = todayIn(Date.now());
+    this.laterOf = null;
+    try {
+      this.remember(await remind(thread.number, { action: 'done', on: reminder.on }), { acted: true });
+    } catch (error) {
+      await this.refreshShown(thread.number);
+      this.fail(error, 'The reminder wasn’t marked done.');
+      return;
+    }
+    this.clearProblem();
+    await this.refreshShown(thread.number);
+    this.say(doneWords(reminder, afterDone(reminder, today), today, LOCALE), () => this.putReminderBack(thread.number, reminder));
+  }
+
+  /** Later: this time only moves to `day`; the series stays. @param {Thread} thread @param {string} day */
+  async snoozeReminder(thread, day) {
+    const reminder = thread.reminder;
+    const today = todayIn(Date.now());
+    if (!reminder || day < today) return;
+    this.laterOf = null;
+    this.laterPicking = false;
+    try {
+      this.remember(await remind(thread.number, { snooze: day }), { acted: true });
+    } catch (error) {
+      await this.refreshShown(thread.number);
+      this.fail(error, 'The reminder wasn’t moved.');
+      return;
+    }
+    this.clearProblem();
+    await this.refreshShown(thread.number);
+    this.say(laterWords(reminder, day, today, LOCALE), () => this.putReminderBack(thread.number, reminder));
+  }
+
+  /**
+   * Sets a reminder back as it was, for Undo: its series again (once on a day gone by from today), then its day,
+   * which can't be before today.
+   * @param {number} number @param {import('./reminders.js').Reminder} was
+   */
+  async putReminderBack(number, was) {
+    const today = todayIn(Date.now());
+    try {
+      let back = await remind(number, { start: was.every === null && was.start < today ? today : was.start, every: was.every });
+      const on = was.on < today ? today : was.on;
+      if (back.reminder && back.reminder.on !== on) back = await remind(number, { snooze: on });
+      this.remember(back, { acted: true });
+    } catch (error) {
+      this.fail(error, 'The reminder wasn’t put back.');
+    }
+    await this.refreshShown(number);
+  }
+
+  /** Opens the reminder editor, filled with the thread's reminder, or every week from next Monday. @param {Thread} thread */
+  openReminder(thread) {
+    if (this.member) return;
+    const reminder = thread.reminder;
+    const today = todayIn(Date.now());
+    this.laterOf = null;
+    this.reminderDraft = !reminder
+      ? { number: thread.number, kind: 'repeat', day: laterDays(today).monday, n: '1', unit: 'weeks', busy: false }
+      : reminder.every === null
+        ? { number: thread.number, kind: 'once', day: reminder.on, n: '1', unit: 'weeks', busy: false }
+        : { number: thread.number, kind: 'repeat', day: reminder.start, n: String(reminder.every % 7 === 0 ? reminder.every / 7 : reminder.every), unit: reminder.every % 7 === 0 ? 'weeks' : 'days', busy: false };
+    this.renderReminder();
+    focusIn(this.dialog, '#remind-day');
+  }
+
+  /** The series the editor holds: once on its day, or every N days or weeks from it, at most a year. */
+  reminderSeries() {
+    const draft = this.reminderDraft;
+    if (draft === null) return null;
+    if (draft.kind === 'once') return { start: draft.day, every: null };
+    const n = Math.max(1, Math.floor(Number(draft.n) || 1));
+    return { start: draft.day, every: Math.min(366, draft.unit === 'weeks' ? n * 7 : n) };
+  }
+
+  /** The editor's line saying what the series will do, or what is wrong with it. */
+  reminderPreview() {
+    const series = this.reminderSeries();
+    if (series === null || series.start === '') return el('p', { class: 't-remind-next', 'data-problem': 'true' }, ['Pick a day.']);
+    const said = previewWords(series, todayIn(Date.now()), LOCALE);
+    if ('problem' in said) return el('p', { class: 't-remind-next', 'data-problem': 'true', role: 'alert' }, [said.problem]);
+    return el('p', { class: 't-remind-next', 'data-problem': 'false' }, [said.lead, el('b', {}, [said.day]), said.rest]);
+  }
+
+  /** The reminder editor, drawn from its draft. */
+  renderReminder() {
+    const draft = this.reminderDraft;
+    const thread = draft === null ? null : this.threads.get(draft.number);
+    if (draft === null || !thread) return;
+    const today = todayIn(Date.now());
+    const preview = this.reminderPreview();
+    const quick = /** @type {const} */ ([
+      ['1', 'days', 'Every day'],
+      ['1', 'weeks', 'Every week'],
+      ['2', 'weeks', 'Every 2 weeks'],
+    ]);
+    const day = el('input', { class: 't-field', type: 'date', id: 'remind-day', value: draft.day, required: '', ...(draft.kind === 'once' ? { min: today } : {}) });
+    const n = el('input', { class: 't-field', type: 'number', id: 'remind-n', min: '1', max: '366', value: draft.n });
+    const unit = el('select', { class: 't-field', id: 'remind-unit', 'aria-label': 'Days or weeks' }, [
+      el('option', { value: 'days', ...(draft.unit === 'days' ? { selected: '' } : {}) }, ['days']),
+      el('option', { value: 'weeks', ...(draft.unit === 'weeks' ? { selected: '' } : {}) }, ['weeks']),
+    ]);
+    this.openOverlay('reminder', thread.reminder ? `Change the reminder on #${thread.number}` : `Remind me about #${thread.number}`, 'form', [
+      this.sheetHead(`Reminder · #${thread.number}`),
+      el('form', { class: 't-remind-form', 'data-submit': 'reminder' }, [
+        el('div', { class: 't-sheet-body' }, [
+          el('div', { class: 't-fld' }, [
+            el('span', { class: 't-lbl' }, [
+              'Comes back',
+              el('span', { class: 't-seg', role: 'group', 'aria-label': 'How often' }, [
+                el('button', { type: 'button', 'data-act': 'remind-kind', 'data-kind': 'once', 'aria-pressed': String(draft.kind === 'once') }, ['Once']),
+                el('button', { type: 'button', 'data-act': 'remind-kind', 'data-kind': 'repeat', 'aria-pressed': String(draft.kind === 'repeat') }, ['Repeats']),
+              ]),
+            ]),
+          ]),
+          ...(draft.kind === 'once'
+            ? [el('label', { class: 't-fld' }, [el('span', { class: 't-lbl' }, ['On']), day])]
+            : [
+                el(
+                  'div',
+                  { class: 't-remind-quick', role: 'group', 'aria-label': 'Common repeats' },
+                  quick.map(([count, per, label]) =>
+                    el('button', { type: 'button', 'data-act': 'remind-quick', 'data-n': count, 'data-unit': per, 'aria-pressed': String(draft.n === count && draft.unit === per) }, [label]),
+                  ),
+                ),
+                el('div', { class: 't-remind-every' }, [
+                  el('label', { class: 't-fld' }, [el('span', { class: 't-lbl' }, ['Every']), n]),
+                  el('div', { class: 't-fld' }, [el('span', { class: 't-lbl', 'aria-hidden': 'true' }, [' ']), unit]),
+                  el('label', { class: 't-fld' }, [el('span', { class: 't-lbl' }, ['Starting']), day]),
+                ]),
+              ]),
+          preview,
+        ]),
+        el('div', { class: 't-sheet-foot' }, [
+          ...(thread.reminder ? [el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'remind-clear' }, ['Clear reminder'])] : []),
+          el('span', { class: 't-grow' }),
+          el('button', { type: 'button', class: 't-btn t-btn-quiet', 'data-act': 'close' }, ['Cancel ', kbd('Esc')]),
+          el('button', { type: 'submit', class: 't-btn t-btn-primary', ...(draft.busy || preview.dataset.problem === 'true' ? { disabled: '' } : {}) }, ['Save ', kbd('⌘↵')]),
+        ]),
+      ]),
+    ]);
+  }
+
+  /** Reads what the reminder editor holds into its draft, and says again what it will do. */
+  readReminder() {
+    const draft = this.reminderDraft;
+    if (draft === null) return;
+    /** @param {string} id */
+    const value = (id) => {
+      const field = this.dialog.querySelector(`#${id}`);
+      return field instanceof HTMLInputElement || field instanceof HTMLSelectElement ? field.value : null;
+    };
+    draft.day = value('remind-day') ?? draft.day;
+    draft.n = value('remind-n') ?? draft.n;
+    const unit = value('remind-unit');
+    if (unit === 'days' || unit === 'weeks') draft.unit = unit;
+    const preview = this.reminderPreview();
+    this.dialog.querySelector('.t-remind-next')?.replaceWith(preview);
+    const save = this.dialog.querySelector('.t-remind-form [type="submit"]');
+    if (save instanceof HTMLButtonElement) save.disabled = draft.busy || preview.dataset.problem === 'true';
+    for (const one of this.dialog.querySelectorAll('[data-act="remind-quick"]')) {
+      if (one instanceof HTMLElement) one.setAttribute('aria-pressed', String(one.dataset.n === draft.n && one.dataset.unit === draft.unit));
+    }
+  }
+
+  /** Saves the editor's series, with Undo back to the reminder it replaced, or none. */
+  async saveReminder() {
+    this.readReminder();
+    const draft = this.reminderDraft;
+    const thread = draft === null ? null : this.threads.get(draft.number);
+    const series = this.reminderSeries();
+    if (draft === null || !thread || series === null || draft.busy || 'problem' in previewWords(series, todayIn(Date.now()), LOCALE)) return;
+    const had = thread.reminder ?? null;
+    draft.busy = true;
+    try {
+      this.remember(await remind(thread.number, series), { acted: true });
+    } catch (error) {
+      draft.busy = false;
+      this.renderReminder();
+      this.fail(error, 'The reminder didn’t save.');
+      return;
+    }
+    this.closeOverlay();
+    this.clearProblem();
+    await this.refreshShown(thread.number);
+    const saved = this.threads.get(thread.number)?.reminder;
+    const today = todayIn(Date.now());
+    this.say(saved ? `Reminder on #${thread.number}: ${dueWords(saved, thread.status, today, LOCALE).toLowerCase()}, ${everyWords(saved.every).toLowerCase()}` : `Reminder set on #${thread.number}`, () =>
+      had ? this.putReminderBack(thread.number, had) : this.clearReminderOf(thread.number),
+    );
+  }
+
+  /** Clears a reminder: none undone, as Undo uses it. @param {number} number */
+  async clearReminderOf(number) {
+    try {
+      this.remember(await remind(number, { start: null, every: null }), { acted: true });
+    } catch (error) {
+      this.fail(error, 'The reminder wasn’t cleared.');
+    }
+    await this.refreshShown(number);
+  }
+
+  /** Clears the editor's reminder, with Undo that sets it back. */
+  async clearReminder() {
+    const draft = this.reminderDraft;
+    const thread = draft === null ? null : this.threads.get(draft.number);
+    const had = thread?.reminder;
+    if (!thread || !had) return;
+    this.closeOverlay();
+    try {
+      this.remember(await remind(thread.number, { start: null, every: null }), { acted: true });
+    } catch (error) {
+      this.fail(error, 'The reminder wasn’t cleared.');
+      return;
+    }
+    this.clearProblem();
+    await this.refreshShown(thread.number);
+    this.say(`Cleared the reminder on #${thread.number}`, () => this.putReminderBack(thread.number, had));
   }
 
   /** Opens the meeting editor for a thread, filled with its meeting, or tomorrow when it is none. @param {Thread} thread */
@@ -4646,6 +5022,12 @@ class Threads {
         break;
       case 'attendee-removed':
         [name, words] = ['people', ['took ', word(data.name ?? 'someone'), ' off the meeting']];
+        break;
+      case 'reminder-set':
+      case 'reminder-cleared':
+      case 'reminder-snoozed':
+      case 'reminder-done':
+        [name, words] = ['bell', [reminderEventWords(event.type, data, todayIn(Date.now()), LOCALE) ?? event.type]];
         break;
       case 'ask-drafted':
       case 'ask-opened':
@@ -8126,7 +8508,7 @@ class Threads {
         } else if (link.dataset.fromKept !== undefined && this.collection) {
           this.from = 'collection';
           this.fromCollection = this.collection.collection.number;
-        } else if (link.classList.contains('t-row') || link.classList.contains('t-card') || link.classList.contains('t-ask-main')) {
+        } else if (link.classList.contains('t-row') || link.classList.contains('t-row-link') || link.classList.contains('t-card') || link.classList.contains('t-ask-main')) {
           this.from =
             this.route.view === 'today'
               ? 'today'
@@ -8169,6 +8551,20 @@ class Threads {
           space: link.dataset.space === '' ? null : link.dataset.space,
         });
       }
+      return;
+    }
+    // A click anywhere but Later's own menu and button closes the menu.
+    if (this.laterOf !== null && !target.closest('.t-later')) {
+      this.laterOf = null;
+      this.laterPicking = false;
+      this.keepScroll = true;
+      this.render();
+    }
+    // A row under Due holds buttons, so it isn't a link: a click on it anywhere but its controls opens its thread.
+    const dueRow = target.closest('.t-row-due');
+    if (dueRow instanceof HTMLElement && !target.closest('button, input, form, .t-later') && !wantsNewTab(event)) {
+      this.from = 'today';
+      this.openThread(Number(dueRow.dataset.thread));
       return;
     }
     const button = target.closest('[data-act], [data-go]');
@@ -8304,6 +8700,52 @@ class Threads {
         break;
       case 'meeting':
         if (thread && this.route.view === 'thread') this.openMeeting(thread);
+        break;
+      case 'remind': {
+        const which = this.route.view === 'thread' ? thread : this.threads.get(Number(button.dataset.threadAct));
+        if (which) this.openReminder(which);
+        break;
+      }
+      case 'remind-done':
+      case 'remind-later': {
+        const which = this.threads.get(Number(button.dataset.threadAct));
+        if (!which) break;
+        if (button.dataset.act === 'remind-done') void this.finishReminder(which);
+        else this.toggleLater(which.number);
+        break;
+      }
+      case 'later-day': {
+        const which = this.laterOf === null ? undefined : this.threads.get(this.laterOf);
+        if (which && button.dataset.day) void this.snoozeReminder(which, button.dataset.day);
+        break;
+      }
+      case 'later-pick':
+        if (this.laterOf !== null) this.toggleLater(this.laterOf, true);
+        break;
+      case 'remind-kind': {
+        const draft = this.reminderDraft;
+        const kind = button.dataset.kind;
+        if (draft === null || (kind !== 'once' && kind !== 'repeat')) break;
+        this.readReminder();
+        draft.kind = kind;
+        // Once can't be on a day gone by, so a repeat's start in the past turns into today.
+        const today = todayIn(Date.now());
+        if (kind === 'once' && draft.day < today) draft.day = today;
+        this.renderReminder();
+        break;
+      }
+      case 'remind-quick': {
+        const draft = this.reminderDraft;
+        const unit = button.dataset.unit;
+        if (draft === null || (unit !== 'days' && unit !== 'weeks')) break;
+        this.readReminder();
+        draft.n = button.dataset.n ?? '1';
+        draft.unit = unit;
+        this.renderReminder();
+        break;
+      }
+      case 'remind-clear':
+        void this.clearReminder();
         break;
       case 'meet-choose':
       case 'meet-unchoose':
@@ -8717,6 +9159,7 @@ class Threads {
       this.readEditor();
       this.main.querySelector('#edit-preview')?.replaceChildren(...this.editorPreview(this.shown.thread, this.editing));
     } else if (target.id.startsWith('new-')) this.readNew();
+    else if (target.id.startsWith('remind-') && this.reminderDraft !== null) this.readReminder();
     else if (target.id.startsWith('meet-') && this.meetingDraft !== null) {
       const timed = this.meetingDraft.time !== '';
       this.readMeeting();
@@ -8776,6 +9219,12 @@ class Threads {
     if (kind === 'edit' && thread) void this.saveEdit(thread);
     if (kind === 'new') void this.saveNew();
     if (kind === 'meeting') void this.saveMeeting();
+    if (kind === 'reminder') void this.saveReminder();
+    if (kind === 'later') {
+      const box = this.main.querySelector('#later-day');
+      const thread = this.laterOf === null ? undefined : this.threads.get(this.laterOf);
+      if (box instanceof HTMLInputElement && thread && box.value !== '') void this.snoozeReminder(thread, box.value);
+    }
     if (kind === 'invite') void this.sendInvite();
     if (kind === 'note') void this.sendNote();
     if (kind === 'person-note') void this.savePersonNote();
@@ -8849,6 +9298,22 @@ class Threads {
     if (this.overlay !== null) {
       this.onOverlayKey(event, typing);
       return;
+    }
+    // Later's menu: 1 tomorrow, 2 next Monday, 3 pick a day; Esc closes it.
+    if (this.laterOf !== null && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      const open = this.threads.get(this.laterOf);
+      if (event.key === 'Escape' && !typing) {
+        event.preventDefault();
+        this.toggleLater(this.laterOf);
+        return;
+      }
+      if (!typing && open && /^[123]$/.test(event.key)) {
+        event.preventDefault();
+        const { tomorrow, monday } = laterDays(todayIn(Date.now()));
+        if (event.key === '3') this.toggleLater(open.number, true);
+        else void this.snoozeReminder(open, event.key === '1' ? tomorrow : monday);
+        return;
+      }
     }
     // A kept thread's row with the focus: ⌥↑ and ⌥↓ move it one place, with ⇧ to the top or the bottom; ↵ opens it.
     const kept = target instanceof HTMLElement && target.classList.contains('t-row-kept') ? target : null;
@@ -9019,7 +9484,15 @@ class Threads {
         if (thread && isOpen(thread)) this.openDrop(thread);
         break;
       case 'done':
-        if (thread && (status === 'act' || status === 'discuss' || status === 'filed')) void this.makeMove(thread, { action: 'done' });
+        // On Today a row under Due is its reminder's: E marks this time done and never moves the thread.
+        if (thread && this.route.view === 'today' && this.due().some((one) => one.number === thread.number)) void this.finishReminder(thread);
+        else if (thread && (status === 'act' || status === 'discuss' || status === 'filed')) void this.makeMove(thread, { action: 'done' });
+        break;
+      case 'remind':
+        if (thread && (this.route.view === 'thread' || this.route.view === 'today' || this.route.view === 'list')) this.openReminder(thread);
+        break;
+      case 'later':
+        if (thread?.reminder && isDue(thread.reminder, thread.status, todayIn(Date.now())) && (this.route.view === 'thread' || this.route.view === 'today')) this.toggleLater(thread.number);
         break;
       case 'reopen':
         if (thread && (status === 'done' || status === 'dropped')) void this.makeMove(thread, { action: 'reopen' });
