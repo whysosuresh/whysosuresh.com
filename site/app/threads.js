@@ -182,7 +182,7 @@ import { CARD_NAME, cardStamp } from './card.js';
 import { cardBlob } from './card-paint.js';
 import { PHOTO_SHEET, VIA, photoProblem, photoSaved, startedLine, viaClaude, writerName } from './byline.js';
 import { ASKS_PATH, ASK_PATH, CLOSED_LINE, DRAFTS_HINT, agoWords, FIRST_ANSWERERS, answeredHead, answererName, answerersShown, askEventWords, askLink, askShown, countLine, foldWaiting, foldedTitle, foldedWho, markReadLabel, markedWords, nobodyLine, savedLine, stateWords, summaryNoteFor, talkLinkFor, topicLine, visitorHint } from './asks.js';
-import { DRAFT, KEY, discussionFor, helloFor, placesOf, readPageMessage, stack, takesAnswers } from './page-talk.js';
+import { DRAFT, KEY, discussionFor, helloFor, placesOf, presentingFor, readPageMessage, stack, takesAnswers } from './page-talk.js';
 import { pageFull, readPageState, threadLabel } from './page-view.js';
 import {
   COLLECTIONS_PAGE,
@@ -1376,6 +1376,8 @@ class Threads {
     this.pageVersions = new Map();
     /** Whether the page fills the window, set by the rule wherever a thread becomes current (`fullFor`). */
     this.pageFull = false;
+    /** The frame Present last put on the whole screen, until it leaves. @type {HTMLIFrameElement | null} */
+    this.presented = null;
     /** What the open page's frame has said. @type {Talk} */
     this.talk = freshTalk();
     /** The comment being written on words selected in the page, and its text. @type {WordsDraft | null} */
@@ -1452,6 +1454,7 @@ class Threads {
     });
     window.addEventListener('popstate', () => this.onPop());
     window.addEventListener('message', (event) => this.onPageMessage(event));
+    document.addEventListener('fullscreenchange', () => this.onPresenting());
     this.wide.addEventListener('change', () => {
       if (this.route.view !== 'thread') return;
       this.keepScroll = true;
@@ -4128,12 +4131,26 @@ class Threads {
   async present(button) {
     const frame = button.closest('.t-page')?.querySelector('.t-page-frame');
     if (!(frame instanceof HTMLIFrameElement)) return;
+    this.presented = frame;
     try {
       await frame.requestFullscreen();
     } catch {
+      this.presented = null;
       return;
     }
     frame.focus();
+  }
+
+  /**
+   * Tells the page Present put on the whole screen that it presents, and when it leaves, that it no longer does
+   * (`presentingFor`), so the bridge draws none of the thread's marks on it meanwhile: no underline, no Comment.
+   */
+  onPresenting() {
+    const frame = this.presented;
+    if (frame === null) return;
+    const on = presenting(frame);
+    frame.contentWindow?.postMessage(presentingFor(on), '*');
+    if (!on) this.presented = null;
   }
 
   /**
@@ -4145,7 +4162,7 @@ class Threads {
    * the reader clicked or typed in it or pressed Present, so a page script acting on its own at load is refused.
    * Present is the threads page's act on the frame, the page itself is never given full screen, and while it presents
    * the thread takes its answers and nothing else: a comment box or a discussion opened behind it would take the
-   * keyboard where nobody can see. An answer also has to name a question the page named in `ready`, at most ten a
+   * keyboard where nobody can see. The page is told it presents (`onPresenting`), so it draws no marks meanwhile. An answer also has to name a question the page named in `ready`, at most ten a
    * minute from one frame, and is saved here as whoever is signed in. The public view answers its own frame
    * (`onPublicPageMessage`).
    * @param {MessageEvent} event
@@ -4179,6 +4196,8 @@ class Threads {
       // He reads an ask and the answers to it; he doesn't answer his own questions in someone else's thread.
       this.talk.hello = !this.member && thread.ask ? 'read' : 'member';
       frame.contentWindow?.postMessage(helloFor(this.talk.hello), '*');
+      // A page that loads again while it presents hears so again.
+      if (presenting(frame)) frame.contentWindow?.postMessage(presentingFor(true), '*');
       this.tellPage();
       return;
     }
