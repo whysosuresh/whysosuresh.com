@@ -8,7 +8,8 @@
 // a thread's comments into those places once, for the history, the page and the column beside it. A public thread's
 // visitors answer too: each visitor's answers carry their key's short hash (`visitor`), so two who typed the same name
 // stay two people, and the public call answers each visitor's newest already, so its answers are told as given.
-// `helloFor` is the hello that answers a page's `ready`, by who reads it (frame/bridge.js reads the same four).
+// `helloFor` is the hello that answers a page's `ready`, by who reads it (frame/bridge.js reads the same four), and
+// `presentingFor` what a page is told when it is put alone on the whole screen and when it leaves.
 
 /** The id a page marks a question with, as the Worker checks it. */
 export const QUESTION_SHAPE = /^[a-z0-9-]{1,40}$/;
@@ -137,6 +138,15 @@ export function helloFor(as) {
   if (as === 'member') return { [KEY]: 'hello' };
   if (as === 'visitor') return { [KEY]: 'hello', visitor: true };
   return { [KEY]: 'hello', mode: as };
+}
+
+/**
+ * What a page is told when Present puts it alone on the whole screen (`on`), and when it leaves: while it presents
+ * the bridge draws no underline and no Comment on it.
+ * @param {boolean} on
+ */
+export function presentingFor(on) {
+  return { [KEY]: 'presenting', on };
 }
 
 /**

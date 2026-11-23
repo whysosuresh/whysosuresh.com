@@ -26,7 +26,9 @@
 //   click that ends a selection, so selecting words doesn't move it.
 //
 // The thread says whether an answer was kept (`saved`), and when it wasn't, may say why in a short line (`problem`),
-// drawn as text under the box.
+// drawn as text under the box. It also says when the page presents, alone on the whole screen (`presenting`), and
+// when it no longer does: while it does, the page shows no underline and no Comment, and a click on its words is the
+// page's own, so a deck on a projector carries none of the thread's marks. The answer boxes stay.
 //
 // Every message is one object whose `whysosuresh` names its kind, checked field by field on arrival (`readFromThread`
 // here, site/app/page-talk.js on the thread's side); every text is drawn as text. The page posts to the site's own
@@ -56,7 +58,8 @@ export const KEY = 'whysosuresh';
  * @typedef {'answer' | 'private' | 'read'} Mode How the page is answered: in boxes as the reader, in boxes only Suresh
  *   reads (an ask's visitor), or not at all, its answers read under the questions (the owner on an ask).
  * @typedef {{ kind: 'hello', visitor: boolean, mode: Mode } | { kind: 'discussion', answers: Answer[], anchors: Anchor[], active: string | null }
- *   | { kind: 'focus', id: string, scroll: boolean } | { kind: 'saved', question: string, ok: boolean, problem: string | null }} FromThread
+ *   | { kind: 'focus', id: string, scroll: boolean } | { kind: 'saved', question: string, ok: boolean, problem: string | null }
+ *   | { kind: 'presenting', on: boolean }} FromThread
  */
 
 /** @param {unknown} value @returns {value is Record<string, unknown>} */
@@ -96,7 +99,7 @@ function readAnchor(value) {
 }
 
 /**
- * A message from the thread, or null for anything that isn't exactly one of its four kinds.
+ * A message from the thread, or null for anything that isn't exactly one of its five kinds.
  * @param {unknown} data
  * @returns {FromThread | null}
  */
@@ -135,6 +138,8 @@ export function readFromThread(data) {
       if (problem !== undefined && (!isText(problem, MAX_PROBLEM) || problem.trim() === '')) return null;
       return { kind: 'saved', question, ok, problem: typeof problem === 'string' ? problem : null };
     }
+    case 'presenting':
+      return hasExactly(data, [KEY, 'on']) && typeof data.on === 'boolean' ? { kind: 'presenting', on: data.on } : null;
     default:
       return null;
   }
@@ -327,6 +332,8 @@ function start() {
   let locked = false;
   /** Whether the answers are only read here: the owner on an ask, with no box to type in. */
   let reading = false;
+  /** Whether the page presents, alone on the whole screen, as the thread said: no underline, no Comment. */
+  let presenting = false;
   /** @type {Extract<FromThread, { kind: 'discussion' }> | null} */
   let discussion = null;
   /** @type {Map<string, Range>} */
@@ -382,6 +389,7 @@ function start() {
   const top = (/** @type {Range | Element} */ thing) => Math.round(thing.getBoundingClientRect().top + scrollY);
 
   // Underlines each discussion's words where this version has them, and says where each sits, or that it is gone.
+  // While the page presents the words are still found and said, so the thread redraws nothing, and none is underlined.
   const mark = () => {
     if (!discussion) return;
     const model = textOf();
@@ -393,9 +401,10 @@ function start() {
     }
     if (typeof CSS !== 'undefined' && 'highlights' in CSS && typeof Highlight === 'function') {
       const active = discussion.active;
-      CSS.highlights.set('whysosuresh', new Highlight(...[...ranges].filter(([id]) => id !== active).map(([, range]) => range)));
       const on = active === null ? undefined : ranges.get(active);
-      if (on) CSS.highlights.set('whysosuresh-on', new Highlight(on));
+      if (presenting) CSS.highlights.delete('whysosuresh');
+      else CSS.highlights.set('whysosuresh', new Highlight(...[...ranges].filter(([id]) => id !== active).map(([, range]) => range)));
+      if (on && !presenting) CSS.highlights.set('whysosuresh-on', new Highlight(on));
       else CSS.highlights.delete('whysosuresh-on');
     }
     post('anchors', {
@@ -526,7 +535,7 @@ function start() {
   const choose = () => {
     chosen = null;
     pillHost.hidden = true;
-    if (!discussing) return;
+    if (!discussing || presenting) return;
     const selection = getSelection();
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
     const range = selection.getRangeAt(0);
@@ -553,19 +562,19 @@ function start() {
   const ours = (event) => event.composedPath().some((node) => node instanceof Element && hosts.has(node));
 
   // A page that moves on a click (a deck) would move on the click that ends a selection: that one click is the reader
-  // choosing words, so it stops here. Every other click is the page's own.
+  // choosing words, so it stops here. Every other click is the page's own, and while it presents, every click.
   addEventListener(
     'click',
     (event) => {
-      if (!discussing || ours(event)) return;
+      if (!discussing || presenting || ours(event)) return;
       const selection = getSelection();
       if (selection && !selection.isCollapsed && selection.toString().trim() !== '') event.stopImmediatePropagation();
     },
     { capture: true },
   );
-  // Clicked words that a discussion is on open it in the thread.
+  // Clicked words that a discussion is on open it in the thread, except while the page presents.
   document.addEventListener('click', (event) => {
-    if (!discussing || ours(event) || !(getSelection()?.isCollapsed ?? true)) return;
+    if (!discussing || presenting || ours(event) || !(getSelection()?.isCollapsed ?? true)) return;
     const caret =
       'caretPositionFromPoint' in document
         ? document.caretPositionFromPoint(event.clientX, event.clientY)
@@ -620,6 +629,10 @@ function start() {
         parts.count.hidden = true;
         drawBoxes();
       } else parts.problem.textContent = said.problem ?? 'That answer didn’t save. It is still in the box.';
+    } else if (said.kind === 'presenting') {
+      presenting = said.on;
+      pillHost.hidden = true;
+      mark();
     }
   });
 

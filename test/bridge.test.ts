@@ -2,9 +2,10 @@
 // because its start runs only in a document. What it holds: quoted words are found again by their text either side,
 // in a later version too, and are missing once a version cuts them; a selection's words keep their spaces and line
 // breaks, with up to 64 characters either side, and a blank one or one over 500 is no quote; and a message from the
-// thread is taken only as exactly one of its four kinds, in range, so nothing else the parent posts reaches the page:
+// thread is taken only as exactly one of its five kinds, in range, so nothing else the parent posts reaches the page:
 // a hello is the signed-in thread's, a public visitor's, an ask's visitor's (whose boxes only Suresh reads) or the
-// owner's reading an ask (no boxes to type in), and a save that failed may say why in one short line.
+// owner's reading an ask (no boxes to type in), a save that failed may say why in one short line, and presenting is
+// a yes or a no and nothing more.
 
 import { describe, expect, it } from "vitest";
 
@@ -74,7 +75,9 @@ describe("a message from the thread", () => {
   const answer = { question: "order", name: "Dev", body: "Fine as is.", at: "2026-11-09T21:14:00.000Z", mine: false };
   const anchor = { id: ID, quote: "The live app", prefix: "", suffix: " is shown" };
 
-  it("is taken as exactly one of hello, discussion, focus and saved", () => {
+  it("is taken as exactly one of hello, discussion, focus, saved and presenting", () => {
+    expect(readFromThread({ [KEY]: "presenting", on: true })).toEqual({ kind: "presenting", on: true });
+    expect(readFromThread({ [KEY]: "presenting", on: false })).toEqual({ kind: "presenting", on: false });
     expect(readFromThread({ [KEY]: "hello" })).toEqual({ kind: "hello", visitor: false, mode: "answer" });
     expect(readFromThread({ [KEY]: "hello", visitor: true })).toEqual({ kind: "hello", visitor: true, mode: "answer" });
     expect(readFromThread({ [KEY]: "hello", mode: "private" })).toEqual({ kind: "hello", visitor: true, mode: "private" });
@@ -112,6 +115,9 @@ describe("a message from the thread", () => {
     ["words with too much context", { [KEY]: "discussion", answers: [], anchors: [{ ...anchor, prefix: "p".repeat(MAX_CONTEXT + 1) }], active: null }],
     ["an anchor with no words", { [KEY]: "discussion", answers: [], anchors: [{ ...anchor, quote: "" }], active: null }],
     ["an id that isn't one", { [KEY]: "focus", id: "c1", scroll: false }],
+    ["presenting that doesn't say which", { [KEY]: "presenting" }],
+    ["presenting that isn't a yes or a no", { [KEY]: "presenting", on: 1 }],
+    ["presenting with more", { [KEY]: "presenting", on: true, frame: "all" }],
     ["a list that isn't one", { [KEY]: "discussion", answers: "none", anchors: [], active: null }],
     ["an array", [{ [KEY]: "hello" }]],
     ["text", "hello"],
