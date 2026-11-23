@@ -1083,6 +1083,11 @@ function focusIn(root, selector) {
   if (found instanceof HTMLElement) found.focus({ preventScroll: true });
 }
 
+/** Whether a page's frame is presenting: alone on the whole screen, as Present put it. @param {HTMLIFrameElement} frame */
+function presenting(frame) {
+  return document.fullscreenElement === frame;
+}
+
 /** Whether a press came from a field being typed in. @param {EventTarget | null} target */
 function typingIn(target) {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
@@ -4077,8 +4082,8 @@ class Threads {
 
   /**
    * A thread's page: its bar (the version shown, when it was saved, Versions, Open in Claude for the owner when
-   * the version names its claude.ai address, Full screen) over its frame, which loads the version from the thread's
-   * own call. The frame is 600 px tall until the page says its height.
+   * the version names its claude.ai address, Present, Full screen) over its frame, which loads the version from the
+   * thread's own call. The frame is 600 px tall until the page says its height.
    * @param {Thread} thread
    * @param {Page} page
    */
@@ -4098,6 +4103,7 @@ class Threads {
       ...(this.pageFull && this.shown && placesOf(this.shown.comments).words.length > 0
         ? [el('button', { type: 'button', class: 't-btn', 'data-act': 'discussions' }, [`Discussions · ${placesOf(this.shown.comments).words.filter((said) => this.talk.anchors.get(said.id) !== null).length}`])]
         : []),
+      ...this.presentButton(),
       el('button', { type: 'button', class: 't-btn', 'data-act': 'page-full' }, [this.pageFull ? 'Back to thread' : 'Full screen']),
     ]);
     const frame = el('iframe', { class: 't-page-frame', sandbox: PAGE_SANDBOX, src: pageAddress(thread.number, number), title: `Page, version ${number}`, loading: 'lazy' });
@@ -4105,13 +4111,42 @@ class Threads {
   }
 
   /**
+   * Present, the button in a page's bar that puts the page alone on the whole screen: none where the browser offers
+   * no full screen.
+   */
+  presentButton() {
+    if (document.fullscreenEnabled !== true) return [];
+    return [el('button', { type: 'button', class: 't-btn', 'data-act': 'page-present' }, ['Present'])];
+  }
+
+  /**
+   * Puts the page whose bar holds `button` alone on the whole screen, and the keyboard in it, so arrow keys and a
+   * clicker move a deck with no click inside first. The threads page asks on the frame's behalf: a sealed page has no
+   * full-screen right of its own. The browser's own Esc leaves. A refusal leaves everything as it is.
+   * @param {HTMLElement} button
+   */
+  async present(button) {
+    const frame = button.closest('.t-page')?.querySelector('.t-page-frame');
+    if (!(frame instanceof HTMLIFrameElement)) return;
+    try {
+      await frame.requestFullscreen();
+    } catch {
+      return;
+    }
+    frame.focus();
+  }
+
+  /**
    * A message from a page's frame (frame/bridge.js), taken only from the open page's own frame and only as one of the
-   * kinds page-talk.js reads. Its height, as a number in range, sizes the frame wherever it is. Everything else is the
-   * signed-in thread's: `ready` (a page loaded) is answered with `hello` and the discussion on it; `anchors` says
-   * where each discussion's words sit; and the three that ask for something (`selected`, `answer`, `open`) are taken
-   * only while the frame holds the focus, which it does when the reader clicked or typed in it, so a page script
-   * acting on its own at load is refused. An answer also has to name a question the page named in `ready`, at most
-   * ten a minute from one frame, and is saved here as whoever is signed in. The public view answers its own frame
+   * kinds page-talk.js reads. Its height, as a number in range, sizes the frame wherever it is, except while the page
+   * presents, when the screen sizes it. Everything else is the signed-in thread's: `ready` (a page loaded) is answered
+   * with `hello` and the discussion on it; `anchors` says where each discussion's words sit; and the three that ask
+   * for something (`selected`, `answer`, `open`) are taken only while the frame holds the focus, which it does when
+   * the reader clicked or typed in it or pressed Present, so a page script acting on its own at load is refused.
+   * Present is the threads page's act on the frame, the page itself is never given full screen, and while it presents
+   * the thread takes its answers and nothing else: a comment box or a discussion opened behind it would take the
+   * keyboard where nobody can see. An answer also has to name a question the page named in `ready`, at most ten a
+   * minute from one frame, and is saved here as whoever is signed in. The public view answers its own frame
    * (`onPublicPageMessage`).
    * @param {MessageEvent} event
    */
@@ -4122,7 +4157,8 @@ class Threads {
     const said = readPageMessage(/** @type {unknown} */ (event.data));
     if (said === null) return;
     if (said.kind === 'height') {
-      if (said.height >= PAGE_HEIGHT.min && said.height <= PAGE_HEIGHT.max) frame.style.height = `${Math.round(said.height)}px`;
+      // While it presents the screen sizes the frame; a height taken then would stay after leaving.
+      if (!presenting(frame) && said.height >= PAGE_HEIGHT.min && said.height <= PAGE_HEIGHT.max) frame.style.height = `${Math.round(said.height)}px`;
       return;
     }
     if (this.route.view === 'ask') {
@@ -4160,6 +4196,7 @@ class Threads {
       return;
     }
     if (document.activeElement !== frame) return;
+    if (presenting(frame) && said.kind !== 'answer') return;
     if (said.kind === 'selected') {
       this.wordsDraft = { quote: said.quote, prefix: said.prefix, suffix: said.suffix, top: said.top };
       this.wordsText = '';
@@ -4187,7 +4224,8 @@ class Threads {
    * What a public thread's page says, for a visitor: a page that asks questions is answered `hello` as a visitor's, so
    * it draws its answer boxes alone, and is told the answers the public call gave; an answer is taken under the same
    * gates as a signed-in one (the frame's focus, ten a minute, a question the page named), needs the visitor's name
-   * first, and is sent with the site's bot check as this browser's.
+   * first (asking for it leaves a presenting page's full screen, so the box can be seen), and is sent with the site's
+   * bot check as this browser's.
    * @param {import('./page-talk.js').FromPage} said
    * @param {HTMLIFrameElement} frame
    */
@@ -4217,6 +4255,7 @@ class Threads {
     if (this.visitor.name === '') {
       tell(this.pageFull ? 'Add your name in the bar at the top first.' : 'Add your name above the page first.');
       this.visitor = { ...this.visitor, naming: true, missing: true };
+      if (presenting(frame)) void document.exitFullscreen();
       this.renderPublic();
       focusIn(this.pubDoc, '#visitor-name');
       return;
@@ -8118,11 +8157,12 @@ class Threads {
     ];
     const page = kept.shown.page;
     if (thread.main === 'page' && page) {
-      // A page opens full screen under the collection's bar: back to the collection, and the threads either side.
+      // A page opens full screen under the collection's bar: the threads either side, Present, and back to the collection.
       const bar = el('div', { class: 't-page-bar', 'data-answering': '' }, [
         el('span', { class: 't-page-site' }, [el('b', {}, ['whysosuresh.com']), ` · ${open.collection.name}${walk.at < 0 ? '' : ` · ${walkLine(walk.at, walk.count)}`} · ${title}`]),
         el('span', { class: 't-grow' }),
         ...steps,
+        ...this.presentButton(),
         el('a', { class: 't-btn', href: `${COLLECTIONS_PATH}/${open.key}`, 'data-public-collection': '' }, ['Back']),
       ]);
       const frame = el('iframe', { class: 't-page-frame', sandbox: PAGE_SANDBOX, src: publicKeptPageAddress(open.key, thread.number, page.version), title: `Page, version ${page.version}` });
@@ -8151,7 +8191,7 @@ class Threads {
   }
 
   /**
-   * A click in a public collection: a thread's row, the way back to the collection, and the steps either side.
+   * A click in a public collection: a thread's row, the way back to the collection, the steps either side, and Present.
    * @param {Element} target
    * @param {MouseEvent} event
    */
@@ -8167,6 +8207,7 @@ class Threads {
     const walk = this.publicWalk();
     if (button.dataset.act === 'public-prev' && walk.prev !== null) this.goPublic(walk.prev);
     if (button.dataset.act === 'public-next' && walk.next !== null) this.goPublic(walk.next);
+    if (button.dataset.act === 'page-present') void this.present(button);
   }
 
   /**
@@ -8383,10 +8424,10 @@ class Threads {
 
   /**
    * A public thread's page: its bar over its frame, from the public page address. In the thread, the bar says the
-   * version shown, Versions and Full screen (no claude.ai address, which is his). Full screen, where a link to a page
-   * thread lands, it says whose site this is and the thread's title, the visitor's name when the page asks questions,
-   * Versions, and Thread with the notes a stranger reads there counted (site/app/page-view.js), the way to the
-   * conversation.
+   * version shown, Versions, Present and Full screen (no claude.ai address, which is his). Full screen, where a link
+   * to a page thread lands, it says whose site this is and the thread's title, the visitor's name when the page asks
+   * questions, Versions, Present, and Thread with the notes a stranger reads there counted (site/app/page-view.js),
+   * the way to the conversation.
    * @param {number} number
    * @param {import('./threads-store.js').PublicPage} page
    */
@@ -8404,6 +8445,7 @@ class Threads {
         : [icon('doc'), el('b', {}, ['Page']), el('span', {}, [`version ${at} of ${page.version} · saved ${shown ? day(shown.savedAt) : ''}`])]),
       el('span', { class: 't-grow' }),
       ...(page.versions.length > 1 ? [el('button', { type: 'button', class: 't-btn', 'data-act': 'public-versions' }, ['Versions'])] : []),
+      ...this.presentButton(),
       el('button', { type: 'button', class: 't-btn', 'data-act': 'page-full' }, [full ? threadLabel(notes) : 'Full screen']),
     ]);
     const frame = el('iframe', { class: 't-page-frame', sandbox: PAGE_SANDBOX, src: publicPageAddress(this.publicAddress ?? { number }, at), title: `Page, version ${at}`, loading: 'lazy' });
@@ -9264,6 +9306,9 @@ class Threads {
         if (this.pageFull) this.showThread();
         else this.showFull();
         break;
+      case 'page-present':
+        void this.present(button);
+        break;
       case 'discussions':
         this.openDiscussion('all');
         break;
@@ -9319,6 +9364,9 @@ class Threads {
       case 'page-full':
         if (this.pageFull) this.showThread();
         else this.showFull();
+        break;
+      case 'page-present':
+        void this.present(button);
         break;
       case 'visitor-name':
         this.takeVisitorName();
